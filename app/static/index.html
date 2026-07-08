@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel Status</title>
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:system-ui,-apple-system,sans-serif; background:#f6f8fa; color:#24292f; line-height:1.5; }
+.container { max-width:800px; margin:0 auto; padding:24px 16px; }
+h1 { font-size:1.5rem; font-weight:600; margin-bottom:8px; }
+.banner { padding:16px 20px; border-radius:8px; font-weight:600; font-size:1.1rem; margin-bottom:24px; }
+.banner.ok { background:#dafbe1; color:#116329; }
+.banner.fail { background:#ffebe9; color:#cf222e; }
+.card { background:#fff; border:1px solid #d0d7de; border-radius:8px; padding:20px; margin-bottom:16px; }
+.card-header { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+.dot.up { background:#3fb950; }
+.dot.down { background:#cf222e; }
+.hostname { font-weight:600; font-size:1rem; }
+.meta { font-size:0.85rem; color:#656d76; display:flex; gap:16px; flex-wrap:wrap; margin-bottom:12px; }
+.bar-chart { margin-bottom:12px; }
+.chart-container { height:120px; margin-bottom:4px; }
+.refresh { font-size:0.8rem; color:#656d76; text-align:center; margin-top:24px; }
+.loading { text-align:center; padding:40px; color:#656d76; }
+.error-state { text-align:center; padding:40px; color:#cf222e; }
+@media (max-width:600px) {
+  .container { padding:16px 8px; }
+  .meta { gap:8px; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Sentinel Status</h1>
+  <div id="banner" class="banner loading">Loading...</div>
+  <div id="cards"></div>
+  <div class="refresh" id="refresh">Refreshing every 15s</div>
+</div>
+<script>
+const REFRESH_MS = 15000;
+const BAR_COUNT = 50;
+
+function hostname(url) {
+  try { return new URL(url).hostname; } catch { return url; }
+}
+
+function timeAgo(t) {
+  const s = Math.floor((Date.now() - new Date(t).getTime()) / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  return Math.floor(m / 60) + "h ago";
+}
+
+function renderBars(checks) {
+  const slice = checks.slice(0, BAR_COUNT).reverse();
+  const w = 6, gap = 2, h = 40;
+  const totalW = slice.length * (w + gap) - gap;
+  const bars = slice.map((c, i) => {
+    const bh = Math.max(1, Math.min(h, (c.response_ms || 0) / 5000 * h));
+    const x = i * (w + gap);
+    const y = h - bh;
+    const color = c.is_up ? '#3fb950' : '#cf222e';
+    return `<rect x="${x}" y="${y}" width="${w}" height="${bh}" rx="1" fill="${color}"><title>${c.response_ms}ms ${c.is_up ? 'up' : 'down'}</title></rect>`;
+  }).join('');
+  return `<svg width="${totalW}" height="${h}" viewBox="0 0 ${totalW} ${h}" style="display:block">${bars}</svg>`;
+}
+
+function renderCards(statuses) {
+  const container = document.getElementById('cards');
+  if (!statuses || statuses.length === 0) {
+    container.innerHTML = '<div class="loading">Waiting for first check results...</div>';
+    return;
+  }
+  let allUp = true;
+  let html = '';
+  for (const s of statuses) {
+    if (!s.is_up) allUp = false;
+    const host = hostname(s.url);
+    html += `
+      <div class="card" id="card-${CSS.escape(host)}">
+        <div class="card-header">
+          <div class="dot ${s.is_up ? 'up' : 'down'}"></div>
+          <div class="hostname">${host}</div>
+        </div>
+        <div class="meta">
+          <span>${s.response_ms}ms</span>
+          <span>${timeAgo(s.last_checked)}</span>
+          <span>${s.uptime_pct_24h}% uptime (24h)</span>
+        </div>
+        <div class="bar-chart" id="bars-${CSS.escape(host)}"></div>
+        <div class="chart-container" id="chart-${CSS.escape(host)}"></div>
+      </div>
+    `;
+  }
+  container.innerHTML = html;
+
+  const banner = document.getElementById('banner');
+  if (statuses.length === 0) {
+    banner.className = 'banner loading';
+    banner.textContent = 'Waiting for data...';
+  } else if (allUp) {
+    banner.className = 'banner ok';
+    banner.textContent = 'All systems operational';
+  } else {
+    banner.className = 'banner fail';
+    banner.textContent = 'Service disruption';
+  }
+}
+
+function renderHistoryChart(host, checks) {
+  if (!checks || checks.length < 2) return;
+  const container = document.getElementById('chart-' + CSS.escape(host));
+  if (!container) return;
+
+  const rev = checks.slice().reverse();
+  const data = [
+    rev.map(c => new Date(c.checked_at).getTime() / 1000),
+    rev.map(c => c.response_ms || 0),
+  ];
+
+  const opts = {
+    width: container.clientWidth || 600,
+    height: 120,
+    cursor: { show: false },
+    select: { show: false },
+    legend: { show: false },
+    axes: [
+      { show: false },
+      { show: false },
+    ],
+    series: [
+      {},
+      {
+        stroke: '#3fb950',
+        width: 1.5,
+        fill: 'rgba(63,185,80,0.1)',
+        points: { show: false },
+      },
+    ],
+  };
+  new uPlot(opts, data, container);
+}
+
+async function fetchChecks() {
+  try {
+    const statuses = await fetch('/status').then(r => r.json());
+    renderCards(statuses);
+
+    const historyEntries = await Promise.all(
+      statuses.map(s =>
+        fetch(`/history?target=${encodeURIComponent(s.url)}&limit=100`)
+          .then(r => r.json())
+          .then(checks => [hostname(s.url), checks])
+      )
+    );
+    for (const [host, checks] of historyEntries) {
+      const barsEl = document.getElementById('bars-' + CSS.escape(host));
+      if (barsEl) barsEl.innerHTML = renderBars(checks);
+      renderHistoryChart(host, checks);
+    }
+  } catch (err) {
+    document.getElementById('cards').innerHTML =
+      '<div class="error-state">Failed to fetch status. Retrying...</div>';
+  }
+}
+
+fetchChecks();
+setInterval(fetchChecks, REFRESH_MS);
+</script>
+</body>
+</html>
