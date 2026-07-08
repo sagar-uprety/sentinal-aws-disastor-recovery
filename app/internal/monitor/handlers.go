@@ -1,4 +1,4 @@
-package main
+package monitor
 
 import (
 	"database/sql"
@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"sentinel-aws-dr/app/internal/db"
 )
 
-func handleHealthz(db *sql.DB) http.HandlerFunc {
+func HandleHealthz(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := db.Ping(); err != nil {
+		if err := database.Ping(); err != nil {
 			slog.Error("healthz: db ping failed", "error", err)
 			http.Error(w, `{"status":"error"}`, http.StatusServiceUnavailable)
 			return
@@ -21,9 +23,9 @@ func handleHealthz(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func handleTargets(db *sql.DB) http.HandlerFunc {
+func HandleTargets(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		targets, err := listTargets(db)
+		targets, err := db.ListTargets(database)
 		if err != nil {
 			slog.Error("targets: list failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -41,22 +43,22 @@ func handleTargets(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func handleStatus(db *sql.DB) http.HandlerFunc {
+func HandleStatus(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		statuses, err := getLatestPerTarget(db)
+		statuses, err := db.GetLatestPerTarget(database)
 		if err != nil {
 			slog.Error("status: query failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
 		if statuses == nil {
-			statuses = []targetStatus{}
+			statuses = []db.TargetStatus{}
 		}
 		writeJSON(w, http.StatusOK, statuses)
 	}
 }
 
-func handleHistory(db *sql.DB) http.HandlerFunc {
+func HandleHistory(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("target")
 		if target == "" {
@@ -70,14 +72,14 @@ func handleHistory(db *sql.DB) http.HandlerFunc {
 				limit = v
 			}
 		}
-		checks, err := getHistory(db, target, limit)
+		checks, err := db.GetHistory(database, target, limit)
 		if err != nil {
 			slog.Error("history: query failed", "target", target, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
 		if checks == nil {
-			checks = []checkRow{}
+			checks = []db.CheckRow{}
 		}
 		writeJSON(w, http.StatusOK, checks)
 	}

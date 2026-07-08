@@ -12,14 +12,17 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"sentinel-aws-dr/app/internal/db"
+	"sentinel-aws-dr/app/internal/monitor"
 )
 
 type config struct {
-	port                 int
-	databaseURL          string
-	selfURL              string
-	checkInterval        time.Duration
-	httpTimeout          time.Duration
+	port          int
+	databaseURL   string
+	selfURL       string
+	checkInterval time.Duration
+	httpTimeout   time.Duration
 }
 
 func loadConfig() config {
@@ -49,19 +52,18 @@ func main() {
 	})))
 	slog.Info("starting sentinel", "port", cfg.port, "interval", cfg.checkInterval.Seconds())
 
-	db, err := openDB(cfg.databaseURL)
+	database, err := db.Open(cfg.databaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer database.Close()
 
-	if err := migrate(db); err != nil {
+	if err := db.Migrate(database); err != nil {
 		slog.Error("failed to run migrations", "error", err)
 		os.Exit(1)
 	}
-
-	if err := seedTargets(db, cfg.selfURL); err != nil {
+	if err := db.SeedTargets(database, cfg.selfURL); err != nil {
 		slog.Error("failed to seed targets", "error", err)
 		os.Exit(1)
 	}
@@ -69,16 +71,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	metrics := newMetrics()
-	checker := newChecker(db, metrics, cfg.checkInterval, cfg.httpTimeout, cfg.selfURL)
-	go checker.run(ctx)
+	metrics := monitor.NewMetrics()
+	checker := monitor.NewChecker(database, metrics, cfg.checkInterval, cfg.httpTimeout, cfg.selfURL)
+	go checker.Run(ctx)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz(db))
-	mux.HandleFunc("GET /targets", handleTargets(db))
-	mux.HandleFunc("GET /status", handleStatus(db))
-	mux.HandleFunc("GET /history", handleHistory(db))
-	mux.HandleFunc("GET /metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}).ServeHTTP)
+	mux.HandleFunc("GET /healthz", monitor.HandleHealthz(database))
+	mux.HandleFunc("GET /targets", monitor.HandleTargets(database))
+	mux.HandleFunc("GET /status", monitor.HandleStatus(database))
+	mux.HandleFunc("GET /history", monitor.HandleHistory(database))
+	mux.HandleFunc("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}).ServeHTTP)
 	mux.Handle("GET /", http.FileServer(http.Dir("static")))
 
 	server := &http.Server{

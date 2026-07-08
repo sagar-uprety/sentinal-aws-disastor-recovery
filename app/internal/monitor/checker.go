@@ -1,4 +1,4 @@
-package main
+package monitor
 
 import (
 	"context"
@@ -6,20 +6,22 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"sentinel-aws-dr/app/internal/db"
 )
 
-type checker struct {
-	db          *sql.DB
-	metrics     *metrics
+type Checker struct {
+	database    *sql.DB
+	metrics     *Metrics
 	interval    time.Duration
 	httpTimeout time.Duration
 	selfURL     string
 	client      *http.Client
 }
 
-func newChecker(db *sql.DB, m *metrics, interval, timeout time.Duration, selfURL string) *checker {
-	return &checker{
-		db:          db,
+func NewChecker(database *sql.DB, m *Metrics, interval, timeout time.Duration, selfURL string) *Checker {
+	return &Checker{
+		database:    database,
 		metrics:     m,
 		interval:    interval,
 		httpTimeout: timeout,
@@ -33,7 +35,7 @@ func newChecker(db *sql.DB, m *metrics, interval, timeout time.Duration, selfURL
 	}
 }
 
-func (c *checker) run(ctx context.Context) {
+func (c *Checker) Run(ctx context.Context) {
 	slog.Info("checker started", "interval", c.interval.Seconds())
 	c.runOnce()
 	ticker := time.NewTicker(c.interval)
@@ -50,8 +52,8 @@ func (c *checker) run(ctx context.Context) {
 	}
 }
 
-func (c *checker) runOnce() {
-	targets, err := listTargets(c.db)
+func (c *Checker) runOnce() {
+	targets, err := db.ListTargets(c.database)
 	if err != nil {
 		slog.Error("checker: failed to list targets", "error", err)
 		return
@@ -59,7 +61,6 @@ func (c *checker) runOnce() {
 	for _, t := range targets {
 		c.checkTarget(t)
 	}
-	slog.Debug("check cycle complete", "targets", len(targets))
 }
 
 type checkResult struct {
@@ -86,7 +87,7 @@ func httpCheck(client *http.Client, url string) checkResult {
 	return cr
 }
 
-func (c *checker) checkTarget(t targetRow) {
+func (c *Checker) checkTarget(t db.TargetRow) {
 	cr := httpCheck(c.client, t.URL)
 
 	slog.Info("check result",
@@ -96,6 +97,6 @@ func (c *checker) checkTarget(t targetRow) {
 		"is_up", cr.isUp,
 	)
 
-	recordCheck(c.db, cr.url, cr.statusCode, cr.responseMs, cr.isUp)
-	c.metrics.observe(context.Background(), cr.url, cr.responseMs, cr.isUp)
+	db.RecordCheck(c.database, cr.url, cr.statusCode, cr.responseMs, cr.isUp)
+	c.metrics.Observe(context.Background(), cr.url, cr.responseMs, cr.isUp)
 }

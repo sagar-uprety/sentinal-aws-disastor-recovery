@@ -1,4 +1,4 @@
-package main
+package db
 
 import (
 	"database/sql"
@@ -9,29 +9,29 @@ import (
 	_ "github.com/lib/pq"
 )
 
-type targetRow struct {
+type TargetRow struct {
 	ID  int
 	URL string
 }
 
-type checkRow struct {
-	TargetURL   string     `json:"target_url"`
-	StatusCode  *int       `json:"status_code"`
-	ResponseMs  int        `json:"response_ms"`
-	IsUp        bool       `json:"is_up"`
-	CheckedAt   time.Time  `json:"checked_at"`
+type CheckRow struct {
+	TargetURL  string    `json:"target_url"`
+	StatusCode *int      `json:"status_code"`
+	ResponseMs int       `json:"response_ms"`
+	IsUp       bool      `json:"is_up"`
+	CheckedAt  time.Time `json:"checked_at"`
 }
 
-type targetStatus struct {
-	URL             string    `json:"url"`
-	IsUp            bool      `json:"is_up"`
-	StatusCode      *int      `json:"status_code"`
-	ResponseMs      int       `json:"response_ms"`
-	LastChecked     time.Time `json:"last_checked"`
-	UptimePct       float64   `json:"uptime_pct_24h"`
+type TargetStatus struct {
+	URL         string    `json:"url"`
+	IsUp        bool      `json:"is_up"`
+	StatusCode  *int      `json:"status_code"`
+	ResponseMs  int       `json:"response_ms"`
+	LastChecked time.Time `json:"last_checked"`
+	UptimePct   float64   `json:"uptime_pct_24h"`
 }
 
-func openDB(dsn string) (*sql.DB, error) {
+func Open(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -39,14 +39,13 @@ func openDB(dsn string) (*sql.DB, error) {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
-
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 	return db, nil
 }
 
-func migrate(db *sql.DB) error {
+func Migrate(db *sql.DB) error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS targets (
 			id SERIAL PRIMARY KEY,
@@ -72,7 +71,7 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
-func seedTargets(db *sql.DB, selfURL string) error {
+func SeedTargets(db *sql.DB, selfURL string) error {
 	defaults := []string{
 		"https://www.google.com",
 		"https://github.com",
@@ -89,16 +88,16 @@ func seedTargets(db *sql.DB, selfURL string) error {
 	return nil
 }
 
-func listTargets(db *sql.DB) ([]targetRow, error) {
+func ListTargets(db *sql.DB) ([]TargetRow, error) {
 	rows, err := db.Query(`SELECT id, url FROM targets ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list targets: %w", err)
 	}
 	defer rows.Close()
 
-	var targets []targetRow
+	var targets []TargetRow
 	for rows.Next() {
-		var t targetRow
+		var t TargetRow
 		if err := rows.Scan(&t.ID, &t.URL); err != nil {
 			return nil, fmt.Errorf("scan target: %w", err)
 		}
@@ -107,7 +106,7 @@ func listTargets(db *sql.DB) ([]targetRow, error) {
 	return targets, rows.Err()
 }
 
-func recordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, isUp bool) {
+func RecordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, isUp bool) {
 	_, err := db.Exec(
 		`INSERT INTO checks (target_url, status_code, response_ms, is_up, checked_at)
 		 VALUES ($1, $2, $3, $4, NOW())`,
@@ -118,15 +117,14 @@ func recordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, 
 	}
 }
 
-func getLatestPerTarget(db *sql.DB) ([]targetStatus, error) {
+func GetLatestPerTarget(db *sql.DB) ([]TargetStatus, error) {
 	rows, err := db.Query(`
 		SELECT DISTINCT ON (c.target_url)
 			c.target_url, c.is_up, c.status_code, c.response_ms, c.checked_at,
 			COALESCE(u.uptime, 0) AS uptime_pct
 		FROM checks c
 		LEFT JOIN (
-			SELECT
-				target_url,
+			SELECT target_url,
 				ROUND(100.0 * SUM(CASE WHEN is_up THEN 1 ELSE 0 END) / COUNT(*), 1) AS uptime
 			FROM checks
 			WHERE checked_at > NOW() - INTERVAL '24 hours'
@@ -139,9 +137,9 @@ func getLatestPerTarget(db *sql.DB) ([]targetStatus, error) {
 	}
 	defer rows.Close()
 
-	var results []targetStatus
+	var results []TargetStatus
 	for rows.Next() {
-		var ts targetStatus
+		var ts TargetStatus
 		if err := rows.Scan(&ts.URL, &ts.IsUp, &ts.StatusCode, &ts.ResponseMs, &ts.LastChecked, &ts.UptimePct); err != nil {
 			return nil, fmt.Errorf("scan status: %w", err)
 		}
@@ -150,7 +148,7 @@ func getLatestPerTarget(db *sql.DB) ([]targetStatus, error) {
 	return results, rows.Err()
 }
 
-func getHistory(db *sql.DB, target string, limit int) ([]checkRow, error) {
+func GetHistory(db *sql.DB, target string, limit int) ([]CheckRow, error) {
 	rows, err := db.Query(`
 		SELECT target_url, status_code, response_ms, is_up, checked_at
 		FROM checks
@@ -163,9 +161,9 @@ func getHistory(db *sql.DB, target string, limit int) ([]checkRow, error) {
 	}
 	defer rows.Close()
 
-	var checks []checkRow
+	var checks []CheckRow
 	for rows.Next() {
-		var c checkRow
+		var c CheckRow
 		if err := rows.Scan(&c.TargetURL, &c.StatusCode, &c.ResponseMs, &c.IsUp, &c.CheckedAt); err != nil {
 			return nil, fmt.Errorf("scan check: %w", err)
 		}
