@@ -1,25 +1,3 @@
-terraform {
-  required_version = ">= 1.9"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 6.0"
-    }
-  }
-}
-
-provider "aws" {
-  region = "eu-central-1"
-  default_tags {
-    tags = {
-      Project     = "sentinel-aws-dr"
-      ManagedBy   = "terraform"
-      Environment = "prod"
-      Purpose     = "state-storage"
-    }
-  }
-}
-
 resource "aws_s3_bucket" "state" {
   bucket        = "sentinel-terraform-state-${data.aws_caller_identity.current.account_id}"
   force_destroy = true
@@ -63,3 +41,4 @@ resource "aws_dynamodb_table" "lock" {
 }
 
 data "aws_caller_identity" "current" {}
+ 

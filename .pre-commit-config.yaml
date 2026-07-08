@@ -7,13 +7,21 @@ repos:
       - id: terraform_tflint
         args:
           - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
-      - id: infracost_breakdown
-        verbose: true
-        args:
-          - --args=--config-file=__GIT_WORKING_DIR__/infracost.yml
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
+
+  - repo: local
+    hooks:
+      - id: infracost-scan
+        name: Infracost scan
+        description: Check terraform infrastructure cost
+        entry: bash -c 'infracost scan terraform/ --currency EUR 2>&1 | awk "/Monthly cost:/" || true'
+        language: system
+        pass_filenames: false
+        always_run: false
+        files: \.(tf|tfvars)$
+        verbose: true
