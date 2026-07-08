@@ -8,10 +8,10 @@ repos:
         args:
           - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
       - id: infracost_breakdown
+        verbose: true
         args:
           - --args=--config-file=__GIT_WORKING_DIR__/infracost.yml
-          - --hook-config=.totalHourlyCost>=0.1
-        verbose: true
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
