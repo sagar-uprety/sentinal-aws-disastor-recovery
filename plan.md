@@ -27,6 +27,17 @@ Reference architecture basis: AWS whitepaper "Disaster Recovery of Workloads on 
 8. Secrets only in AWS Secrets Manager or SSM Parameter Store (SecureString). Never in Terraform state outputs, never in code, never in CI logs.
 9. App stays trivial: one container, one main Postgres table, three or four endpoints, no auth, no user accounts, no alert-rule engine. If a change makes the app more interesting than the infrastructure, reject it.
 10. Every Terraform module gets a README with inputs, outputs, and one sentence on design intent.
+11. All taggable AWS resources carry these tags:
+
+    | Key | Value |
+    |---|---|
+    | `Project` | `sentinel-aws-dr` |
+    | `ManagedBy` | `terraform` |
+    | `Environment` | `prod` or `dr` (set per-environment) |
+    | `Purpose` | Brief role (e.g. `state-storage`, `container-orchestration`, `database`) |
+
+    Set via `default_tags` in each environment's provider block, not per-resource. Terraform modules propagate them automatically, or accept a `tags` variable that merges with caller-provided tags.
+12. Bootstrap resources (state bucket, lock table) use the same tag scheme with `Environment=prod` and `Purpose=state-storage`.
 
 ## 3. Application Specification
 

@@ -10,11 +10,22 @@ terraform {
 
 provider "aws" {
   region = "eu-central-1"
+  default_tags {
+    tags = {
+      Project     = "sentinel-aws-dr"
+      ManagedBy   = "terraform"
+      Environment = "prod"
+      Purpose     = "state-storage"
+    }
+  }
 }
 
 resource "aws_s3_bucket" "state" {
   bucket        = "sentinel-terraform-state-${data.aws_caller_identity.current.account_id}"
   force_destroy = true
+  tags = {
+    Name = "sentinel-terraform-state"
+  }
 }
 
 resource "aws_s3_bucket_versioning" "state" {
