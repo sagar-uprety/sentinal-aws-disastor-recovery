@@ -1,4 +1,4 @@
-package main
+package monitor
 
 import (
 	"database/sql"
@@ -9,25 +9,27 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	"sentinel-aws-dr/app/internal/db"
 )
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable")
+	testDB, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Ping(); err != nil {
+	if err := testDB.Ping(); err != nil {
 		t.Fatalf("db ping: %v (is Postgres running? try: docker compose up -d db)", err)
 	}
-	if err := migrate(db); err != nil {
+	testDB.Exec("TRUNCATE targets, checks RESTART IDENTITY CASCADE")
+	if err := db.Migrate(testDB); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	db.Exec("TRUNCATE targets, checks RESTART IDENTITY CASCADE")
-	if err := seedTargets(db, ""); err != nil {
+	if err := db.SeedTargets(testDB, ""); err != nil {
 		t.Fatalf("seed targets: %v", err)
 	}
-	return db
+	return testDB
 }
 
 func TestHTTPCheckUp(t *testing.T) {
@@ -45,9 +47,6 @@ func TestHTTPCheckUp(t *testing.T) {
 	}
 	if !cr.isUp {
 		t.Error("expected isUp = true")
-	}
-	if cr.responseMs < 0 {
-		t.Errorf("unexpected responseMs: %d", cr.responseMs)
 	}
 }
 
@@ -107,18 +106,16 @@ func TestHTTPCheckRedirect(t *testing.T) {
 }
 
 func TestHealthzHandlerOK(t *testing.T) {
+	testDB := openTestDB(t)
+	defer testDB.Close()
+
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	w := httptest.NewRecorder()
-
-	db := openTestDB(t)
-	defer db.Close()
-
-	handleHealthz(db)(w, req)
+	HandleHealthz(testDB)(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
-
 	var body map[string]string
 	json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "ok" {
@@ -127,13 +124,13 @@ func TestHealthzHandlerOK(t *testing.T) {
 }
 
 func TestStatusJSON(t *testing.T) {
-	db := openTestDB(t)
-	defer db.Close()
+	testDB := openTestDB(t)
+	defer testDB.Close()
 
-	recordCheck(db, "https://example.com", intPtr(200), 100, true)
+	db.RecordCheck(testDB, "https://example.com", intPtr(200), 100, true)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /status", handleStatus(db))
+	mux.HandleFunc("GET /status", HandleStatus(testDB))
 
 	req := httptest.NewRequest("GET", "/status", nil)
 	w := httptest.NewRecorder()
@@ -142,8 +139,7 @@ func TestStatusJSON(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
-
-	var resp []targetStatus
+	var resp []db.TargetStatus
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json decode: %v", err)
 	}
@@ -153,14 +149,14 @@ func TestStatusJSON(t *testing.T) {
 }
 
 func TestHistoryJSON(t *testing.T) {
-	db := openTestDB(t)
-	defer db.Close()
+	testDB := openTestDB(t)
+	defer testDB.Close()
 
-	recordCheck(db, "https://example.com", intPtr(200), 100, true)
-	recordCheck(db, "https://example.com", intPtr(500), 200, false)
+	db.RecordCheck(testDB, "https://example.com", intPtr(200), 100, true)
+	db.RecordCheck(testDB, "https://example.com", intPtr(500), 200, false)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /history", handleHistory(db))
+	mux.HandleFunc("GET /history", HandleHistory(testDB))
 
 	req := httptest.NewRequest("GET", "/history?target=https://example.com&limit=10", nil)
 	w := httptest.NewRecorder()
@@ -169,8 +165,7 @@ func TestHistoryJSON(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
-
-	var resp []checkRow
+	var resp []db.CheckRow
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json decode: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package monitor
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric"
 )
 
-type metrics struct {
-	registry      *prometheus.Registry
+type Metrics struct {
+	Registry      *prometheus.Registry
 	checksCounter otelmetric.Int64Counter
 	durationHist  otelmetric.Int64Histogram
 
@@ -22,7 +22,7 @@ type metrics struct {
 	targetState map[string]int64
 }
 
-func newMetrics() *metrics {
+func NewMetrics() *Metrics {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
@@ -55,8 +55,8 @@ func newMetrics() *metrics {
 		panic("failed to create histogram: " + err.Error())
 	}
 
-	m := &metrics{
-		registry:      reg,
+	m := &Metrics{
+		Registry:      reg,
 		checksCounter: checksCounter,
 		durationHist:  durationHist,
 		targetState:   make(map[string]int64),
@@ -73,7 +73,7 @@ func newMetrics() *metrics {
 	return m
 }
 
-func (m *metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer) error {
+func (m *Metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for target, state := range m.targetState {
@@ -84,7 +84,7 @@ func (m *metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer
 	return nil
 }
 
-func (m *metrics) observe(ctx context.Context, target string, responseMs int, isUp bool) {
+func (m *Metrics) Observe(ctx context.Context, target string, responseMs int, isUp bool) {
 	attrs := otelmetric.WithAttributeSet(
 		attribute.NewSet(attribute.String("target", target)),
 	)
