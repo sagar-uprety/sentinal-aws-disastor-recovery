@@ -41,3 +41,4 @@ resource "aws_dynamodb_table" "lock" {
 }
 
 data "aws_caller_identity" "current" {}
+ 
