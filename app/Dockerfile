@@ -6,6 +6,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /sentinel -ldflags="-s -w" ./cmd/sentinel
 
+# checkov:skip=CKV_DOCKER_2:scratch has no shell to run a HEALTHCHECK; ECS relies on the ALB target group's /healthz check instead
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /sentinel /sentinel

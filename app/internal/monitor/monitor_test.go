@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -16,33 +17,45 @@ import (
 // opens, resets, migrates, and seeds the local integration database.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
+	ctx := context.Background()
 	testDB, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := testDB.Ping(); err != nil {
+	if err := testDB.PingContext(ctx); err != nil {
 		t.Fatalf("db ping: %v (is Postgres running? try: docker compose up -d db)", err)
 	}
-	testDB.Exec("TRUNCATE targets, checks RESTART IDENTITY CASCADE")
-	if err := db.Migrate(testDB); err != nil {
+	if _, err := testDB.ExecContext(ctx, "TRUNCATE targets, checks RESTART IDENTITY CASCADE"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if err := db.Migrate(ctx, testDB); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if err := db.SeedTargets(testDB, ""); err != nil {
+	if err := db.SeedTargets(ctx, testDB, ""); err != nil {
 		t.Fatalf("seed targets: %v", err)
 	}
 	return testDB
+}
+
+func closeTestDB(t *testing.T, testDB *sql.DB) {
+	t.Helper()
+	if err := testDB.Close(); err != nil {
+		t.Errorf("close db: %v", err)
+	}
 }
 
 // verifies successful responses are reported as up.
 func TestHTTPCheckUp(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		if _, err := w.Write([]byte("ok")); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	cr := httpCheck(client, server.URL)
+	cr := httpCheck(context.Background(), client, server.URL)
 
 	if cr.statusCode == nil || *cr.statusCode != 200 {
 		t.Errorf("expected status 200, got %v", cr.statusCode)
@@ -56,12 +69,14 @@ func TestHTTPCheckUp(t *testing.T) {
 func TestHTTPCheckDown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("error"))
+		if _, err := w.Write([]byte("error")); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	cr := httpCheck(client, server.URL)
+	cr := httpCheck(context.Background(), client, server.URL)
 
 	if cr.statusCode == nil || *cr.statusCode != 500 {
 		t.Errorf("expected status 500, got %v", cr.statusCode)
@@ -80,7 +95,7 @@ func TestHTTPCheckTimeout(t *testing.T) {
 	defer server.Close()
 
 	client := &http.Client{Timeout: 100 * time.Millisecond}
-	cr := httpCheck(client, server.URL)
+	cr := httpCheck(context.Background(), client, server.URL)
 
 	if cr.statusCode != nil {
 		t.Errorf("expected nil status code on timeout, got %d", *cr.statusCode)
@@ -100,7 +115,7 @@ func TestHTTPCheckRedirect(t *testing.T) {
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	cr := httpCheck(client, redirect.URL)
+	cr := httpCheck(context.Background(), client, redirect.URL)
 
 	if cr.statusCode == nil || *cr.statusCode != 301 {
 		t.Errorf("expected status 301, got %d", *cr.statusCode)
@@ -113,9 +128,9 @@ func TestHTTPCheckRedirect(t *testing.T) {
 // verifies a reachable database produces a healthy response.
 func TestHealthzHandlerOK(t *testing.T) {
 	testDB := openTestDB(t)
-	defer testDB.Close()
+	defer closeTestDB(t, testDB)
 
-	req := httptest.NewRequest("GET", "/healthz", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/healthz", nil)
 	w := httptest.NewRecorder()
 	HandleHealthz(testDB)(w, req)
 
@@ -123,7 +138,9 @@ func TestHealthzHandlerOK(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
 	if body["status"] != "ok" {
 		t.Errorf("expected status ok, got %v", body)
 	}
@@ -132,14 +149,14 @@ func TestHealthzHandlerOK(t *testing.T) {
 // verifies status responses contain persisted check data.
 func TestStatusJSON(t *testing.T) {
 	testDB := openTestDB(t)
-	defer testDB.Close()
+	defer closeTestDB(t, testDB)
 
-	db.RecordCheck(testDB, "https://example.com", intPtr(200), 100, true)
+	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(200), 100, true)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", HandleStatus(testDB))
 
-	req := httptest.NewRequest("GET", "/status", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/status", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -158,16 +175,16 @@ func TestStatusJSON(t *testing.T) {
 // verifies history returns only exact target URL matches.
 func TestHistoryJSON(t *testing.T) {
 	testDB := openTestDB(t)
-	defer testDB.Close()
+	defer closeTestDB(t, testDB)
 
-	db.RecordCheck(testDB, "https://example.com", intPtr(200), 100, true)
-	db.RecordCheck(testDB, "https://example.com", intPtr(500), 200, false)
-	db.RecordCheck(testDB, "https://example.com/status", intPtr(200), 50, true)
+	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(200), 100, true)
+	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(500), 200, false)
+	db.RecordCheck(context.Background(), testDB, "https://example.com/status", intPtr(200), 50, true)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /history", HandleHistory(testDB))
 
-	req := httptest.NewRequest("GET", "/history?target=https://example.com&limit=10", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/history?target=https://example.com&limit=10", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

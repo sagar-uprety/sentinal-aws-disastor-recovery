@@ -4,40 +4,177 @@ resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-vpc"
+  }
 }
 
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-igw"
+  }
 }
 
 resource "aws_subnet" "public" {
   count = length(var.availability_zones)
 
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, var.public_subnet_newbits, count.index)
-  availability_zone       = var.availability_zones[count.index]
-  map_public_ip_on_launch = true
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, var.public_subnet_newbits, count.index)
+  availability_zone = var.availability_zones[count.index]
+  # NAT Gateway EIPs and the ALB get public addressing independent of this
+  # flag; nothing here launches EC2 ENIs that would need it.
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-public-${var.availability_zones[count.index]}"
+  }
 }
 
 resource "aws_subnet" "app" {
   count = length(var.availability_zones)
 
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 3, count.index + length(var.availability_zones))
+  cidr_block        = cidrsubnet(var.vpc_cidr, var.app_subnet_newbits, count.index + length(var.availability_zones))
   availability_zone = var.availability_zones[count.index]
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-app-${var.availability_zones[count.index]}"
+  }
 }
 
 resource "aws_subnet" "db" {
   count = length(var.availability_zones)
 
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 3, count.index + length(var.availability_zones) * 2)
+  cidr_block        = cidrsubnet(var.vpc_cidr, var.db_subnet_newbits, count.index + length(var.availability_zones) * 2)
   availability_zone = var.availability_zones[count.index]
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-db-${var.availability_zones[count.index]}"
+  }
 }
 
 resource "aws_eip" "nat" {
   count  = length(var.availability_zones)
   domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-nat-${var.availability_zones[count.index]}"
+  }
+}
+
+# Default SG is created automatically by AWS; lock it down since it cannot be deleted.
+resource "aws_default_security_group" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-default-sg-restricted"
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_kms_key" "flow_logs" {
+  description         = "CMK for ${var.project_name}-${var.environment} VPC flow log group encryption."
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAccountPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${data.aws_region.current.region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*",
+        ]
+        Resource = "*"
+        Condition = {
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/vpc/${var.project_name}-${var.environment}/flow-logs"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-flow-logs-key"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  name              = "/vpc/${var.project_name}-${var.environment}/flow-logs"
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.flow_logs.arn
+}
+
+resource "aws_iam_role" "vpc_flow_logs" {
+  name = "${var.project_name}-${var.environment}-vpc-flow-logs"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "vpc_flow_logs" {
+  name = "${var.project_name}-${var.environment}-vpc-flow-logs"
+  role = aws_iam_role.vpc_flow_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+        ]
+        Resource = "${aws_cloudwatch_log_group.vpc_flow_logs.arn}:*"
+      }
+    ]
+  })
+}
+
+resource "aws_flow_log" "main" {
+  vpc_id               = aws_vpc.main.id
+  traffic_type         = "ALL"
+  log_destination_type = "cloud-watch-logs"
+  log_destination      = aws_cloudwatch_log_group.vpc_flow_logs.arn
+  iam_role_arn         = aws_iam_role.vpc_flow_logs.arn
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-flow-log"
+  }
 }
 
 resource "aws_nat_gateway" "main" {

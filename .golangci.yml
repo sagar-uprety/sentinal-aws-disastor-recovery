@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
@@ -8,27 +10,27 @@ linters:
     - govet
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
     - gocritic
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - bodyclose
     - noctx
     - prealloc
     - unparam
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+    govet:
+      enable-all: true
 
-linters-settings:
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-  govet:
-    enable-all: true
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 issues:
-  exclude-use-default: true
   max-issues-per-linter: 0
   max-same-issues: 0

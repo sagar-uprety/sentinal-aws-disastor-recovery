@@ -4,6 +4,11 @@ data "aws_caller_identity" "current" {}
 
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-${var.environment}"
+
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
 }
 
 resource "aws_iam_role" "task_execution" {
@@ -64,6 +69,7 @@ resource "aws_security_group" "ecs" {
     security_groups = [var.alb_security_group_id]
   }
 
+  #checkov:skip=CKV_AWS_382:sentinel is an uptime checker that probes arbitrary externally-configured target URLs (see TARGETS env var) plus AWS API endpoints (ECR, SSM, CloudWatch, RDS); it needs broad outbound by design
   egress {
     description = "All outbound"
     from_port   = 0
@@ -73,9 +79,54 @@ resource "aws_security_group" "ecs" {
   }
 }
 
+resource "aws_kms_key" "logs" {
+  description         = "CMK for ${var.project_name}-${var.environment} ECS log group encryption."
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAccountPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${data.aws_region.current.region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*",
+        ]
+        Resource = "*"
+        Condition = {
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}-${var.environment}"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-logs-key"
+  }
+}
+
 resource "aws_cloudwatch_log_group" "app" {
   name              = "/ecs/${var.project_name}-${var.environment}"
-  retention_in_days = 7
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.logs.arn
 }
 
 resource "aws_ecs_task_definition" "app" {

@@ -41,7 +41,7 @@ func TestLoadConfigWithDatabaseVariables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	want := "postgres://sentinel:p%40ss%2Fword@db:5432/sentinel?sslmode=disable"
+	want := "postgres://sentinel:p%40ss%2Fword@db:5432/sentinel?sslmode=require"
 	if cfg.databaseURL != want {
 		t.Fatalf("database URL = %q, want %q", cfg.databaseURL, want)
 	}

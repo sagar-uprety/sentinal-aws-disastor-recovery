@@ -74,11 +74,64 @@ module "rds" {
   username = "sentinel"
 }
 
+data "aws_caller_identity" "current" {}
+
+resource "aws_kms_key" "ssm_prod" {
+  description         = "CMK for ${local.project_name} prod SSM SecureString parameters."
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAccountPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${local.project_name}-prod-ssm-key"
+  }
+}
+
+resource "aws_kms_key" "ssm_dr" {
+  provider = aws.dr
+
+  description         = "CMK for ${local.project_name} DR SSM SecureString parameters."
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAccountPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${local.project_name}-dr-ssm-key"
+  }
+}
+
 resource "aws_ssm_parameter" "database_password_prod" {
   name        = "/${local.project_name}/prod/database/password"
   description = "RDS master password for prod"
   type        = "SecureString"
   tier        = "Standard"
+  key_id      = aws_kms_key.ssm_prod.arn
 
   value_wo         = random_password.database.result
   value_wo_version = var.credential_version
@@ -91,6 +144,7 @@ resource "aws_ssm_parameter" "database_password_dr" {
   description = "RDS master password for DR"
   type        = "SecureString"
   tier        = "Standard"
+  key_id      = aws_kms_key.ssm_dr.arn
 
   value_wo         = random_password.database.result
   value_wo_version = var.credential_version

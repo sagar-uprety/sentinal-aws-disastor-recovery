@@ -17,11 +17,9 @@ import (
 type Metrics struct {
 	checksCounter otelmetric.Int64Counter
 	durationHist  otelmetric.Int64Histogram
-
-	mu          sync.RWMutex
-	targetState map[string]int64
-
-	provider *sdkmetric.MeterProvider
+	targetState   map[string]int64
+	provider      *sdkmetric.MeterProvider
+	mu            sync.RWMutex
 }
 
 // creates an OTLP push pipeline and returns its shutdown function.

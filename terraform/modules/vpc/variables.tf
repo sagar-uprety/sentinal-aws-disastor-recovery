@@ -42,8 +42,9 @@ variable "create_s3_endpoint" {
   default     = true
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "create_interface_endpoints" {
-  description = "Provision paid VPC interface endpoints (ecr.api, ecr.dkr, logs, ssm)."
+  description = "Provision paid VPC interface endpoints (ecr.api, ecr.dkr, logs, ssm). Not yet implemented: no aws_vpc_endpoint resources exist for this var."
   type        = bool
   default     = false
 }
