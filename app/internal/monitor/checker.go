@@ -19,6 +19,7 @@ type Checker struct {
 	client      *http.Client
 }
 
+// NewChecker creates an HTTP checker with bounded request duration and no redirect following.
 func NewChecker(database *sql.DB, m *Metrics, interval, timeout time.Duration, selfURL string) *Checker {
 	return &Checker{
 		database:    database,
@@ -28,6 +29,7 @@ func NewChecker(database *sql.DB, m *Metrics, interval, timeout time.Duration, s
 		selfURL:     selfURL,
 		client: &http.Client{
 			Timeout: timeout,
+			// A redirect proves reachability and should retain its original status code.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -35,8 +37,10 @@ func NewChecker(database *sql.DB, m *Metrics, interval, timeout time.Duration, s
 	}
 }
 
+// Run checks all targets immediately and then at each interval until cancellation.
 func (c *Checker) Run(ctx context.Context) {
 	slog.Info("checker started", "interval", c.interval.Seconds())
+	// Run immediately so a new deployment does not wait one interval for data.
 	c.runOnce()
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
@@ -52,6 +56,7 @@ func (c *Checker) Run(ctx context.Context) {
 	}
 }
 
+// runOnce loads the current target set and checks each target once.
 func (c *Checker) runOnce() {
 	targets, err := db.ListTargets(c.database)
 	if err != nil {
@@ -70,6 +75,7 @@ type checkResult struct {
 	isUp       bool
 }
 
+// httpCheck measures one request and classifies 2xx and 3xx responses as reachable.
 func httpCheck(client *http.Client, url string) checkResult {
 	start := time.Now()
 	resp, err := client.Get(url)
@@ -87,6 +93,7 @@ func httpCheck(client *http.Client, url string) checkResult {
 	return cr
 }
 
+// checkTarget records one check result in PostgreSQL, logs, and metrics.
 func (c *Checker) checkTarget(t db.TargetRow) {
 	cr := httpCheck(c.client, t.URL)
 

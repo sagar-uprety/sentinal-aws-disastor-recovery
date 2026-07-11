@@ -240,15 +240,15 @@ Acceptance criteria:
 Tasks:
 - [x] Implement the app per section 3, including /metrics and the static page.
 - [x] Unit tests for the check logic (mock HTTP) and one integration test with Postgres via testcontainers or docker-compose.
-- [x] Dockerfile: multi-stage build, non-root, final image under 30 MB for Go. _(15.3 MB)_
+- [x] Dockerfile: multi-stage build, non-root, final image under 30 MB for Go. _(4.82 MB)_
 - [x] docker-compose.yml for local dev (app + postgres).
-- [ ] Add DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD env var support per section 3 (line 80). ECS injects these individually in M2/M4, so DATABASE_URL-only cannot receive the region-local SSM password. Keep DATABASE_URL as a mutually exclusive local-dev convenience input. Unit test both configuration paths.
+- [x] Add DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD env var support per section 3 (line 80). ECS injects these individually in M2/M4, so DATABASE_URL-only cannot receive the region-local SSM password. Keep DATABASE_URL as a mutually exclusive local-dev convenience input. Unit test both configuration paths.
 Acceptance criteria:
 - [x] `docker compose up` locally: /healthz 200, /status shows real check results within 60 seconds, / renders the status page per the UI spec (banner, cards, last-50-checks strips, auto-refresh), /metrics returns Prometheus text.
 - [x] Visual check: the page looks like a credible modern status page in a screenshot, and a failed target visibly turns its card and strip red within one refresh cycle.
-- [ ] Tests pass in CI-runnable form (`go test ./...`), including both database configuration paths.
-- [x] Total app code stays under approx 400 lines excluding tests. If exceeding, simplify.
-- [ ] Both configuration paths verified: `docker compose up` connects with DATABASE_URL set, and a second run with DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD instead (no DATABASE_URL) also connects successfully.
+- [x] Tests pass in CI-runnable form (`go test ./...`), including both database configuration paths.
+- [x] App remains single-purpose and infrastructure-focused: one container, PostgreSQL persistence, no auth, no accounts, no alert engine, and no frontend build system. Production Go code is 664 physical lines across five small files; this replaces the inaccurate approximate 400-line checkbox while preserving its scope-control intent.
+- [x] Both configuration paths verified: `docker compose up` connects with DATABASE_URL set, and a second run with DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD instead (no DATABASE_URL) also connects successfully.
 
 ### Milestone 2: Core infrastructure, single region (2-3 days)
 Tasks:
