@@ -12,7 +12,7 @@ provider "aws" {
   region = "eu-central-1"
   default_tags {
     tags = {
-      Project     = "sentinel-aws-dr"
+      Project     = var.project_name
       ManagedBy   = "terraform"
       Environment = "prod"
       Purpose     = "state-storage"

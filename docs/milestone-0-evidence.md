@@ -19,7 +19,7 @@ Verified on 2026-07-11 against AWS account `926883320788`.
 - Prod key: `sentinel/prod/terraform.tfstate`
 - DR key: `sentinel/dr/terraform.tfstate`
 - Active locking: native S3 lock files through `use_lockfile = true`
-- Compatibility lock table: `sentinel-terraform-lock`, status `ACTIVE`, billing mode `PAY_PER_REQUEST`
+- Compatibility lock table: `sentinel-aws-dr-terraform-lock`, status `ACTIVE`, billing mode `PAY_PER_REQUEST`
 
 Terraform 1.15 deprecates DynamoDB backend locking. The table remains provisioned to satisfy the original bootstrap design, while prod and DR use native S3 locking.
 

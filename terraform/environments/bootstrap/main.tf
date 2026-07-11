@@ -1,8 +1,8 @@
 resource "aws_s3_bucket" "state" {
-  bucket        = "sagar-demos-terraform-state"
+  bucket        = var.state_bucket_name
   force_destroy = false
   tags = {
-    Name = "sentinel-terraform-state"
+    Name = "${var.project_name}-terraform-state"
   }
 }
 
@@ -31,7 +31,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
 }
 
 resource "aws_dynamodb_table" "lock" {
-  name         = "sentinel-terraform-lock"
+  name         = "${var.project_name}-terraform-lock"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "LockID"
   attribute {
