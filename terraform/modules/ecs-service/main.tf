@@ -79,54 +79,10 @@ resource "aws_security_group" "ecs" {
   }
 }
 
-resource "aws_kms_key" "logs" {
-  description         = "CMK for ${var.project_name}-${var.environment} ECS log group encryption."
-  enable_key_rotation = true
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EnableRootAccountPermissions"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action   = "kms:*"
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowCloudWatchLogs"
-        Effect = "Allow"
-        Principal = {
-          Service = "logs.${data.aws_region.current.region}.amazonaws.com"
-        }
-        Action = [
-          "kms:Encrypt*",
-          "kms:Decrypt*",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:Describe*",
-        ]
-        Resource = "*"
-        Condition = {
-          ArnLike = {
-            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}-${var.environment}"
-          }
-        }
-      }
-    ]
-  })
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}-logs-key"
-  }
-}
-
 resource "aws_cloudwatch_log_group" "app" {
+  #checkov:skip=CKV_AWS_158:CloudWatch Logs has no AWS-managed default KMS option (unlike S3/RDS/SSM); a customer-managed key is the only way to satisfy this and isn't worth the monthly cost here
   name              = "/ecs/${var.project_name}-${var.environment}"
   retention_in_days = 365
-  kms_key_id        = aws_kms_key.logs.arn
 }
 
 resource "aws_ecs_task_definition" "app" {

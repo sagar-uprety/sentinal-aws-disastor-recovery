@@ -1,5 +1,3 @@
-data "aws_caller_identity" "current" {}
-
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-${var.environment}-rds-sg"
   description = "RDS security group"
@@ -40,30 +38,6 @@ resource "aws_db_parameter_group" "main" {
   }
 }
 
-resource "aws_kms_key" "rds" {
-  description         = "CMK for ${var.project_name}-${var.environment} RDS storage and Performance Insights."
-  enable_key_rotation = true
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EnableRootAccountPermissions"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action   = "kms:*"
-        Resource = "*"
-      }
-    ]
-  })
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}-rds-key"
-  }
-}
-
 resource "aws_iam_role" "rds_monitoring" {
   name = "${var.project_name}-${var.environment}-rds-monitoring"
 
@@ -87,6 +61,7 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
 }
 
 resource "aws_db_instance" "main" {
+  #checkov:skip=CKV_AWS_354:Performance Insights uses the AWS-managed alias/aws/rds key (no per-key monthly fee) rather than a customer-managed key
   identifier = "${var.project_name}-${var.environment}"
 
   engine         = "postgres"
@@ -106,7 +81,6 @@ resource "aws_db_instance" "main" {
   allocated_storage   = 20
   storage_type        = "gp3"
   storage_encrypted   = true
-  kms_key_id          = aws_kms_key.rds.arn
   port                = 5432
   publicly_accessible = false
   multi_az            = var.multi_az
@@ -127,7 +101,6 @@ resource "aws_db_instance" "main" {
 
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
-  performance_insights_kms_key_id       = aws_kms_key.rds.arn
 
   monitoring_interval = 60
   monitoring_role_arn = aws_iam_role.rds_monitoring.arn

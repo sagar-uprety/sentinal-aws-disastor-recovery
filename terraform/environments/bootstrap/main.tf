@@ -1,34 +1,3 @@
-data "aws_caller_identity" "current" {}
-
-resource "aws_kms_key" "state" {
-  description         = "CMK for Terraform state bucket and lock table encryption."
-  enable_key_rotation = true
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EnableRootAccountPermissions"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action   = "kms:*"
-        Resource = "*"
-      }
-    ]
-  })
-
-  tags = {
-    Name = "${var.project_name}-terraform-state-key"
-  }
-}
-
-resource "aws_kms_alias" "state" {
-  name          = "alias/${var.project_name}-terraform-state"
-  target_key_id = aws_kms_key.state.key_id
-}
-
 resource "aws_s3_bucket" "state" {
   #checkov:skip=CKV_AWS_144:cross-region replication not needed for terraform state; state is regenerable and versioned
   bucket        = var.state_bucket_name
@@ -49,10 +18,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.state.arn
+      # Uses the AWS-managed alias/aws/s3 key (no per-key monthly fee) rather
+      # than a customer-managed key.
+      sse_algorithm = "aws:kms"
     }
-    bucket_key_enabled = true
   }
 }
 
@@ -146,6 +115,7 @@ resource "aws_s3_bucket_logging" "state" {
 }
 
 resource "aws_dynamodb_table" "lock" {
+  #checkov:skip=CKV_AWS_119:uses the AWS-owned default key (free) rather than a customer-managed key
   name         = "${var.project_name}-terraform-lock"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "LockID"
@@ -158,8 +128,8 @@ resource "aws_dynamodb_table" "lock" {
     enabled = true
   }
 
+  # Uses the AWS-owned default key (free) rather than a customer-managed key.
   server_side_encryption {
-    enabled     = true
-    kms_key_arn = aws_kms_key.state.arn
+    enabled = true
   }
 }
