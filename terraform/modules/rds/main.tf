@@ -62,6 +62,7 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
 
 resource "aws_db_instance" "main" {
   #checkov:skip=CKV_AWS_354:Performance Insights uses the AWS-managed alias/aws/rds key (no per-key monthly fee) rather than a customer-managed key
+  #checkov:skip=CKV_AWS_293:this is a demo project torn down and rebuilt frequently; deletion protection would block terraform destroy every time
   identifier = "${var.project_name}-${var.environment}"
 
   engine         = "postgres"
@@ -91,8 +92,10 @@ resource "aws_db_instance" "main" {
   maintenance_window      = "sun:04:00-sun:05:00"
   copy_tags_to_snapshot   = true
 
-  auto_minor_version_upgrade          = true
-  deletion_protection                 = true
+  auto_minor_version_upgrade = true
+  # This is a demo project torn down and rebuilt frequently; deletion
+  # protection would just get in the way of terraform destroy every time.
+  deletion_protection                 = false
   skip_final_snapshot                 = true
   delete_automated_backups            = true
   iam_database_authentication_enabled = true

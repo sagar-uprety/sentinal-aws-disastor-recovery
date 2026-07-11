@@ -98,12 +98,15 @@ resource "aws_s3_bucket_policy" "alb_logs" {
 }
 
 resource "aws_lb" "main" {
-  name                       = "${var.project_name}-${var.environment}-alb"
-  internal                   = false
-  load_balancer_type         = "application"
-  security_groups            = [aws_security_group.alb.id]
-  subnets                    = var.public_subnet_ids
-  enable_deletion_protection = true
+  #checkov:skip=CKV_AWS_150:this is a demo project torn down and rebuilt frequently; deletion protection would block terraform destroy every time
+  name               = "${var.project_name}-${var.environment}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = var.public_subnet_ids
+  # See the checkov skip comment above: kept off intentionally for a demo
+  # project that gets destroyed and recreated often.
+  enable_deletion_protection = false
   drop_invalid_header_fields = true
 
   access_logs {
