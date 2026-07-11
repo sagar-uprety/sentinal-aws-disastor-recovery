@@ -85,7 +85,7 @@ Observability in the app: expose `GET /metrics` in Prometheus format (check coun
 
 Version policy:
 - Use Terraform 1.15.5 from `.terraform-version`; every root module declares `required_version = ">= 1.11, < 2.0"` because write-only arguments require Terraform 1.11 or newer.
-- Use the latest stable AWS provider major 6 release available when a milestone starts, constrained as `~> 6.0`, and the latest compatible HashiCorp Random provider for ephemeral password generation. Run `terraform init -upgrade`, review provider changelogs and the plan, and commit lock files for bootstrap, prod, and DR. "Latest" means intentionally upgraded and locked, not an unbounded provider constraint.
+- Use the latest stable AWS provider major 6 release available when a milestone starts, constrained as `~> 6.0`. Add the latest compatible HashiCorp Random provider when ephemeral password generation is implemented in M2; do not declare it before use because the repository rejects unused providers. Run `terraform init -upgrade`, review provider changelogs and the plan, and commit lock files for every root that uses each provider. "Latest" means intentionally upgraded and locked, not an unbounded provider constraint.
 - Pin PostgreSQL major 18 while resolving its latest common regional minor as described below. Major upgrades require a separate reviewed change and test; latest does not mean automatic major-version drift.
 
 ### 4.1 Primary region (eu-central-1)
@@ -196,7 +196,7 @@ aws-resilient-status-page/
 │   │   ├── route53-failover/
 │   │   └── ecr/
 │   └── environments/
-│       ├── bootstrap/        # state bucket + DynamoDB lock table
+│       ├── bootstrap/        # state bucket with S3 locking + DynamoDB compatibility table
 │       ├── prod/             # eu-central-1
 │       └── dr/               # eu-west-1
 ├── scripts/
