@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "state" {
-  bucket        = "sentinel-terraform-state-${data.aws_caller_identity.current.account_id}"
+  bucket        = "sagar-demos-terraform-state"
   force_destroy = false
   tags = {
     Name = "sentinel-terraform-state"
@@ -39,5 +39,3 @@ resource "aws_dynamodb_table" "lock" {
     type = "S"
   }
 }
-
-data "aws_caller_identity" "current" {}

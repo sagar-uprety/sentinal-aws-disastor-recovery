@@ -14,10 +14,10 @@ Verified on 2026-07-11 against AWS account `926883320788`.
 
 ## Remote State
 
-- State bucket: `sentinel-terraform-state-926883320788`
+- State bucket: `sagar-demos-terraform-state`
 - Region: `eu-central-1`
-- Prod key: `prod/terraform.tfstate`
-- DR key: `dr/terraform.tfstate`
+- Prod key: `sentinel/prod/terraform.tfstate`
+- DR key: `sentinel/dr/terraform.tfstate`
 - Active locking: native S3 lock files through `use_lockfile = true`
 - Compatibility lock table: `sentinel-terraform-lock`, status `ACTIVE`, billing mode `PAY_PER_REQUEST`
 
