@@ -31,7 +31,7 @@ type TargetStatus struct {
 	UptimePct   float64   `json:"uptime_pct_24h"`
 }
 
-// Open creates and verifies a bounded PostgreSQL connection pool.
+// Creates and verifies a bounded PostgreSQL connection pool.
 func Open(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -46,7 +46,7 @@ func Open(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate applies the idempotent application schema.
+// Applies the idempotent application schema.
 func Migrate(db *sql.DB) error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS targets (
@@ -74,7 +74,7 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
-// SeedTargets inserts default and optional self-check targets once.
+// Inserts default and optional self-check targets once.
 func SeedTargets(db *sql.DB, selfURL string) error {
 	defaults := []string{
 		"https://www.google.com",
@@ -92,7 +92,7 @@ func SeedTargets(db *sql.DB, selfURL string) error {
 	return nil
 }
 
-// ListTargets returns configured targets in insertion order.
+// Returns configured targets in insertion order.
 func ListTargets(db *sql.DB) ([]TargetRow, error) {
 	rows, err := db.Query(`SELECT id, url FROM targets ORDER BY id`)
 	if err != nil {
@@ -111,7 +111,7 @@ func ListTargets(db *sql.DB) ([]TargetRow, error) {
 	return targets, rows.Err()
 }
 
-// RecordCheck persists one uptime check and logs write failures.
+// Persists one uptime check and logs write failures.
 func RecordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, isUp bool) {
 	_, err := db.Exec(
 		`INSERT INTO checks (target_url, status_code, response_ms, is_up, checked_at)
@@ -123,7 +123,7 @@ func RecordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, 
 	}
 }
 
-// GetLatestPerTarget returns each target's latest check and 24-hour uptime.
+// Returns each target's latest check and 24-hour uptime.
 func GetLatestPerTarget(db *sql.DB) ([]TargetStatus, error) {
 	rows, err := db.Query(`
 		SELECT DISTINCT ON (c.target_url)
@@ -155,7 +155,7 @@ func GetLatestPerTarget(db *sql.DB) ([]TargetStatus, error) {
 	return results, rows.Err()
 }
 
-// GetHistory returns recent checks for one exact target URL.
+// Returns recent checks for one exact target URL.
 func GetHistory(db *sql.DB, target string, limit int) ([]CheckRow, error) {
 	// Exact matching prevents targets with shared hosts or prefixes from colliding.
 	rows, err := db.Query(`

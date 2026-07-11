@@ -13,7 +13,7 @@ import (
 	"sentinel-aws-dr/app/internal/db"
 )
 
-// openTestDB opens, resets, migrates, and seeds the local integration database.
+// opens, resets, migrates, and seeds the local integration database.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	testDB, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable")
@@ -33,7 +33,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	return testDB
 }
 
-// TestHTTPCheckUp verifies successful responses are reported as up.
+// verifies successful responses are reported as up.
 func TestHTTPCheckUp(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -52,7 +52,7 @@ func TestHTTPCheckUp(t *testing.T) {
 	}
 }
 
-// TestHTTPCheckDown verifies server errors are reported as down.
+// verifies server errors are reported as down.
 func TestHTTPCheckDown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -71,7 +71,7 @@ func TestHTTPCheckDown(t *testing.T) {
 	}
 }
 
-// TestHTTPCheckTimeout verifies timed-out requests have no status code and are down.
+// verifies timed-out requests have no status code and are down.
 func TestHTTPCheckTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
@@ -90,7 +90,7 @@ func TestHTTPCheckTimeout(t *testing.T) {
 	}
 }
 
-// TestHTTPCheckRedirect verifies redirects remain reachable without being followed.
+// verifies redirects remain reachable without being followed.
 func TestHTTPCheckRedirect(t *testing.T) {
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://example.com", http.StatusMovedPermanently)
@@ -110,7 +110,7 @@ func TestHTTPCheckRedirect(t *testing.T) {
 	}
 }
 
-// TestHealthzHandlerOK verifies a reachable database produces a healthy response.
+// verifies a reachable database produces a healthy response.
 func TestHealthzHandlerOK(t *testing.T) {
 	testDB := openTestDB(t)
 	defer testDB.Close()
@@ -129,7 +129,7 @@ func TestHealthzHandlerOK(t *testing.T) {
 	}
 }
 
-// TestStatusJSON verifies status responses contain persisted check data.
+// verifies status responses contain persisted check data.
 func TestStatusJSON(t *testing.T) {
 	testDB := openTestDB(t)
 	defer testDB.Close()
@@ -155,7 +155,7 @@ func TestStatusJSON(t *testing.T) {
 	}
 }
 
-// TestHistoryJSON verifies history returns only exact target URL matches.
+// verifies history returns only exact target URL matches.
 func TestHistoryJSON(t *testing.T) {
 	testDB := openTestDB(t)
 	defer testDB.Close()
@@ -188,5 +188,5 @@ func TestHistoryJSON(t *testing.T) {
 	}
 }
 
-// intPtr creates nullable status-code test values.
+// creates nullable status-code test values.
 func intPtr(i int) *int { return &i }

@@ -28,7 +28,7 @@ type config struct {
 	httpTimeout   time.Duration
 }
 
-// loadConfig validates environment settings and returns runtime configuration.
+// Validates environment settings and returns runtime configuration.
 func loadConfig() (config, error) {
 	port, err := strconv.Atoi(envOrDefault("PORT", "8080"))
 	if err != nil || port < 1 || port > 65535 {
@@ -51,7 +51,7 @@ func loadConfig() (config, error) {
 	}, nil
 }
 
-// databaseConnectionURL resolves exactly one supported database configuration path.
+// Resolves exactly one supported database configuration path.
 func databaseConnectionURL() (string, error) {
 	// ECS supplies split DB values, while local development may use one DATABASE_URL.
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -91,7 +91,6 @@ func databaseConnectionURL() (string, error) {
 	return u.String(), nil
 }
 
-// envOrDefault returns an environment value or its fallback.
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -99,7 +98,7 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-// main starts the checker, metrics endpoint, and HTTP server.
+// Starts the checker, metrics endpoint, and HTTP server.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

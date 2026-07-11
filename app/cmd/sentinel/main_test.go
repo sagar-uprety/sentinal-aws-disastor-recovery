@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// clearDatabaseEnv isolates database configuration test cases.
+// isolates database configuration test cases.
 func clearDatabaseEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{"DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
@@ -13,7 +13,7 @@ func clearDatabaseEnv(t *testing.T) {
 	}
 }
 
-// TestLoadConfigWithDatabaseURL verifies local DATABASE_URL configuration.
+// verifies local DATABASE_URL configuration.
 func TestLoadConfigWithDatabaseURL(t *testing.T) {
 	clearDatabaseEnv(t)
 	want := "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable"
@@ -28,7 +28,7 @@ func TestLoadConfigWithDatabaseURL(t *testing.T) {
 	}
 }
 
-// TestLoadConfigWithDatabaseVariables verifies ECS-style split database configuration.
+// verifies ECS-style split database configuration.
 func TestLoadConfigWithDatabaseVariables(t *testing.T) {
 	clearDatabaseEnv(t)
 	t.Setenv("DB_HOST", "db")
@@ -47,7 +47,7 @@ func TestLoadConfigWithDatabaseVariables(t *testing.T) {
 	}
 }
 
-// TestLoadConfigRejectsMixedDatabaseConfiguration verifies configuration paths cannot be combined.
+// verifies configuration paths cannot be combined.
 func TestLoadConfigRejectsMixedDatabaseConfiguration(t *testing.T) {
 	clearDatabaseEnv(t)
 	t.Setenv("DATABASE_URL", "postgres://example")
@@ -59,7 +59,7 @@ func TestLoadConfigRejectsMixedDatabaseConfiguration(t *testing.T) {
 	}
 }
 
-// TestLoadConfigRejectsIncompleteDatabaseVariables verifies every split database value is required.
+// verifies every split database value is required.
 func TestLoadConfigRejectsIncompleteDatabaseVariables(t *testing.T) {
 	clearDatabaseEnv(t)
 	t.Setenv("DB_HOST", "db")

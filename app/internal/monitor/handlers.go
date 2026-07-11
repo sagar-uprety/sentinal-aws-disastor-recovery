@@ -10,7 +10,7 @@ import (
 	"sentinel-aws-dr/app/internal/db"
 )
 
-// HandleHealthz reports readiness based on database connectivity.
+// reports readiness based on database connectivity.
 func HandleHealthz(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := database.Ping(); err != nil {
@@ -24,7 +24,7 @@ func HandleHealthz(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// HandleTargets returns all configured monitoring targets.
+// returns all configured monitoring targets.
 func HandleTargets(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		targets, err := db.ListTargets(database)
@@ -45,7 +45,7 @@ func HandleTargets(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// HandleStatus returns the latest status and 24-hour uptime for each target.
+// returns the latest status and 24-hour uptime for each target.
 func HandleStatus(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		statuses, err := db.GetLatestPerTarget(database)
@@ -61,7 +61,7 @@ func HandleStatus(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// HandleHistory returns recent checks for the requested exact target URL.
+// returns recent checks for the requested exact target URL.
 func HandleHistory(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("target")
@@ -89,7 +89,7 @@ func HandleHistory(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// writeJSON writes a JSON response with the requested status code.
+// writes a JSON response with the requested status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

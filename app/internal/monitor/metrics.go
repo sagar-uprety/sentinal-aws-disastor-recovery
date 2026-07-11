@@ -22,7 +22,7 @@ type Metrics struct {
 	targetState map[string]int64
 }
 
-// NewMetrics creates an isolated Prometheus registry backed by OpenTelemetry instruments.
+// creates an isolated Prometheus registry backed by OpenTelemetry instruments.
 func NewMetrics() *Metrics {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -74,7 +74,7 @@ func NewMetrics() *Metrics {
 	return m
 }
 
-// observeUpGauge exports the latest bounded up/down state for each target.
+// exports the latest bounded up/down state for each target.
 func (m *Metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -86,7 +86,7 @@ func (m *Metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer
 	return nil
 }
 
-// Observe records check count, duration, and latest target state.
+// records check count, duration, and latest target state.
 func (m *Metrics) Observe(ctx context.Context, target string, responseMs int, isUp bool) {
 	// Target labels are bounded by the small configured target table.
 	attrs := otelmetric.WithAttributeSet(
