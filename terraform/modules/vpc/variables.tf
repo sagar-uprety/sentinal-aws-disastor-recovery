@@ -33,7 +33,11 @@ variable "app_subnet_newbits" {
 variable "db_subnet_newbits" {
   description = "Number of additional bits for database subnet netmasks."
   type        = number
-  default     = 4
+  # Matches what's actually deployed (prod's db subnets were created with
+  # newbits=3, same as app). Do not change this default without planning a
+  # live RDS subnet migration first: it forces subnet replacement, which
+  # AWS blocks while an RDS instance's ENI is attached to the subnet.
+  default = 3
 }
 
 variable "create_s3_endpoint" {
