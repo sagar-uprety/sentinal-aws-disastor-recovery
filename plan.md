@@ -224,16 +224,16 @@ Each milestone has acceptance criteria. An agent must not mark a milestone compl
 ### Milestone 0: Bootstrap and scaffolding (0.5 day)
 Tasks:
 - [x] Create repo with the layout above, root README stub, .gitignore (Terraform, Go), LICENSE (MIT).
-- [ ] Upgrade and lock tooling before backend initialization: Terraform 1.15.5, `required_version >= 1.11, < 2.0`, latest reviewed AWS provider 6.x, and latest compatible Random provider. Run `terraform init -upgrade` and commit regenerated lock files for bootstrap, prod, and DR.
-- [~] `terraform/environments/bootstrap`: S3 bucket (versioned, encrypted) + DynamoDB table for state locking. Apply once, keep running (cost: cents). _(code written, needs AWS creds to apply)_
-- [~] Configure S3 backend in prod and dr environments. _(backend.tf written, bucket placeholder needs update after bootstrap apply)_
+- [x] Upgrade and lock tooling before backend initialization: Terraform 1.15.5, `required_version >= 1.11, < 2.0`, and AWS provider 6.54.0. Run `terraform init -upgrade` and commit regenerated lock files for bootstrap, prod, and DR. Add and lock Random when its first resource is implemented in M2; declaring an unused provider fails the repository's TFLint rules.
+- [x] `terraform/environments/bootstrap`: S3 bucket (versioned, encrypted) with native S3 state locking plus a tagged DynamoDB compatibility lock table. Applied in eu-central-1 and kept running (cost: cents).
+- [x] Configure S3 backend in prod and dr environments with the account-specific bucket and native S3 lock files.
 - [x] Pre-commit hooks: terraform fmt, tflint.
 Acceptance criteria:
-- [ ] `terraform init` succeeds in prod and dr with remote state.
-- [ ] `terraform providers` and committed lock files show only reviewed current provider versions; no root remains locked to AWS provider 5.x.
-- [ ] Bootstrap, prod, and DR root modules each declare `required_version = ">= 1.11, < 2.0"`.
-- [ ] Bootstrap state bucket has versioning, server-side encryption, and public-access blocking enabled; the bucket and lock table expose the Hard Rule 12 tags (`Project`, `ManagedBy`, `Environment=prod`, `Purpose=state-storage`).
-- [ ] Existing owner-managed AWS Budget is active before the first workload apply; retain evidence without importing or managing the budget in Terraform.
+- [x] `terraform init` succeeds in prod and dr with remote state.
+- [x] `terraform providers` and committed lock files show only reviewed current provider versions; no root remains locked to AWS provider 5.x.
+- [x] Bootstrap, prod, and DR root modules each declare `required_version = ">= 1.11, < 2.0"`.
+- [x] Bootstrap state bucket has versioning, server-side encryption, and public-access blocking enabled; the bucket and lock table expose the Hard Rule 12 tags (`Project`, `ManagedBy`, `Environment=prod`, `Purpose=state-storage`).
+- [x] Existing owner-managed AWS Budgets were healthy before the bootstrap apply; evidence retained in `docs/milestone-0-evidence.md` without importing or managing budgets in Terraform.
 - [x] `git log` shows conventional, meaningful commits.
 
 ### Milestone 1: Application (1.5 days, hard cap; at most half a day of that on the UI)
