@@ -1,7 +1,7 @@
 terraform {
   backend "s3" {
-    bucket       = "sentinel-terraform-state-926883320788"
-    key          = "prod/terraform.tfstate"
+    bucket       = "sagar-demos-terraform-state"
+    key          = "sentinel/prod/terraform.tfstate"
     region       = "eu-central-1"
     encrypt      = true
     use_lockfile = true
