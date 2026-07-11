@@ -83,7 +83,12 @@ func SeedTargets(db *sql.DB, selfURL string) error {
 	if selfURL != "" {
 		defaults = append(defaults, selfURL)
 	}
-	for _, url := range defaults {
+	return SeedTargetsFromList(db, defaults)
+}
+
+// Inserts the given URLs as targets, ignoring duplicates.
+func SeedTargetsFromList(db *sql.DB, urls []string) error {
+	for _, url := range urls {
 		_, err := db.Exec(`INSERT INTO targets (url) VALUES ($1) ON CONFLICT (url) DO NOTHING`, url)
 		if err != nil {
 			return fmt.Errorf("seed target %s: %w", url, err)

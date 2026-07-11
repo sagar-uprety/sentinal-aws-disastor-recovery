@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"sentinel-aws-dr/app/internal/db"
 	"sentinel-aws-dr/app/internal/monitor"
 )
@@ -87,7 +85,7 @@ func databaseConnectionURL() (string, error) {
 		Host:   net.JoinHostPort(dbValues["DB_HOST"], dbValues["DB_PORT"]),
 		Path:   dbValues["DB_NAME"],
 	}
-	u.RawQuery = "sslmode=disable"
+	u.RawQuery = "sslmode=require"
 	return u.String(), nil
 }
 
@@ -98,7 +96,7 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-// Starts the checker, metrics endpoint, and HTTP server.
+// Starts the checker, metrics pipeline, and HTTP server.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -125,11 +123,26 @@ func main() {
 		slog.Error("failed to seed targets", "error", err)
 		os.Exit(1)
 	}
+	if custom := os.Getenv("TARGETS"); custom != "" {
+		urls := strings.Split(custom, ",")
+		for i := range urls {
+			urls[i] = strings.TrimSpace(urls[i])
+		}
+		if err := db.SeedTargetsFromList(database, urls); err != nil {
+			slog.Error("failed to seed custom targets", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	metrics := monitor.NewMetrics()
+	metrics, shutdown, err := monitor.NewMetrics(ctx)
+	if err != nil {
+		slog.Error("failed to create metrics pipeline", "error", err)
+		os.Exit(1)
+	}
+
 	checker := monitor.NewChecker(database, metrics, cfg.checkInterval, cfg.httpTimeout, cfg.selfURL)
 	go checker.Run(ctx)
 
@@ -138,7 +151,6 @@ func main() {
 	mux.HandleFunc("GET /targets", monitor.HandleTargets(database))
 	mux.HandleFunc("GET /status", monitor.HandleStatus(database))
 	mux.HandleFunc("GET /history", monitor.HandleHistory(database))
-	mux.HandleFunc("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}).ServeHTTP)
 	mux.Handle("GET /", http.FileServer(http.Dir("static")))
 
 	server := &http.Server{
@@ -159,6 +171,7 @@ func main() {
 		defer cancel()
 		server.Shutdown(ctxShutdown)
 		cancel()
+		shutdown(ctxShutdown)
 	}()
 
 	slog.Info("listening", "addr", server.Addr)

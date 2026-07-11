@@ -7,6 +7,71 @@ repos:
       - id: terraform_tflint
         args:
           - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+      - id: terraform_docs
+        args:
+          - --hook-config=--path-to-file=README.md
+          - --hook-config=--add-to-existing-file=false
+          - --hook-config=--sort-by required
+          - --hook-config=--hide-empty=true
+
+  - repo: https://github.com/bridgecrewio/checkov
+    rev: v3.3.6
+    hooks:
+      - id: checkov
+        args:
+          - --quiet
+          - --compact
+          - --skip-check CKV_AWS_219
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2
+    hooks:
+      - id: golangci-lint-full
+        args:
+          - --config=__GIT_WORKING_DIR__/.golangci.yml
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: gofmt
+        description: Format Go code
+        entry: gofmt -s -w
+        language: system
+        types: [go]
+      - id: go-vet
+        name: go vet
+        description: Static analysis for Go
+        entry: go vet
+        language: system
+        types: [go]
+      - id: go-test
+        name: go test
+        description: Run Go tests
+        entry: go test ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-race
+        name: go test -race
+        description: Race detection
+        entry: go test -race ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-mod-tidy
+        name: go mod tidy
+        description: Clean up go.mod/go.sum
+        entry: go mod tidy
+        language: system
+        files: go\.mod$
+        pass_filenames: false
+      - id: govulncheck
+        name: govulncheck
+        description: Check for known vulnerabilities
+        entry: govulncheck ./...
+        language: system
+        types: [go]
+        pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -19,7 +84,7 @@ repos:
       - id: infracost-scan
         name: Infracost scan
         description: Check terraform infrastructure cost
-        entry: bash -c 'infracost scan terraform/ --currency EUR 2>&1 | awk "/Monthly cost:/" || true'
+        entry: bash -c 'infracost scan terraform/ --currency EUR 10>&1 | awk "/Monthly cost:/" || true'
         language: system
         pass_filenames: false
         always_run: false
