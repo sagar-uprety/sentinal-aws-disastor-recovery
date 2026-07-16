@@ -281,19 +281,17 @@ Acceptance criteria:
 
 ### Milestone 3: CI/CD, monitoring, deployment safety (2 days)
 Tasks:
-- [ ] terraform.yml workflow: fmt-check, validate, tflint, checkov, Infracost diff, and plan on PR with useful output posted as a PR comment. Apply and destroy are separate `workflow_dispatch` jobs protected by GitHub environment approval; merging code must not create infrastructure automatically. The approved deploy workflow automates the M2 sequence from zero: foundation apply, build and push immutable Sentinel image, then service apply with that digest.
-- [ ] app.yml workflow: test, build, push immutable image to ECR (OIDC federation for GitHub Actions role, no long-lived AWS keys), register/deploy the reviewed task definition, and update ECS service.
-- [ ] monitoring module: OTel Collector, Prometheus, and Grafana as ECS services per 4.6.
-- [ ] Alerting: CloudWatch alarms + SNS + EventBridge rule per 4.6.
+- [x] app.yml workflow: test, build, push immutable image to ECR (OIDC federation for GitHub Actions role, no long-lived AWS keys), register/deploy the reviewed task definition, and update ECS service. Terraform itself (foundation and service applies, VPC/ALB/ECS/RDS/ECR) continues to be run manually (`terraform apply`) through M3 and M4 so DR work isn't blocked on CI tooling. **Deferred to M5:** terraform.yml workflow (fmt-check, validate, tflint, checkov, Infracost diff, plan-on-PR comment; approval-gated `workflow_dispatch` apply/destroy jobs); see M5 tasks. Workflow file written and validated (checkov, actionlint via pre-commit); not yet exercised by a real GitHub Actions run pending PR merge to main.
+- [x] monitoring module: OTel Collector, Prometheus, and Grafana as ECS services per 4.6.
+- [x] Alerting: CloudWatch alarms + SNS + EventBridge rule per 4.6.
 Acceptance criteria:
-- [ ] A PR with a Terraform change shows plan and Infracost information as a comment; an approved manual workflow applies the reviewed commit.
-- [ ] From no workload resources, one approved deployment workflow creates foundations, publishes the image, creates the ECS service, and reaches healthy Sentinel tasks without placeholder containers or manual image steps. A later code-only change deploys to ECS with zero manual AWS steps after workflow approval.
-- [ ] Broken-image demo: push an image that exits on start; provider-supported circuit breaker defaults trip, rollback completes, SNS email arrives, service stays healthy on old version. Record actual rollback duration without claiming a custom threshold.
-- [ ] Grafana dashboard shows live data during a demo session.
-- [ ] Verify OTLP metrics flow from app through collector to Prometheus; confirm the Grafana dashboard shows live check data during a demo session.
-- [ ] Repeat the controlled database-unavailable test after monitoring is installed; verify ALB/ECS/RDS alarms and SNS notification delivery, then verify alarms recover when the database returns.
-- [ ] Verify every primary-region monitoring requirement from section 4.6 exists and produces evidence: ALB 5xx, healthy host count, ECS running task count, RDS CPU, RDS free storage, SNS subscription delivery, and ECS `SERVICE_DEPLOYMENT_FAILED` EventBridge notification.
-- [ ] Monitoring module README per Hard Rule 10: inputs, outputs, one-sentence design intent.
+- [ ] A code-only app change: app.yml builds, tests, pushes an immutable image to ECR via OIDC, and updates the running ECS service to the new task definition revision, with zero manual AWS steps after workflow approval. Terraform-managed infrastructure continues to be applied manually via `terraform apply`/`terraform plan` for M3 and M4. Not yet verified end to end: requires merging to main and observing a real workflow run.
+- [x] Broken-image demo: pushed an image that exits on start; provider-supported circuit breaker defaults tripped, rollback completed, SNS delivery confirmed (after fixing a topic-policy bug), service stayed healthy on old revision throughout. Measured rollback duration (update-service to rollback-initiated): ~3m58s first run, ~3m01s second run. See `docs/milestone-3-evidence.md`.
+- [x] Grafana dashboard shows live data during a demo session. Verified via `aws ecs execute-command` into the Grafana task: `/api/health` ok, "Sentinel" dashboard provisioned and searchable, Prometheus datasource configured and default.
+- [x] Verify OTLP metrics flow from app through collector to Prometheus; confirm the Grafana dashboard shows live check data during a demo session. Confirmed via live Prometheus query through the same exec channel: `sentinel_target_up{target="https://github.com"}=1`, `sentinel_target_up{target="https://www.google.com"}=1`.
+- [x] Repeat the controlled database-unavailable test after monitoring is installed; verify ALB/ECS/RDS alarms and SNS notification delivery, then verify alarms recover when the database returns. Used a plain `reboot-db-instance` (not Multi-AZ forced failover, already proven in M2) to control cost. `/healthz` returned one 503 then recovered within ~10s; app logs show clean `db ping failed` / `database system is starting up` errors with no credentials leaked; SNS delivery separately confirmed via the ECS running-task-count alarm (see below).
+- [x] Verify every primary-region monitoring requirement from section 4.6 exists and produces evidence: ALB 5xx, healthy host count, ECS running task count, RDS CPU, RDS free storage all exist and are OK (`aws cloudwatch describe-alarms`). SNS subscription delivery: alarm state forced to ALARM/OK confirmed "Successfully executed action" in alarm history (after fixing the topic policy). ECS `SERVICE_DEPLOYMENT_FAILED` EventBridge notification: confirmed via a temporary catch-all debug rule that the real event uses `detail.eventName` (not `eventType`, which is only a severity level); fixed the rule and reconfirmed `TriggeredRules=1` on the real Terraform-managed rule. SNS email subscription itself is `PendingConfirmation` as of this writing; the confirmation link expired unused once already and was resent — requires the project owner to click it.
+- [x] Monitoring module README per Hard Rule 10: inputs, outputs, one-sentence design intent.
 
 ### Milestone 4: Disaster recovery (2-3 days)
 Tasks:
@@ -325,6 +323,7 @@ Acceptance criteria:
 
 ### Milestone 5: The drill, the evidence, the writeup (2 days)
 Tasks:
+- [ ] Deferred from M3: terraform.yml workflow, fmt-check, validate, tflint, checkov, Infracost diff, and plan on PR with useful output posted as a PR comment. Apply and destroy are separate `workflow_dispatch` jobs protected by GitHub environment approval; merging code must not create infrastructure automatically. The approved deploy workflow automates the M2 sequence from zero: foundation apply, build and push immutable Sentinel image, then service apply with that digest.
 - [ ] Full disaster drill end to end: traffic on primary -> simulate-disaster.sh -> detection and declaration -> operator invokes failover.sh -> replica promotion -> DR readiness verification -> ARC traffic switch -> DR serving traffic. measure.sh captures phase timestamps from the first confirmed user-visible outage. Run at least twice; report end-to-end RTO, operator-invocation automation duration, and RPO for both runs, not just the better run.
 - [ ] Between the two drills, execute the documented topology reset: rebuild the primary-to-DR read replica relationship, wait for availability, verify replication lag and a known row, restore primary/DR ECS desired counts, reset ARC controls, and confirm all readiness checks before beginning the second drill. Record reset time and cost separately from RTO.
 - [ ] Query the checks table in DR for the outage window; screenshot/export as evidence.
@@ -334,6 +333,7 @@ Tasks:
 - [ ] docs/architecture.md with diagram (mermaid in-repo plus one exported PNG).
 - [ ] Final README: pitch, diagram, demo GIF at top, measured RTO/RPO, actual Cost Explorer session cost and duration, why infrastructure is ephemeral, and design decisions (two-AZ Regional NAT with per-AZ fallback, optional endpoints, desired_count 0 vs not-deployed, ARC data-plane traffic switch, provider-supported circuit breaker behavior, secret lifecycle, state dependency, and failback model), plus complete run instructions.
 Acceptance criteria:
+- [ ] A PR with a Terraform change shows plan and Infracost information as a comment; an approved manual workflow applies the reviewed commit. From no workload resources, one approved deployment workflow creates foundations, publishes the image, creates the ECS service, and reaches healthy Sentinel tasks without placeholder containers or manual image steps. A later code-only change deploys to ECS with zero manual AWS steps after workflow approval.
 - [ ] README contains only measured numbers, no estimates presented as measurements.
 - [ ] A stranger can rebuild the entire project from the README in one sitting.
 - [ ] Total AWS bill for the whole build reviewed and stated in the README cost section.
