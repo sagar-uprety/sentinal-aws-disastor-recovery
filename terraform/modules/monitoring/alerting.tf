@@ -11,8 +11,16 @@ resource "aws_sns_topic" "alerts" {
 }
 
 resource "aws_sns_topic_subscription" "email" {
+  # protocol = "email" sends an HTML email with a clickable unsubscribe link and a
+  # List-Unsubscribe header; email security scanners (Gmail, Outlook, enterprise
+  # gateways) pre-fetch links in incoming mail for malware scanning, which AWS SNS
+  # treats as a real click and silently unsubscribes the address, often within
+  # seconds of the confirmation email arriving. email-json sends a plain-text JSON
+  # payload with no clickable links and no List-Unsubscribe header, so there is
+  # nothing for a scanner to auto-trigger. Trade-off: alerts arrive as raw JSON
+  # instead of a formatted email.
   topic_arn = aws_sns_topic.alerts.arn
-  protocol  = "email"
+  protocol  = "email-json"
   endpoint  = var.alert_email
 }
 
