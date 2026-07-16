@@ -1,0 +1,24 @@
+output "vpc_id" {
+  description = "ID of the VPC."
+  value       = aws_vpc.main.id
+}
+
+output "public_subnet_ids" {
+  description = "IDs of the public subnets."
+  value       = aws_subnet.public[*].id
+}
+
+output "app_subnet_ids" {
+  description = "IDs of the application private subnets."
+  value       = aws_subnet.app[*].id
+}
+
+output "db_subnet_ids" {
+  description = "IDs of the isolated database subnets."
+  value       = aws_subnet.db[*].id
+}
+
+output "nat_gateway_id" {
+  description = "ID of the Regional NAT Gateway."
+  value       = aws_nat_gateway.main.id
+}

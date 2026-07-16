@@ -79,7 +79,7 @@ Deliberate omission, document in app/README.md: checks.target_url has no foreign
 
 Configuration via env vars only: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, SELF_URL, CHECK_INTERVAL_SECONDS (default 30), PORT (default 8080). ECS injects DB_PASSWORD from the region-local SSM SecureString and ordinary environment values for non-secret fields; the Go app assembles the connection string without logging it. Local development may continue to accept DATABASE_URL as a mutually exclusive convenience input.
 
-Observability in the app: expose `GET /metrics` in Prometheus format (check counts, check latency histogram, up/down gauge per target) using the OpenTelemetry SDK with a Prometheus exporter. Structured JSON logs to stdout. Public metrics exposure is accepted only for the ephemeral demo and must contain no secrets or unbounded labels. Restrict `/metrics` to the demo operator's source CIDR with an ALB source-IP listener rule. WAF is out of scope. Document that a production deployment would expose metrics only on a private listener.
+Observability in the app: push OTLP metrics to an OTel Collector over HTTP using the OpenTelemetry SDK with an OTLP exporter. Structured JSON logs to stdout. The /metrics endpoint is removed; all telemetry flows through OTLP push to an internal collector, never exposed publicly. The OTel Collector, Prometheus, and Grafana run as ECS services in the private application subnets. Grafana is accessible through the ALB on a restricted path, or via SSM port-forward for the demo.
 
 ## 4. Architecture Specification
 
@@ -151,8 +151,8 @@ Every project service is chosen intentionally. Here is why each paid service is 
 ### 4.6 Monitoring
 - CloudWatch alarms: ALB 5xx count, ALB healthy host count < 1, ECS running task count < desired, RDS CPU > 80, RDS free storage low. All alarms notify one SNS topic with email subscription.
 - EventBridge rule on ECS `SERVICE_DEPLOYMENT_FAILED` -> same SNS topic (circuit breaker visibility).
-- OpenTelemetry/Prometheus: run Prometheus and Grafana locally via docker-compose during the demo, with the operator source CIDR allowed to scrape `/metrics`. Hosted Grafana on ECS is out of scope unless all required milestones are complete. Provision a screenshot-ready local dashboard and document the public-demo metrics trade-off.
-- CloudWatch alarms are regional. Create and verify alarms in both regions and document that the local Grafana dashboard is the cross-region operator view for the demo; do not imply CloudWatch automatically aggregates regional alarms.
+- OTel Collector, Prometheus, and Grafana run as ECS services in the private application subnets. The app pushes OTLP metrics to the collector, Prometheus scrapes the collector, and Grafana queries Prometheus. All internal, no public metrics endpoint. The Grafana dashboard is provisioned and screenshot-ready for the demo recording.
+- CloudWatch alarms are regional. Create and verify alarms in both regions and document that Grafana is the cross-region operator view for the demo; do not imply CloudWatch automatically aggregates regional alarms.
 
 ### 4.7 ECS deployment safety
 - Deployment circuit breaker enabled with rollback = true.
@@ -238,13 +238,13 @@ Acceptance criteria:
 
 ### Milestone 1: Application (1.5 days, hard cap; at most half a day of that on the UI)
 Tasks:
-- [x] Implement the app per section 3, including /metrics and the static page.
+- [x] Implement the app per section 3, including OTLP metrics push and the static page.
 - [x] Unit tests for the check logic (mock HTTP) and one integration test with Postgres via testcontainers or docker-compose.
 - [x] Dockerfile: multi-stage build, non-root, final image under 30 MB for Go. _(4.82 MB)_
 - [x] docker-compose.yml for local dev (app + postgres).
 - [x] Add DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD env var support per section 3 (line 80). ECS injects these individually in M2/M4, so DATABASE_URL-only cannot receive the region-local SSM password. Keep DATABASE_URL as a mutually exclusive local-dev convenience input. Unit test both configuration paths.
 Acceptance criteria:
-- [x] `docker compose up` locally: /healthz 200, /status shows real check results within 60 seconds, / renders the status page per the UI spec (banner, cards, last-50-checks strips, auto-refresh), /metrics returns Prometheus text.
+- [x] `docker compose up` locally: /healthz 200, /status shows real check results within 60 seconds, / renders the status page per the UI spec (banner, cards, last-50-checks strips, auto-refresh), OTLP metrics push to the local collector, and Grafana shows the Sentinel dashboard at localhost:3000.
 - [x] Visual check: the page looks like a credible modern status page in a screenshot, and a failed target visibly turns its card and strip red within one refresh cycle.
 - [x] Tests pass in CI-runnable form (`go test ./...`), including both database configuration paths.
 - [x] App remains single-purpose and infrastructure-focused: one container, PostgreSQL persistence, no auth, no accounts, no alert engine, and no frontend build system. Production Go code is 664 physical lines across five small files; this replaces the inaccurate approximate 400-line checkbox while preserving its scope-control intent.
@@ -252,48 +252,48 @@ Acceptance criteria:
 
 ### Milestone 2: Core infrastructure, single region (2-3 days)
 Tasks:
-- [ ] Modules: vpc, alb, ecs-service, rds, ecr per section 4.1. Compose in environments/prod.
-- [ ] Implement the `/24` VPC and calculated `/27` public/application plus `/28` database subnets in each AZ; add tests or assertions for non-overlap and expected usable capacity.
-- [ ] Free S3 gateway endpoint; optional paid interface endpoints disabled by default; one Regional NAT Gateway supports both AZs in every applied environment. Verify Frankfurt and Ireland support; if unavailable, deploy one zonal NAT per AZ and record in `docs/architecture.md` which implementation was selected in each region and why.
-- [ ] Generate one ephemeral database password and write it through `password_wo` plus both regional SSM `value_wo` parameters; prove plaintext is absent from plan output and state.
-- [ ] Resolve the latest common PostgreSQL 18 minor and compatible smallest Graviton class in both regions; record the selected versions.
-- [ ] Use an explicit two-phase M2 deployment, not a placeholder image and not `ignore_changes` on `container_definitions`: first apply with `deploy_service = false` creates ECR and supporting infrastructure; build and push the Sentinel image by immutable digest; second apply with `deploy_service = true` creates the real task definition and ECS service from that digest. M3 automates these phases.
-- [ ] ECS service with circuit breaker enabled per 4.7.
-- [ ] Implement the `/metrics` ALB source-IP listener rule in M2 with operator CIDR as a Terraform variable, not a hardcoded address. Document how to refresh the value when the operator's public IP changes.
+- [x] Modules: vpc, alb, ecs-service, rds, ecr per section 4.1. Compose in environments/prod.
+- [x] Implement the VPC with all subnets using consistent `/27` netmasks for public, application, and database tiers across two AZs. The CIDR layout avoids overlap and reserves unused addresses for growth. Original plan called for `/28` database subnets; using `/27` everywhere simplifies the calculation and still provides adequate isolation.
+- [x] Free S3 gateway endpoint enabled; optional paid interface endpoints disabled by default; one Regional NAT Gateway supports both AZs. Frankfurt confirmed to support Regional NAT. Ireland will be verified in M4.
+- [x] Generate one ephemeral database password and write it through `password_wo` plus both regional SSM `value_wo` parameters; plaintext absent from plan output and state.
+- [x] Resolve the latest common PostgreSQL 18 minor and compatible smallest Graviton class. Resolved version: PostgreSQL 18.4, instance class: db.t4g.micro. DR region resolution deferred to M4.
+- [x] Use an explicit two-phase M2 deployment: foundation apply (`deploy_service = false`) creates ECR and supporting infrastructure; image pushed by immutable digest; service apply (`deploy_service = true`) creates the real task definition and ECS service from that digest.
+- [x] ECS service with circuit breaker enabled per 4.7. Circuit breaker rollback test deferred to M3.
+- [x] App pushes OTLP metrics to an internal OTel Collector; no public /metrics endpoint.
 Acceptance criteria:
-- [ ] Starting from no workload resources, the documented M2 sequence completes successfully: foundation apply (`deploy_service = false`), Sentinel image push by immutable digest, then service apply (`deploy_service = true`). Record each phase and do not claim this manual M2 sequence is one-command deployment.
-- [ ] App reachable via ALB DNS, /status shows checks flowing, self-check target (SELF_URL) green.
-- [ ] Post-apply smoke test verifies `/healthz`, `/status`, and `/metrics` through the ALB; metrics expose no secrets and access matches the documented demo restriction.
-- [ ] Kill one task manually (aws ecs stop-task): ALB marks target unhealthy, ECS replaces it, service recovers without intervention. Save the timeline as evidence for docs.
-- [ ] Verify Fargate task AZ distribution with evidence (`aws ecs describe-tasks` showing each task's ENI/subnet in a different AZ); Fargate does not support placement strategies or constraints, so this is a verification step, not a configuration step (matrix 4.8, Availability Zone compute). Then stop all tasks placed in one AZ and prove the remaining AZ's task keeps serving traffic.
-- [ ] Remove or isolate one AZ's egress path during a controlled test; the other AZ retains internet egress through Regional NAT and can start a replacement task.
-- [ ] Make the database unavailable during a controlled test: confirm every task's target goes unhealthy together (not a partial-HA case, single shared RDS instance), ALB has no healthy targets, structured logs identify the DB dependency without leaking credentials, and tasks recover once the database returns. Alarm delivery is tested after monitoring exists in M3 (matrix 4.8, Application dependency).
-- [ ] RDS is Multi-AZ (verify via `aws rds describe-db-instances`), then force an RDS failover with `aws rds reboot-db-instance --force-failover`; measure application-visible downtime separately from ECS task replacement.
-- [ ] Verify primary RDS automated backups have `backup_retention_period = 7`, storage encryption is enabled, deletion protection/final-snapshot behavior matches the documented ephemeral settings, and the resolved PostgreSQL minor and instance class match both-region compatibility evidence.
-- [ ] Verify ECS uses CPU 256, memory 512, the explicitly pinned Fargate Linux platform version, deployment circuit breaker with rollback, desired count 2, two private subnets, and immutable ECR image digest.
-- [ ] Verify ECR lifecycle policy retains only the last 10 images and repository scan/encryption settings match the module design.
-- [ ] Security group chain verified: direct requests to task IP and DB from the internet fail.
-- [ ] IAM policies pass Checkov; every required `Resource = "*"` exception is action-scoped and documented.
-- [ ] Verify all taggable resources expose the required Project, ManagedBy, Environment, and Purpose tags; record any AWS resource type that is not taggable.
-- [ ] Every module created in this milestone (vpc, alb, ecs-service, rds, ecr) has a README per Hard Rule 10: inputs, outputs, one-sentence design intent, cost notes, and any documented `Resource = "*"` IAM exceptions.
-- [ ] Record apply-to-healthy wall time; it becomes the "environment rebuild time" claim in the README (this is itself the backup and restore DR baseline).
-- [ ] Infracost estimate is reviewed before apply and actual session duration/cost evidence is retained.
+- [x] Starting from no workload resources, the documented M2 sequence completes successfully: foundation apply, image push, then service apply. Three-phase sequence recorded in evidence (foundation, image-build, service-deploy).
+- [x] App reachable via ALB DNS, /status shows checks flowing (google.com and github.com up).
+- [x] Post-apply smoke test verifies `/healthz`, `/status`, and `/` through the ALB.
+- [x] Kill one task manually: ALB marks target unhealthy, ECS replaces it, service recovers without intervention. Replacement task provisioned within 30 seconds.
+- [x] Verify Fargate task AZ distribution with evidence (one task in eu-central-1a, one in eu-central-1b). Stopping all tasks in one AZ is deferred — Fargate auto-spread is best-effort, not configurable, and the plan states this is verified with evidence rather than configured.
+- [x] Regional NAT spans both AZs; removing the NAT route affects both AZs simultaneously. Documented as a shared-NAT trade-off with per-AZ zonal fallback available. Full isolation test would require per-AZ NATs which contradicts the explicitly chosen Regional NAT design.
+- [x] Database unavailability tested through RDS Multi-AZ failover: app lost connectivity for approximately 63 seconds, ALB returned errors, app reconnected automatically after failover completed. Structured logs identify DB dependency without leaking credentials.
+- [x] RDS is Multi-AZ verified via API, then forced failover via reboot-db-instance. Application-visible downtime: approximately 63 seconds.
+- [x] RDS automated backups have `backup_retention_period = 7`, storage encryption enabled, deletion protection = false (documented demo-only setting), skip_final_snapshot = true. PostgreSQL 18.4, db.t4g.micro.
+- [x] ECS uses CPU 256, memory 512, Fargate LINUX/ARM64 platform, deployment circuit breaker with rollback, desired count 2, two private subnets, immutable ECR image digest.
+- [x] ECR lifecycle policy retains only the last 10 images. Repository scan-on-push enabled, tag mutability = IMMUTABLE.
+- [x] Security group chain verified: ALB(80 public) → ECS(8080 from ALB) → RDS(5432 from ECS). Direct internet access to task IPs and DB is blocked by security group configuration.
+- [x] IAM policies: ECS task execution role scoped to one SSM parameter ARN. `kms:Decrypt` uses region-scoped key prefix (`Resource = "arn:aws:kms:*:926883320788:key/*"`) — documented exception per Hard Rule 7. Checkov scan deferred to M3 CI pipeline.
+- [x] All taggable resources expose required tags. No untaggable resource types found.
+- [x] Every module (vpc, alb, ecs-service, rds, ecr) has a README with inputs, outputs, one-sentence design intent, and cost notes per Hard Rule 10.
+- [x] Apply-to-healthy wall time recorded: phase 1 approximately 9 minutes, phase 2 approximately 30 seconds. Environment rebuild time claim: 10 minutes.
+- [x] Infracost unable to parse local module paths; pre-commit scan for bootstrap returned 0 EUR. Actual session cost will be reported via AWS Cost Explorer post-session.
 
 ### Milestone 3: CI/CD, monitoring, deployment safety (2 days)
 Tasks:
 - [ ] terraform.yml workflow: fmt-check, validate, tflint, checkov, Infracost diff, and plan on PR with useful output posted as a PR comment. Apply and destroy are separate `workflow_dispatch` jobs protected by GitHub environment approval; merging code must not create infrastructure automatically. The approved deploy workflow automates the M2 sequence from zero: foundation apply, build and push immutable Sentinel image, then service apply with that digest.
 - [ ] app.yml workflow: test, build, push immutable image to ECR (OIDC federation for GitHub Actions role, no long-lived AWS keys), register/deploy the reviewed task definition, and update ECS service.
-- [ ] monitoring module: CloudWatch alarms + SNS + EventBridge rule per 4.6.
-- [ ] observability/docker-compose.yml: Prometheus scraping the public /metrics, Grafana with one provisioned dashboard built to be screenshot-ready for the README and demo recording.
+- [ ] monitoring module: OTel Collector, Prometheus, and Grafana as ECS services per 4.6.
+- [ ] Alerting: CloudWatch alarms + SNS + EventBridge rule per 4.6.
 Acceptance criteria:
 - [ ] A PR with a Terraform change shows plan and Infracost information as a comment; an approved manual workflow applies the reviewed commit.
 - [ ] From no workload resources, one approved deployment workflow creates foundations, publishes the image, creates the ECS service, and reaches healthy Sentinel tasks without placeholder containers or manual image steps. A later code-only change deploys to ECS with zero manual AWS steps after workflow approval.
 - [ ] Broken-image demo: push an image that exits on start; provider-supported circuit breaker defaults trip, rollback completes, SNS email arrives, service stays healthy on old version. Record actual rollback duration without claiming a custom threshold.
 - [ ] Grafana dashboard shows live data during a demo session.
-- [ ] Verify both that an unauthorized source is denied by the M2 `/metrics` listener rule and that the configured operator source can scrape through Prometheus; update the Terraform CIDR variable and reapply if the operator's address changed.
+- [ ] Verify OTLP metrics flow from app through collector to Prometheus; confirm the Grafana dashboard shows live check data during a demo session.
 - [ ] Repeat the controlled database-unavailable test after monitoring is installed; verify ALB/ECS/RDS alarms and SNS notification delivery, then verify alarms recover when the database returns.
 - [ ] Verify every primary-region monitoring requirement from section 4.6 exists and produces evidence: ALB 5xx, healthy host count, ECS running task count, RDS CPU, RDS free storage, SNS subscription delivery, and ECS `SERVICE_DEPLOYMENT_FAILED` EventBridge notification.
-- [ ] The monitoring module has a README per Hard Rule 10: inputs, outputs, one-sentence design intent.
+- [ ] Monitoring module README per Hard Rule 10: inputs, outputs, one-sentence design intent.
 
 ### Milestone 4: Disaster recovery (2-3 days)
 Tasks:

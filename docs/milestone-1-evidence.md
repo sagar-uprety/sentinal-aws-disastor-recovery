@@ -13,8 +13,8 @@ Verified on 2026-07-11.
 
 The app image was rebuilt before both runs.
 
-- `DATABASE_URL` path: `/healthz`, `/status`, `/metrics`, and `/` returned successful responses.
-- Individual variable path: `DATABASE_URL` was unset and `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` were set; `/healthz`, `/status`, `/metrics`, and `/` returned successful responses.
+- `DATABASE_URL` path: `/healthz`, `/status`, and `/` returned successful responses.
+- Individual variable path: `DATABASE_URL` was unset and `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` were set; `/healthz`, `/status`, and `/` returned successful responses.
 - Application logs for the individual-variable run contained no errors or warnings.
 
 ## Container

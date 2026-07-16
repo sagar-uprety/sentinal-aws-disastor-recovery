@@ -14,16 +14,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"sentinel-aws-dr/app/internal/db"
 	"sentinel-aws-dr/app/internal/monitor"
 )
 
 type config struct {
-	port          int
 	databaseURL   string
 	selfURL       string
+	port          int
 	checkInterval time.Duration
 	httpTimeout   time.Duration
 }
@@ -87,7 +85,7 @@ func databaseConnectionURL() (string, error) {
 		Host:   net.JoinHostPort(dbValues["DB_HOST"], dbValues["DB_PORT"]),
 		Path:   dbValues["DB_NAME"],
 	}
-	u.RawQuery = "sslmode=disable"
+	u.RawQuery = "sslmode=require"
 	return u.String(), nil
 }
 
@@ -98,38 +96,58 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-// Starts the checker, metrics endpoint, and HTTP server.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
+	if err := run(); err != nil {
+		slog.Error("fatal", "error", err)
+		os.Exit(1)
+	}
+}
+
+// Starts the checker, metrics pipeline, and HTTP server.
+func run() error {
 	cfg, err := loadConfig()
 	if err != nil {
-		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	slog.Info("starting sentinel", "port", cfg.port, "interval", cfg.checkInterval.Seconds())
-
-	database, err := db.Open(cfg.databaseURL)
-	if err != nil {
-		slog.Error("failed to connect to database", "error", err)
-		os.Exit(1)
-	}
-	defer database.Close()
-
-	if err := db.Migrate(database); err != nil {
-		slog.Error("failed to run migrations", "error", err)
-		os.Exit(1)
-	}
-	if err := db.SeedTargets(database, cfg.selfURL); err != nil {
-		slog.Error("failed to seed targets", "error", err)
-		os.Exit(1)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	metrics := monitor.NewMetrics()
+	database, err := db.Open(ctx, cfg.databaseURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+	defer func() {
+		if cerr := database.Close(); cerr != nil {
+			slog.Error("close database failed", "error", cerr)
+		}
+	}()
+
+	if err = db.Migrate(ctx, database); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+	if err = db.SeedTargets(ctx, database, cfg.selfURL); err != nil {
+		return fmt.Errorf("failed to seed targets: %w", err)
+	}
+	if custom := os.Getenv("TARGETS"); custom != "" {
+		urls := strings.Split(custom, ",")
+		for i := range urls {
+			urls[i] = strings.TrimSpace(urls[i])
+		}
+		if err = db.SeedTargetsFromList(ctx, database, urls); err != nil {
+			return fmt.Errorf("failed to seed custom targets: %w", err)
+		}
+	}
+
+	metrics, shutdown, err := monitor.NewMetrics(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics pipeline: %w", err)
+	}
+
 	checker := monitor.NewChecker(database, metrics, cfg.checkInterval, cfg.httpTimeout, cfg.selfURL)
 	go checker.Run(ctx)
 
@@ -138,7 +156,6 @@ func main() {
 	mux.HandleFunc("GET /targets", monitor.HandleTargets(database))
 	mux.HandleFunc("GET /status", monitor.HandleStatus(database))
 	mux.HandleFunc("GET /history", monitor.HandleHistory(database))
-	mux.HandleFunc("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}).ServeHTTP)
 	mux.Handle("GET /", http.FileServer(http.Dir("static")))
 
 	server := &http.Server{
@@ -155,15 +172,20 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		slog.Info("shutting down")
-		ctxShutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		server.Shutdown(ctxShutdown)
+		ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
+		if shutdownErr := server.Shutdown(ctxShutdown); shutdownErr != nil {
+			slog.Error("http server shutdown failed", "error", shutdownErr)
+		}
 		cancel()
+		if shutdownErr := shutdown(ctxShutdown); shutdownErr != nil {
+			slog.Error("metrics shutdown failed", "error", shutdownErr)
+		}
 	}()
 
 	slog.Info("listening", "addr", server.Addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		slog.Error("server error", "error", err)
-		os.Exit(1)
+	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("server error: %w", err)
 	}
+	return nil
 }
