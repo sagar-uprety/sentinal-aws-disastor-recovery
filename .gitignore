@@ -61,8 +61,13 @@ app/sentinel
 # Go vendor
 vendor/
 
+# Local env secrets
+.env
+
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*.knp
+*.bkp

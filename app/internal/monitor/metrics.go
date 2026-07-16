@@ -2,41 +2,58 @@ package monitor
 
 import (
 	"context"
+	"os"
 	"sync"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
-
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otelmetric "go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/sdk/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.30.0"
 )
 
 type Metrics struct {
-	Registry      *prometheus.Registry
 	checksCounter otelmetric.Int64Counter
 	durationHist  otelmetric.Int64Histogram
-
-	mu          sync.RWMutex
-	targetState map[string]int64
+	targetState   map[string]int64
+	provider      *sdkmetric.MeterProvider
+	mu            sync.RWMutex
 }
 
-// NewMetrics creates an isolated Prometheus registry backed by OpenTelemetry instruments.
-func NewMetrics() *Metrics {
-	reg := prometheus.NewRegistry()
-	reg.MustRegister(
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+// creates an OTLP push pipeline and returns its shutdown function.
+func NewMetrics(ctx context.Context) (*Metrics, func(context.Context) error, error) {
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("sentinel"),
+			semconv.ServiceVersion("0.1.0"),
+		),
 	)
-
-	exporter, err := otelprom.New(otelprom.WithRegisterer(reg))
 	if err != nil {
-		panic("failed to create prometheus exporter: " + err.Error())
+		return nil, nil, err
 	}
 
-	meterProvider := metric.NewMeterProvider(metric.WithReader(exporter))
-	meter := meterProvider.Meter("sentinel",
+	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "http://localhost:4318"
+	}
+
+	exporter, err := otlpmetrichttp.New(ctx,
+		otlpmetrichttp.WithEndpointURL(endpoint),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	reader := sdkmetric.NewPeriodicReader(exporter)
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithResource(res),
+		sdkmetric.WithReader(reader),
+	)
+	otel.SetMeterProvider(provider)
+
+	meter := provider.Meter("sentinel",
 		otelmetric.WithInstrumentationVersion("0.1.0"),
 	)
 
@@ -44,7 +61,7 @@ func NewMetrics() *Metrics {
 		otelmetric.WithDescription("Total checks performed"),
 	)
 	if err != nil {
-		panic("failed to create counter: " + err.Error())
+		return nil, nil, err
 	}
 
 	durationHist, err := meter.Int64Histogram("sentinel.check.duration",
@@ -53,14 +70,14 @@ func NewMetrics() *Metrics {
 		otelmetric.WithExplicitBucketBoundaries(10, 50, 100, 250, 500, 1000, 2000, 5000),
 	)
 	if err != nil {
-		panic("failed to create histogram: " + err.Error())
+		return nil, nil, err
 	}
 
 	m := &Metrics{
-		Registry:      reg,
 		checksCounter: checksCounter,
 		durationHist:  durationHist,
 		targetState:   make(map[string]int64),
+		provider:      provider,
 	}
 
 	_, err = meter.Int64ObservableGauge("sentinel.target.up",
@@ -68,13 +85,13 @@ func NewMetrics() *Metrics {
 		otelmetric.WithDescription("Target reachable (1) or not (0)"),
 	)
 	if err != nil {
-		panic("failed to create gauge: " + err.Error())
+		return nil, nil, err
 	}
 
-	return m
+	return m, provider.Shutdown, nil
 }
 
-// observeUpGauge exports the latest bounded up/down state for each target.
+// exports the latest bounded up/down state for each target.
 func (m *Metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -86,7 +103,7 @@ func (m *Metrics) observeUpGauge(_ context.Context, obs otelmetric.Int64Observer
 	return nil
 }
 
-// Observe records check count, duration, and latest target state.
+// records check count, duration, and latest target state.
 func (m *Metrics) Observe(ctx context.Context, target string, responseMs int, isUp bool) {
 	// Target labels are bounded by the small configured target table.
 	attrs := otelmetric.WithAttributeSet(

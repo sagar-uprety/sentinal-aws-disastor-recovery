@@ -1,0 +1,24 @@
+formatter: markdown table
+
+output:
+  file: README.md
+  mode: replace
+
+sort:
+  enabled: true
+  by: required
+
+content: |-
+  {{ .Header }}
+
+  {{ .Requirements }}
+
+  {{ .Providers }}
+
+  {{ .Resources }}
+
+  {{ .Inputs }}
+
+  {{ .Outputs }}
+
+  {{ .Notes }}

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -10,29 +11,29 @@ import (
 )
 
 type TargetRow struct {
-	ID  int
 	URL string
+	ID  int
 }
 
 type CheckRow struct {
-	TargetURL  string    `json:"target_url"`
+	CheckedAt  time.Time `json:"checked_at"`
 	StatusCode *int      `json:"status_code"`
+	TargetURL  string    `json:"target_url"`
 	ResponseMs int       `json:"response_ms"`
 	IsUp       bool      `json:"is_up"`
-	CheckedAt  time.Time `json:"checked_at"`
 }
 
 type TargetStatus struct {
-	URL         string    `json:"url"`
-	IsUp        bool      `json:"is_up"`
-	StatusCode  *int      `json:"status_code"`
-	ResponseMs  int       `json:"response_ms"`
 	LastChecked time.Time `json:"last_checked"`
+	StatusCode  *int      `json:"status_code"`
+	URL         string    `json:"url"`
+	ResponseMs  int       `json:"response_ms"`
 	UptimePct   float64   `json:"uptime_pct_24h"`
+	IsUp        bool      `json:"is_up"`
 }
 
-// Open creates and verifies a bounded PostgreSQL connection pool.
-func Open(dsn string) (*sql.DB, error) {
+// Creates and verifies a bounded PostgreSQL connection pool.
+func Open(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -40,14 +41,14 @@ func Open(dsn string) (*sql.DB, error) {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 	return db, nil
 }
 
-// Migrate applies the idempotent application schema.
-func Migrate(db *sql.DB) error {
+// Applies the idempotent application schema.
+func Migrate(ctx context.Context, db *sql.DB) error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS targets (
 			id SERIAL PRIMARY KEY,
@@ -66,7 +67,7 @@ func Migrate(db *sql.DB) error {
 		 ON checks (target_url, checked_at DESC)`,
 	}
 	for _, q := range queries {
-		if _, err := db.Exec(q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
@@ -74,8 +75,8 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
-// SeedTargets inserts default and optional self-check targets once.
-func SeedTargets(db *sql.DB, selfURL string) error {
+// Inserts default and optional self-check targets once.
+func SeedTargets(ctx context.Context, db *sql.DB, selfURL string) error {
 	defaults := []string{
 		"https://www.google.com",
 		"https://github.com",
@@ -83,8 +84,13 @@ func SeedTargets(db *sql.DB, selfURL string) error {
 	if selfURL != "" {
 		defaults = append(defaults, selfURL)
 	}
-	for _, url := range defaults {
-		_, err := db.Exec(`INSERT INTO targets (url) VALUES ($1) ON CONFLICT (url) DO NOTHING`, url)
+	return SeedTargetsFromList(ctx, db, defaults)
+}
+
+// Inserts the given URLs as targets, ignoring duplicates.
+func SeedTargetsFromList(ctx context.Context, db *sql.DB, urls []string) error {
+	for _, url := range urls {
+		_, err := db.ExecContext(ctx, `INSERT INTO targets (url) VALUES ($1) ON CONFLICT (url) DO NOTHING`, url)
 		if err != nil {
 			return fmt.Errorf("seed target %s: %w", url, err)
 		}
@@ -92,13 +98,17 @@ func SeedTargets(db *sql.DB, selfURL string) error {
 	return nil
 }
 
-// ListTargets returns configured targets in insertion order.
-func ListTargets(db *sql.DB) ([]TargetRow, error) {
-	rows, err := db.Query(`SELECT id, url FROM targets ORDER BY id`)
+// Returns configured targets in insertion order.
+func ListTargets(ctx context.Context, db *sql.DB) ([]TargetRow, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, url FROM targets ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list targets: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			slog.Error("close rows failed", "error", cerr)
+		}
+	}()
 
 	var targets []TargetRow
 	for rows.Next() {
@@ -111,9 +121,9 @@ func ListTargets(db *sql.DB) ([]TargetRow, error) {
 	return targets, rows.Err()
 }
 
-// RecordCheck persists one uptime check and logs write failures.
-func RecordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, isUp bool) {
-	_, err := db.Exec(
+// Persists one uptime check and logs write failures.
+func RecordCheck(ctx context.Context, db *sql.DB, targetURL string, statusCode *int, responseMs int, isUp bool) {
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO checks (target_url, status_code, response_ms, is_up, checked_at)
 		 VALUES ($1, $2, $3, $4, NOW())`,
 		targetURL, statusCode, responseMs, isUp,
@@ -123,9 +133,9 @@ func RecordCheck(db *sql.DB, targetURL string, statusCode *int, responseMs int, 
 	}
 }
 
-// GetLatestPerTarget returns each target's latest check and 24-hour uptime.
-func GetLatestPerTarget(db *sql.DB) ([]TargetStatus, error) {
-	rows, err := db.Query(`
+// Returns each target's latest check and 24-hour uptime.
+func GetLatestPerTarget(ctx context.Context, db *sql.DB) ([]TargetStatus, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT DISTINCT ON (c.target_url)
 			c.target_url, c.is_up, c.status_code, c.response_ms, c.checked_at,
 			COALESCE(u.uptime, 0) AS uptime_pct
@@ -142,7 +152,11 @@ func GetLatestPerTarget(db *sql.DB) ([]TargetStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("latest per target: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			slog.Error("close rows failed", "error", cerr)
+		}
+	}()
 
 	var results []TargetStatus
 	for rows.Next() {
@@ -155,10 +169,10 @@ func GetLatestPerTarget(db *sql.DB) ([]TargetStatus, error) {
 	return results, rows.Err()
 }
 
-// GetHistory returns recent checks for one exact target URL.
-func GetHistory(db *sql.DB, target string, limit int) ([]CheckRow, error) {
+// Returns recent checks for one exact target URL.
+func GetHistory(ctx context.Context, db *sql.DB, target string, limit int) ([]CheckRow, error) {
 	// Exact matching prevents targets with shared hosts or prefixes from colliding.
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT target_url, status_code, response_ms, is_up, checked_at
 		FROM checks
 		WHERE target_url = $1
@@ -168,7 +182,11 @@ func GetHistory(db *sql.DB, target string, limit int) ([]CheckRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get history: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			slog.Error("close rows failed", "error", cerr)
+		}
+	}()
 
 	var checks []CheckRow
 	for rows.Next() {

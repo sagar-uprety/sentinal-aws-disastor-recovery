@@ -10,32 +10,34 @@ import (
 	"sentinel-aws-dr/app/internal/db"
 )
 
-// HandleHealthz reports readiness based on database connectivity.
+// reports readiness based on database connectivity.
 func HandleHealthz(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := database.Ping(); err != nil {
+		if err := database.PingContext(r.Context()); err != nil {
 			slog.Error("healthz: db ping failed", "error", err)
 			http.Error(w, `{"status":"error"}`, http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+			slog.Error("healthz: write response failed", "error", err)
+		}
 	}
 }
 
-// HandleTargets returns all configured monitoring targets.
+// returns all configured monitoring targets.
 func HandleTargets(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		targets, err := db.ListTargets(database)
+		targets, err := db.ListTargets(r.Context(), database)
 		if err != nil {
 			slog.Error("targets: list failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
 		type targetResp struct {
-			ID  int    `json:"id"`
 			URL string `json:"url"`
+			ID  int    `json:"id"`
 		}
 		resp := make([]targetResp, len(targets))
 		for i, t := range targets {
@@ -45,10 +47,10 @@ func HandleTargets(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// HandleStatus returns the latest status and 24-hour uptime for each target.
+// returns the latest status and 24-hour uptime for each target.
 func HandleStatus(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		statuses, err := db.GetLatestPerTarget(database)
+		statuses, err := db.GetLatestPerTarget(r.Context(), database)
 		if err != nil {
 			slog.Error("status: query failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -61,7 +63,7 @@ func HandleStatus(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// HandleHistory returns recent checks for the requested exact target URL.
+// returns recent checks for the requested exact target URL.
 func HandleHistory(database *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("target")
@@ -76,7 +78,7 @@ func HandleHistory(database *sql.DB) http.HandlerFunc {
 				limit = v
 			}
 		}
-		checks, err := db.GetHistory(database, target, limit)
+		checks, err := db.GetHistory(r.Context(), database, target, limit)
 		if err != nil {
 			slog.Error("history: query failed", "target", target, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -89,7 +91,7 @@ func HandleHistory(database *sql.DB) http.HandlerFunc {
 	}
 }
 
-// writeJSON writes a JSON response with the requested status code.
+// writes a JSON response with the requested status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
