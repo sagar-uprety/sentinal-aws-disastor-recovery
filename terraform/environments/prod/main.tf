@@ -45,13 +45,43 @@ module "ecs" {
   target_group_arn      = module.alb.target_group_arn
 
   # Replace with immutable image digest after pushing to ECR in phase 2.
-  image_uri           = var.deploy_service ? "926883320788.dkr.ecr.eu-central-1.amazonaws.com/sentinel-aws-dr-prod@sha256:985b3b7bf3f39fddabc7e9f02ea3bca8343163fdbd587f5532fe924d6ae98cc0" : "skip"
+  image_uri           = var.deploy_service ? "926883320788.dkr.ecr.eu-central-1.amazonaws.com/sentinel-aws-dr-prod@sha256:ea1e5b66fc916b0f5b921533bd19f7afa2cbea73721fda5e20bfcfa941e4d092" : "skip"
   db_endpoint         = var.deploy_service ? "sentinel-aws-dr-prod.cvo2k4yamipe.eu-central-1.rds.amazonaws.com:5432" : "skip"
   db_name             = "sentinel"
   db_user             = "sentinel"
   db_password_ssm_arn = aws_ssm_parameter.database_password_prod.arn
+  otel_endpoint       = module.monitoring.otel_collector_endpoint
 
   deploy_service = var.deploy_service
+}
+
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  project_name            = local.project_name
+  environment             = local.environment
+  vpc_id                  = module.vpc.vpc_id
+  app_subnet_ids          = module.vpc.app_subnet_ids
+  ecs_cluster_name        = module.ecs.cluster_name
+  app_security_group_id   = module.ecs.security_group_id
+  alb_arn_suffix          = module.alb.alb_arn_suffix
+  target_group_arn_suffix = module.alb.target_group_arn_suffix
+  ecs_desired_count       = 2
+  alert_email             = var.alert_email
+}
+
+module "github_oidc" {
+  source = "../../modules/github-oidc"
+
+  project_name = local.project_name
+  environment  = local.environment
+  github_org   = var.github_org
+  github_repo  = var.github_repo
+
+  ecr_repository_arn          = module.ecr.repository_arn
+  ecs_cluster_arn             = "arn:aws:ecs:eu-central-1:926883320788:cluster/${local.project_name}-${local.environment}"
+  ecs_service_arn             = "arn:aws:ecs:eu-central-1:926883320788:service/${local.project_name}-${local.environment}/${local.project_name}-${local.environment}"
+  ecs_task_execution_role_arn = module.ecs.task_execution_role_arn
 }
 
 module "rds" {

@@ -13,6 +13,16 @@ output "target_group_arn" {
   value       = aws_lb_target_group.app.arn
 }
 
+output "alb_arn_suffix" {
+  description = "ARN suffix of the ALB, for CloudWatch alarm dimensions."
+  value       = aws_lb.main.arn_suffix
+}
+
+output "target_group_arn_suffix" {
+  description = "ARN suffix of the ALB target group, for CloudWatch alarm dimensions."
+  value       = aws_lb_target_group.app.arn_suffix
+}
+
 output "security_group_id" {
   description = "ID of the ALB security group."
   value       = aws_security_group.alb.id
