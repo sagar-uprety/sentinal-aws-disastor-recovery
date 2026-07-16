@@ -23,3 +23,5 @@ Public HTTP traffic on port 80 is forwarded to ECS tasks on port 8080. The app n
 | `alb_dns_name` | DNS name of the Application Load Balancer |
 | `target_group_arn` | ARN of the ALB target group |
 | `security_group_id` | ID of the ALB security group |
+| `alb_arn_suffix` | ARN suffix of the ALB, for CloudWatch alarm dimensions |
+| `target_group_arn_suffix` | ARN suffix of the target group, for CloudWatch alarm dimensions |

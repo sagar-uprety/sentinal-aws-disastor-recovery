@@ -15,3 +15,21 @@ variable "multi_az" {
   type        = bool
   default     = false
 }
+
+variable "alert_email" {
+  description = "Email address subscribed to the CloudWatch alerts SNS topic."
+  type        = string
+  default     = "sagarupreti100@gmail.com"
+}
+
+variable "github_org" {
+  description = "GitHub org/user that owns this repository, for the OIDC trust policy."
+  type        = string
+  default     = "sagar-uprety"
+}
+
+variable "github_repo" {
+  description = "GitHub repository name, for the OIDC trust policy."
+  type        = string
+  default     = "sentinal-aws-disastor-recovery"
+}
