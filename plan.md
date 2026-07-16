@@ -193,6 +193,7 @@ aws-resilient-status-page/
 │   │   ├── ecs-service/
 │   │   ├── rds/
 │   │   ├── monitoring/
+│   │   ├── github-oidc/      # OIDC provider + deploy role for GitHub Actions (added in M3)
 │   │   ├── route53-failover/
 │   │   └── ecr/
 │   └── environments/
@@ -207,8 +208,8 @@ aws-resilient-status-page/
 ├── .github/workflows/
 │   ├── app.yml               # build, test, push to ECR, deploy
 │   └── terraform.yml         # fmt, validate, tflint, checkov, plan on PR; apply/destroy are separate workflow_dispatch jobs with approval, never on merge
-├── observability/
-│   └── docker-compose.yml    # local Prometheus + Grafana for demos
+├── docker-compose.yml        # local dev stack: app, postgres, otel collector, Prometheus, Grafana
+├── observability/            # local otel/Prometheus/Grafana configs consumed by docker-compose.yml
 ├── docs/
 │   ├── architecture.md       # diagram, state dependencies, lifecycle, and decisions
 │   ├── postmortem.md         # written after the first real drill
@@ -265,7 +266,7 @@ Acceptance criteria:
 - [x] App reachable via ALB DNS, /status shows checks flowing (google.com and github.com up).
 - [x] Post-apply smoke test verifies `/healthz`, `/status`, and `/` through the ALB.
 - [x] Kill one task manually: ALB marks target unhealthy, ECS replaces it, service recovers without intervention. Replacement task provisioned within 30 seconds.
-- [x] Verify Fargate task AZ distribution with evidence (one task in eu-central-1a, one in eu-central-1b). Stopping all tasks in one AZ is deferred — Fargate auto-spread is best-effort, not configurable, and the plan states this is verified with evidence rather than configured.
+- [x] Verify Fargate task AZ distribution with evidence (one task in eu-central-1a, one in eu-central-1b). Stopping all tasks in one AZ is deferred, since Fargate auto-spread is best-effort, not configurable, and the plan states this is verified with evidence rather than configured.
 - [x] Regional NAT spans both AZs; removing the NAT route affects both AZs simultaneously. Documented as a shared-NAT trade-off with per-AZ zonal fallback available. Full isolation test would require per-AZ NATs which contradicts the explicitly chosen Regional NAT design.
 - [x] Database unavailability tested through RDS Multi-AZ failover: app lost connectivity for approximately 63 seconds, ALB returned errors, app reconnected automatically after failover completed. Structured logs identify DB dependency without leaking credentials.
 - [x] RDS is Multi-AZ verified via API, then forced failover via reboot-db-instance. Application-visible downtime: approximately 63 seconds.
@@ -273,7 +274,7 @@ Acceptance criteria:
 - [x] ECS uses CPU 256, memory 512, Fargate LINUX/ARM64 platform, deployment circuit breaker with rollback, desired count 2, two private subnets, immutable ECR image digest.
 - [x] ECR lifecycle policy retains only the last 10 images. Repository scan-on-push enabled, tag mutability = IMMUTABLE.
 - [x] Security group chain verified: ALB(80 public) → ECS(8080 from ALB) → RDS(5432 from ECS). Direct internet access to task IPs and DB is blocked by security group configuration.
-- [x] IAM policies: ECS task execution role scoped to one SSM parameter ARN. `kms:Decrypt` uses region-scoped key prefix (`Resource = "arn:aws:kms:*:926883320788:key/*"`) — documented exception per Hard Rule 7. Checkov scan deferred to M3 CI pipeline.
+- [x] IAM policies: ECS task execution role scoped to one SSM parameter ARN. `kms:Decrypt` uses region-scoped key prefix (`Resource = "arn:aws:kms:*:926883320788:key/*"`), a documented exception per Hard Rule 7. Checkov scan deferred to M3 CI pipeline.
 - [x] All taggable resources expose required tags. No untaggable resource types found.
 - [x] Every module (vpc, alb, ecs-service, rds, ecr) has a README with inputs, outputs, one-sentence design intent, and cost notes per Hard Rule 10.
 - [x] Apply-to-healthy wall time recorded: phase 1 approximately 9 minutes, phase 2 approximately 30 seconds. Environment rebuild time claim: 10 minutes.
@@ -285,16 +286,19 @@ Tasks:
 - [x] monitoring module: OTel Collector, Prometheus, and Grafana as ECS services per 4.6.
 - [x] Alerting: CloudWatch alarms + SNS + EventBridge rule per 4.6.
 Acceptance criteria:
-- [ ] A code-only app change: app.yml builds, tests, pushes an immutable image to ECR via OIDC, and updates the running ECS service to the new task definition revision, with zero manual AWS steps after workflow approval. Terraform-managed infrastructure continues to be applied manually via `terraform apply`/`terraform plan` for M3 and M4. Not yet verified end to end: requires merging to main and observing a real workflow run.
+- [x] A code-only app change: app.yml builds, tests, pushes an immutable image to ECR via OIDC, and updates the running ECS service to the new task definition revision, with zero manual AWS steps after workflow approval. Terraform-managed infrastructure continues to be applied manually via `terraform apply`/`terraform plan` for M3 and M4. Verified 2026-07-17: GitHub Actions run 29540534462 completed successfully end to end; task definition revision 5 was registered by the assumed OIDC role and the service reached steady state on the CI-built image (digest tagged with the merge commit SHA).
 - [x] Broken-image demo: pushed an image that exits on start; provider-supported circuit breaker defaults tripped, rollback completed, SNS delivery confirmed (after fixing a topic-policy bug), service stayed healthy on old revision throughout. Measured rollback duration (update-service to rollback-initiated): ~3m58s first run, ~3m01s second run. See `docs/milestone-3-evidence.md`.
 - [x] Grafana dashboard shows live data during a demo session. Verified via `aws ecs execute-command` into the Grafana task: `/api/health` ok, "Sentinel" dashboard provisioned and searchable, Prometheus datasource configured and default.
 - [x] Verify OTLP metrics flow from app through collector to Prometheus; confirm the Grafana dashboard shows live check data during a demo session. Confirmed via live Prometheus query through the same exec channel: `sentinel_target_up{target="https://github.com"}=1`, `sentinel_target_up{target="https://www.google.com"}=1`.
 - [x] Repeat the controlled database-unavailable test after monitoring is installed; verify ALB/ECS/RDS alarms and SNS notification delivery, then verify alarms recover when the database returns. Used a plain `reboot-db-instance` (not Multi-AZ forced failover, already proven in M2) to control cost. `/healthz` returned one 503 then recovered within ~10s; app logs show clean `db ping failed` / `database system is starting up` errors with no credentials leaked; SNS delivery separately confirmed via the ECS running-task-count alarm (see below).
-- [x] Verify every primary-region monitoring requirement from section 4.6 exists and produces evidence: ALB 5xx, healthy host count, ECS running task count, RDS CPU, RDS free storage all exist and are OK (`aws cloudwatch describe-alarms`). SNS subscription delivery: alarm state forced to ALARM/OK confirmed "Successfully executed action" in alarm history (after fixing the topic policy). ECS `SERVICE_DEPLOYMENT_FAILED` EventBridge notification: confirmed via a temporary catch-all debug rule that the real event uses `detail.eventName` (not `eventType`, which is only a severity level); fixed the rule and reconfirmed `TriggeredRules=1` on the real Terraform-managed rule. SNS email subscription itself is `PendingConfirmation` as of this writing; the confirmation link expired unused once already and was resent — requires the project owner to click it.
+- [x] Verify every primary-region monitoring requirement from section 4.6 exists and produces evidence: ALB 5xx, healthy host count, ECS running task count, RDS CPU, RDS free storage all exist and are OK (`aws cloudwatch describe-alarms`). SNS subscription delivery: alarm state forced to ALARM/OK confirmed "Successfully executed action" in alarm history (after fixing the topic policy). ECS `SERVICE_DEPLOYMENT_FAILED` EventBridge notification: confirmed via a temporary catch-all debug rule that the real event uses `detail.eventName` (not `eventType`, which is only a severity level); fixed the rule and reconfirmed `TriggeredRules=1` on the real Terraform-managed rule. SNS email subscription was `PendingConfirmation` at first writing; the project owner confirmed it on 2026-07-17 (verified via `aws sns list-subscriptions-by-topic` showing a real subscription ARN).
 - [x] Monitoring module README per Hard Rule 10: inputs, outputs, one-sentence design intent.
 
 ### Milestone 4: Disaster recovery (2-3 days)
 Tasks:
+- [ ] Confirm Regional NAT availability in eu-west-1 before the DR VPC apply. AWS documentation states regional availability mode is available in all commercial regions (verified 2026-07-17); reconfirm at apply time with the actual DR apply succeeding.
+- [ ] Resolve the latest common PostgreSQL 18 minor across eu-central-1 and eu-west-1 and require it to match the prod instance's running version before replica creation, per section 4.1 (prod resolved 18.4 at M2).
+- [ ] Upgrade and re-lock tooling at milestone start per the section 4 version policy: latest AWS provider 6.x (`terraform init -upgrade`, review changelog, commit lock files) and latest Terraform 1.15.x patch if installed locally.
 - [ ] Create the Route53 hosted zone `sentinel.sagaruprety.com.np`, add its NS delegation records to the existing Cloudflare `sagaruprety.com.np` zone, and publish `status.sentinel.sagaruprety.com.np`. Verify delegation with `dig NS sentinel.sagaruprety.com.np` (must return the Route53 nameservers) and `dig A status.sentinel.sagaruprety.com.np` (must resolve through Route53, not Cloudflare).
 - [ ] Provision Route53 ARC routing controls only for the drill and verify the `$2.50/cluster-hour` cost in Infracost or AWS pricing evidence. The project owner controls teardown after recording.
 - [ ] environments/dr composing the same modules: VPC with free S3 gateway endpoint, optional paid interface endpoints disabled, ALB, ECS (desired_count 0), ECR replication.
