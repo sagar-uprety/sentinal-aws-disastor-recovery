@@ -11,6 +11,17 @@ resource "aws_sns_topic" "alerts" {
 }
 
 resource "aws_sns_topic_subscription" "email" {
+  # Plain "email" ships an HTML email with a clickable unsubscribe link and a
+  # List-Unsubscribe header. Email security scanners (Gmail, Outlook, enterprise
+  # gateways) pre-fetch links in incoming mail for malware scanning, and AWS SNS
+  # treats that fetch as a real click, silently unsubscribing the address. The
+  # Terraform resource only calls Subscribe (it can't confirm an email endpoint);
+  # confirmation happens out-of-band. Per AWS's own SNS security best practices,
+  # the subscription is confirmed manually via
+  #   aws sns confirm-subscription --token <from the email> --authenticate-on-unsubscribe true
+  # rather than by clicking the emailed link, which makes Unsubscribe require an
+  # AWS-signed request, so an anonymous scanner fetching the link cannot trigger
+  # it. See drill evidence for the incident this fixes.
   topic_arn = aws_sns_topic.alerts.arn
   protocol  = "email"
   endpoint  = var.alert_email
