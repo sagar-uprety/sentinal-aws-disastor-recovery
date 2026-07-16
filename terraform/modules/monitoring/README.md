@@ -8,6 +8,8 @@ The Sentinel app pushes OTLP metrics to the collector; the collector re-exposes 
 
 Prometheus and Grafana configs are generated at container start from environment-injected heredocs (`entryPoint = ["/bin/sh", "-c"]`) rather than a mounted volume or EFS, since the config is small and static per apply; this avoids a filesystem dependency for a demo-scale, single-task service.
 
+Prometheus storage is Fargate task-ephemeral: all collected metrics are lost when the Prometheus task restarts or is replaced. This is a deliberate demo-scale trade-off (24h retention, no EFS or remote-write), acceptable because the environment itself is ephemeral; a persistent workload would need EFS or a managed Prometheus.
+
 Alerting lives in the same module (`alerting.tf`): one SNS topic with an email subscription receives five CloudWatch alarms (ALB 5xx, ALB healthy host count, ECS running task count, RDS CPU, RDS free storage) plus an EventBridge rule on the ECS deployment circuit breaker's `SERVICE_DEPLOYMENT_FAILED` event. This matches the plan's single "Monitoring" section (4.6) covering both the observability stack and alerting, and the repo layout's single `monitoring` module.
 
 ## Inputs

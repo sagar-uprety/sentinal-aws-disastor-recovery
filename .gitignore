@@ -75,3 +75,6 @@ vendor/
 *.swo
 *.knp
 *.bkp
+
+# macOS
+.DS_Store

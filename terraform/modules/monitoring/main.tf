@@ -164,7 +164,7 @@ resource "aws_ecs_task_definition" "otel_collector" {
   container_definitions = jsonencode([
     {
       name    = "otel-collector"
-      image   = "otel/opentelemetry-collector-contrib:0.116.1"
+      image   = "otel/opentelemetry-collector-contrib:0.156.0"
       command = ["--config=env:OTEL_CONFIG"]
       portMappings = [
         { containerPort = 4318, protocol = "tcp" },
@@ -238,7 +238,7 @@ resource "aws_ecs_task_definition" "prometheus" {
   container_definitions = jsonencode([
     {
       name       = "prometheus"
-      image      = "prom/prometheus:v3.0.1"
+      image      = "prom/prometheus:v3.13.1"
       entryPoint = ["/bin/sh", "-c"]
       command = [
         <<-EOT
@@ -317,7 +317,7 @@ resource "aws_ecs_task_definition" "grafana" {
   container_definitions = jsonencode([
     {
       name       = "grafana"
-      image      = "grafana/grafana:11.4.0"
+      image      = "grafana/grafana:13.1.0"
       entryPoint = ["/bin/sh", "-c"]
       command = [
         <<-EOT
