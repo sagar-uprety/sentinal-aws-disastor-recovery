@@ -25,11 +25,11 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := testDB.PingContext(ctx); err != nil {
 		t.Fatalf("db ping: %v (is Postgres running? try: docker compose up -d db)", err)
 	}
-	if _, err := testDB.ExecContext(ctx, "TRUNCATE targets, checks RESTART IDENTITY CASCADE"); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
 	if err := db.Migrate(ctx, testDB); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := testDB.ExecContext(ctx, "TRUNCATE targets, checks RESTART IDENTITY CASCADE"); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
 	if err := db.SeedTargets(ctx, testDB, ""); err != nil {
 		t.Fatalf("seed targets: %v", err)
