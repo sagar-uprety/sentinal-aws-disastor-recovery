@@ -4,6 +4,12 @@ variable "deploy_service" {
   default     = false
 }
 
+variable "image_digest" {
+  description = "Immutable ECR image digest for the ECS service, set after the phase 2 image push."
+  type        = string
+  default     = "sha256:d5582834638054260ffa8ae62302f815ac743c818bfedf546b2d94080730f23c"
+}
+
 variable "credential_version" {
   description = "Increment to rotate the database password across RDS and both SSM parameters."
   type        = number

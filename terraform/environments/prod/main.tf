@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_rds_engine_version" "postgres" {
   engine  = "postgres"
   version = "18"
@@ -44,9 +46,9 @@ module "ecs" {
   alb_security_group_id = module.alb.security_group_id
   target_group_arn      = module.alb.target_group_arn
 
-  # Replace with immutable image digest after pushing to ECR in phase 2.
-  image_uri           = var.deploy_service ? "926883320788.dkr.ecr.eu-central-1.amazonaws.com/sentinel-aws-dr-prod@sha256:ea1e5b66fc916b0f5b921533bd19f7afa2cbea73721fda5e20bfcfa941e4d092" : "skip"
-  db_endpoint         = var.deploy_service ? "sentinel-aws-dr-prod.cvo2k4yamipe.eu-central-1.rds.amazonaws.com:5432" : "skip"
+  # Set var.image_digest to the immutable digest pushed to ECR in phase 2.
+  image_uri           = var.deploy_service ? "${module.ecr.repository_url}@${var.image_digest}" : "skip"
+  db_endpoint         = var.deploy_service ? module.rds.endpoint : "skip"
   db_name             = "sentinel"
   db_user             = "sentinel"
   db_password_ssm_arn = aws_ssm_parameter.database_password_prod.arn
@@ -78,9 +80,10 @@ module "github_oidc" {
   github_org   = var.github_org
   github_repo  = var.github_repo
 
-  ecr_repository_arn          = module.ecr.repository_arn
-  ecs_cluster_arn             = "arn:aws:ecs:eu-central-1:926883320788:cluster/${local.project_name}-${local.environment}"
-  ecs_service_arn             = "arn:aws:ecs:eu-central-1:926883320788:service/${local.project_name}-${local.environment}/${local.project_name}-${local.environment}"
+  ecr_repository_arn = module.ecr.repository_arn
+  ecs_cluster_arn    = module.ecs.cluster_arn
+  # Constructed rather than referenced because the service only exists when deploy_service is true.
+  ecs_service_arn             = "arn:aws:ecs:eu-central-1:${data.aws_caller_identity.current.account_id}:service/${local.project_name}-${local.environment}/${local.project_name}-${local.environment}"
   ecs_task_execution_role_arn = module.ecs.task_execution_role_arn
 }
 
