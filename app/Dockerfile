@@ -1,10 +1,12 @@
-FROM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
 RUN apk add --no-cache ca-certificates
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /sentinel -ldflags="-s -w" ./cmd/sentinel
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /sentinel -ldflags="-s -w" ./cmd/sentinel
 
 # checkov:skip=CKV_DOCKER_2:scratch has no shell to run a HEALTHCHECK; ECS relies on the ALB target group's /healthz check instead
 FROM scratch
