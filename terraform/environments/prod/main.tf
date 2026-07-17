@@ -27,6 +27,20 @@ module "ecr" {
   environment  = local.environment
 }
 
+# Replicates every image push to eu-west-1 under the same repository name and
+# digest, so the DR environment can deploy from a local pull instead of
+# depending on eu-central-1 being reachable during a regional incident.
+resource "aws_ecr_replication_configuration" "main" {
+  replication_configuration {
+    rule {
+      destination {
+        region      = "eu-west-1"
+        registry_id = data.aws_caller_identity.current.account_id
+      }
+    }
+  }
+}
+
 module "alb" {
   source = "../../modules/alb"
 
@@ -116,6 +130,21 @@ resource "aws_ssm_parameter" "database_password_prod" {
 
   value_wo         = random_password.database.result
   value_wo_version = var.credential_version
+}
+
+# AWS-managed key, not a customer-managed key: no per-key monthly fee, matches
+# the pattern already used for SSM and Performance Insights encryption below.
+data "aws_kms_key" "rds_dr" {
+  provider = aws.dr
+  key_id   = "alias/aws/rds"
+}
+
+resource "aws_db_instance_automated_backups_replication" "dr" {
+  provider = aws.dr
+
+  source_db_instance_arn = module.rds.arn
+  kms_key_id             = data.aws_kms_key.rds_dr.arn
+  retention_period       = 7
 }
 
 resource "aws_ssm_parameter" "database_password_dr" {

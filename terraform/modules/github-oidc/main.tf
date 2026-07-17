@@ -2,15 +2,6 @@ resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
   client_id_list = ["sts.amazonaws.com"]
-
-  # SHA1 thumbprints of token.actions.githubusercontent.com's current TLS chain
-  # (ISRG root + intermediate), fetched directly rather than relying on a possibly
-  # stale copy-pasted constant. AWS only requires a syntactically valid value here;
-  # it does not re-validate GitHub's chain against it.
-  thumbprint_list = [
-    "ab9d0263244dd0326eb67015705a667e79cfe998",
-    "2d74d6dfd96eea55ad7baafa0d3c6552b2dadc37",
-  ]
 }
 
 resource "aws_iam_role" "github_actions" {
