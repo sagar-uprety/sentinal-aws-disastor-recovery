@@ -149,7 +149,7 @@ jobs:
             plan_args+=("-lock=false")
           fi
           if [ "${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}" = "prod" ]; then
-            plan_args+=("-var=deploy_service=false" "-var=multi_az=true")
+            plan_args+=("-var=deploy_service=true" "-var=multi_az=true")
           fi
           set +e
           terraform plan -detailed-exitcode -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}" > plan.log 2>&1
@@ -255,7 +255,7 @@ jobs:
         working-directory: terraform/environments/prod
         run: >-
           terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan
-          -var='deploy_service=false' -var='multi_az=true'
+          -var='deploy_service=true' -var='multi_az=true'
 
       - name: Show primary foundation plan
         working-directory: terraform/environments/prod

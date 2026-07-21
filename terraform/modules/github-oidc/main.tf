@@ -35,12 +35,14 @@ resource "aws_iam_role_policy" "app_deploy" {
         Sid    = "EcrPush"
         Effect = "Allow"
         Action = [
+          "ecr:BatchGetImage",
           "ecr:BatchCheckLayerAvailability",
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
           "ecr:DescribeImages",
+          "ecr:GetDownloadUrlForLayer",
         ]
         Resource = [var.ecr_repository_arn]
       },

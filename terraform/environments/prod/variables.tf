@@ -11,9 +11,9 @@ variable "desired_count" {
 }
 
 variable "image_digest" {
-  description = "Immutable ECR image digest for the ECS service, set after the phase 2 image push."
+  description = "Immutable placeholder image digest used when Terraform creates the ECS service."
   type        = string
-  default     = "sha256:d5582834638054260ffa8ae62302f815ac743c818bfedf546b2d94080730f23c"
+  default     = "sha256:ebb7d99a639d5bf9a20052757f890d76a5aad4118ebe1fd016275aadf23fbc9a"
 }
 
 variable "credential_version" {
