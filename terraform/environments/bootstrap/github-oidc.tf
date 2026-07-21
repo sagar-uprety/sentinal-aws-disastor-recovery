@@ -159,11 +159,6 @@ resource "aws_iam_role_policy" "terraform_workload" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-vpc-flow-logs",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-rds-monitoring",
         ]
-        Condition = {
-          StringEquals = {
-            "iam:PassedToService" = ["ecs-tasks.amazonaws.com", "monitoring.rds.amazonaws.com", "vpc-flow-logs.amazonaws.com"]
-          }
-        }
       },
       {
         Sid    = "ReadGitHubOIDCProvider"
@@ -190,6 +185,7 @@ resource "aws_iam_role_policy" "terraform_workload" {
               "ecs.amazonaws.com",
               "elasticloadbalancing.amazonaws.com",
               "rds.amazonaws.com",
+              "monitoring.rds.amazonaws.com",
             ]
           }
         }

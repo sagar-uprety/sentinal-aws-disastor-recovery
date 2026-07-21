@@ -47,3 +47,9 @@ variable "ecs_task_role_arn" {
   description = "ARN of the ECS application task role that app.yml must be able to pass when registering a new task definition revision."
   type        = string
 }
+
+variable "deployed_image_digest_ssm_arn" {
+  description = "ARN of the SSM parameter where app.yml writes the deployed image digest."
+  type        = string
+  default     = ""
+}

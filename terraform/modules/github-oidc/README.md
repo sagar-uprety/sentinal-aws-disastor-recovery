@@ -35,6 +35,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_deployed_image_digest_ssm_arn"></a> [deployed\_image\_digest\_ssm\_arn](#input\_deployed\_image\_digest\_ssm\_arn) | ARN of the SSM parameter where app.yml writes the deployed image digest. | `string` | `""` | no |
 | <a name="input_ecr_repository_arn"></a> [ecr\_repository\_arn](#input\_ecr\_repository\_arn) | ARN of the ECR repository app.yml pushes images to. | `string` | n/a | yes |
 | <a name="input_ecs_cluster_arn"></a> [ecs\_cluster\_arn](#input\_ecs\_cluster\_arn) | ARN of the ECS cluster app.yml deploys to. | `string` | n/a | yes |
 | <a name="input_ecs_service_arn"></a> [ecs\_service\_arn](#input\_ecs\_service\_arn) | ARN of the ECS service app.yml updates. | `string` | n/a | yes |
