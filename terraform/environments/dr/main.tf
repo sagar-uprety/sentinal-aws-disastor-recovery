@@ -121,10 +121,9 @@ module "rds" {
 # ECR replication (configured in the prod environment) mirrors the
 # repository into this region under the same account and name.
 data "aws_ecr_repository" "app" {
-  provider = aws.prod
-  name     = local.project_name
+  name = "${local.project_name}-prod"
 }
 
 locals {
-  ecr_repository_url = replace(data.aws_ecr_repository.app.repository_url, "eu-central-1", "eu-west-1")
+  ecr_repository_url = data.aws_ecr_repository.app.repository_url
 }
