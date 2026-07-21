@@ -210,7 +210,7 @@ jobs:
     timeout-minutes: 150
     environment:
       name: terraform-production
-      url: https://status.sentinel.sagaruprety.com.np
+      url: https://sentinel.sagaruprety.com.np
     permissions:
       contents: read
       id-token: write

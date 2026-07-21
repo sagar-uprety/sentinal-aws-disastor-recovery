@@ -175,6 +175,27 @@ func TestStatusJSON(t *testing.T) {
 	}
 }
 
+func TestSeedTargetsReconcilesConfiguration(t *testing.T) {
+	testDB := openTestDB(t)
+	defer closeTestDB(t, testDB)
+	ctx := context.Background()
+
+	if err := db.SeedTargets(ctx, testDB, []string{"https://old.example.com", "https://keep.example.com"}); err != nil {
+		t.Fatalf("seed initial targets: %v", err)
+	}
+	if err := db.SeedTargets(ctx, testDB, []string{"https://keep.example.com", "https://new.example.com"}); err != nil {
+		t.Fatalf("reconcile targets: %v", err)
+	}
+
+	targets, err := db.ListTargets(ctx, testDB)
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(targets) != 2 || targets[0].URL != "https://keep.example.com" || targets[1].URL != "https://new.example.com" {
+		t.Fatalf("targets = %v, want keep and new targets", targets)
+	}
+}
+
 // verifies history returns only exact target URL matches.
 func TestHistoryJSON(t *testing.T) {
 	testDB := openTestDB(t)

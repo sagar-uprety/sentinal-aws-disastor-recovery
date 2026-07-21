@@ -14,7 +14,7 @@ PROD_CLUSTER="sentinel-aws-dr-prod"
 PROD_SERVICE="sentinel-aws-dr-prod"
 DR_CLUSTER="sentinel-aws-dr-dr"
 DR_SERVICE="sentinel-aws-dr-dr"
-STATUS_HOST="status.sentinel.sagaruprety.com.np"
+STATUS_HOST="sentinel.sagaruprety.com.np"
 RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
 FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-30}"
 

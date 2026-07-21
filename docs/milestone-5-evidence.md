@@ -35,12 +35,12 @@ Focused Go unit checks, `go vet`, Terraform validation, Checkov, actionlint, she
 
 - Pull-request and main-branch quality checks: Terraform format, root-module validation without remote state, TFLint, Checkov, and actionlint.
 - Same-repository pull-request prod speculative-plan comments. The comment states that DR depends on applied prod outputs and is planned during deployment. Fork pull requests receive no AWS credentials or plan job. Infracost remains local through pre-commit by project-owner decision.
-- Manual `plan`, `deploy`, and guarded `destroy` operations. Bootstrap owns the persistent Route53 zone and emits nameservers for one-time Cloudflare delegation. Deploy refuses to proceed until public delegation matches, then applies saved plans in prod-foundation, immutable-image, prod-service, and DR order. Destroy applies saved destroy plans in DR then prod order without deleting the shared zone.
-- `terraform-production` environment gating, exact OIDC environment-subject trust, main-branch-only mutations, lock timeouts, and serialized manual operations.
+- Manual `plan`, `foundation`, `deploy`, and guarded `destroy` operations plus automatic saved-plan deployment for matching pushes to `main`. Bootstrap owns the persistent Route53 zone and emits nameservers for one-time Cloudflare delegation. Foundation creates prod dependencies without an ECS service; deploy requires the immutable digest reported by application `publish-only` mode when the service does not yet exist, then applies prod before DR. Destroy applies saved destroy plans in DR then prod without deleting the shared zone.
+- `terraform-production` environment gating, exact OIDC environment-subject trust, main-branch-only mutations, lock timeouts, and the shared `terraform-operations` concurrency group.
 
 `.github/workflows/recovery.yml` separately provides guarded `failback-prepare` and `failback-reset` operations. Each requires explicit typed confirmation, produces saved binary plans, and applies those exact plans in dependent jobs. It shares the `terraform-operations` concurrency group with manual Terraform lifecycle operations so recovery and deployment cannot mutate state concurrently.
 
-`.github/workflows/app.yml` provides pull-request Go race/vet, frontend reproducibility, and ARM64 container-build checks. Main-branch push or dispatch can enter the protected `production` deployment job, push a uniquely tagged immutable image, deploy its digest to ECS, wait for service stability, and verify public `/healthz`.
+`.github/workflows/app.yml` provides pull-request Go race/vet, frontend reproducibility, and ARM64 container-build checks. `publish-only` mode seeds ECR during first deployment. Normal main-branch push or dispatch builds once, deploys the immutable digest to prod, verifies public `/healthz`, waits for ECR replication, then updates and verifies the zero-count DR service with the same digest.
 
 The first PR quality run exposed that `setup-tflint` installs the binary but does not initialize the configured AWS plugin. The workflow now runs `tflint --init` explicitly before recursive linting; the earlier failure is retained as pipeline-hardening evidence rather than presented as a passing run.
 
@@ -48,7 +48,7 @@ Before its first GitHub Actions run, repository settings must provide:
 
 - Environments `terraform-production` and `production`, both restricted to `main`. Required reviewers are unavailable on the repository's current GitHub billing plan, so manual workflow dispatch, typed confirmations, safety prechecks, saved plans, and separate plan/apply jobs are the available gates.
 - Bootstrap apply output `terraform_github_actions_role_arn`, set as repository variable `AWS_TERRAFORM_ROLE_ARN`. Bootstrap manages this reviewed, explicit-action Terraform role; the existing `AWS_ROLE_ARN` is app-deploy-only and must not be reused.
-- Bootstrap apply output `terraform_github_plan_role_arn`, set as repository variable `AWS_TERRAFORM_PLAN_ROLE_ARN`. This role trusts only the pull-request OIDC subject and has AWS `ViewOnlyAccess` plus read-only state access; speculative PR plans disable state locking because the role cannot write lock files, and the role cannot apply infrastructure.
+- Bootstrap apply output `terraform_github_plan_role_arn`, set as repository variable `AWS_TERRAFORM_PLAN_ROLE_ARN`. This role trusts only the pull-request OIDC subject and has AWS `ReadOnlyAccess` plus read-only state access; speculative PR plans disable state locking because the role cannot write lock files, and the role cannot apply infrastructure.
 - Prod foundation output `github_actions_role_arn`, set as repository variable `AWS_ROLE_ARN` before using application deployment.
 
 The Terraform role uses a staged-permission model for its first complete deployment: AWS `PowerUserAccess` covers non-IAM service APIs, while inline IAM permissions are limited to project-prefixed roles, exact workload `iam:PassRole` targets, the repository OIDC provider, and required service-linked roles. This is intentionally broader than the final target. M6 must use CloudTrail-backed IAM Access Analyzer policy generation, review and test the result, then replace `PowerUserAccess`; generated policy output is a starting point, not automatically trusted.
@@ -57,9 +57,9 @@ The Terraform role and persistent hosted zone were created by the approved boots
 
 ## Final Session Procedure
 
-1. Bootstrap was applied on 2026-07-21; deployment and read-only PR plan role outputs were set as `AWS_TERRAFORM_ROLE_ARN` and `AWS_TERRAFORM_PLAN_ROLE_ARN`. `terraform-production` is restricted to `main`; configure `production` before application deployment.
-2. Delegate bootstrap's Route53 nameservers in Cloudflare once, verify public NS resolution, then dispatch `terraform.yml` from `main` with `operation=deploy` to plan/apply prod foundation, publish and replicate the immutable image, plan/apply prod service, and plan/apply DR pilot light.
-3. Verify prod, DR, replication, ECR image digest, SSM metadata, and ARC initial state before beginning a drill.
+1. Bootstrap was applied on 2026-07-21; deployment and read-only PR plan role outputs were set as `AWS_TERRAFORM_ROLE_ARN` and `AWS_TERRAFORM_PLAN_ROLE_ARN`. Both protected environments and Cloudflare delegation are configured.
+2. From zero workload state, dispatch `terraform.yml` with `operation=foundation`, set its prod `github_actions_role_arn` output as `AWS_ROLE_ARN`, dispatch `app.yml` with `mode=publish-only`, then dispatch `terraform.yml` with `operation=deploy` and the reported digest. Normal application releases thereafter promote one digest to both regional ECS services.
+3. Verify the dashboard at `https://sentinel.sagaruprety.com.np`, `/healthz`, prod, DR, ECR replication, database-password SSM metadata, and ARC initial state before beginning a drill.
 4. Run first drill. Use `recovery.yml` to complete and measure topology reset before second drill.
 5. Run second drill. Capture terminal, CloudWatch/SNS, status-page, database, DNS, and Cost Explorer evidence.
 6. Dispatch `terraform.yml` from `main` with `operation=destroy` and `confirm_destroy=DESTROY` after evidence collection, unless current RDS topology requires a different dependency-safe destroy order.

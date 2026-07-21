@@ -7,7 +7,7 @@ module "route53_failover" {
 
   project_name    = local.project_name
   route53_zone_id = data.terraform_remote_state.prod.outputs.route53_zone_id
-  record_name     = "status.sentinel.sagaruprety.com.np"
+  record_name     = "sentinel.sagaruprety.com.np"
 
   primary_alb_dns_name = data.terraform_remote_state.prod.outputs.alb_dns_name
   primary_alb_zone_id  = data.terraform_remote_state.prod.outputs.alb_zone_id

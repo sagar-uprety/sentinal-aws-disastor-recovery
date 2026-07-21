@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/drill-lib.sh"
 ARC_CONTROL_REGION="${ARC_CONTROL_REGION:-us-west-2}"
 ARC_CLUSTER_NAME="${ARC_CLUSTER_NAME:-sentinel-aws-dr-arc}"
 ARC_CONTROL_PANEL_NAME="${ARC_CONTROL_PANEL_NAME:-sentinel-aws-dr-arc}"
-STATUS_HOST="status.sentinel.sagaruprety.com.np"
+STATUS_HOST="sentinel.sagaruprety.com.np"
 HOSTED_ZONE_NAME="sentinel.sagaruprety.com.np."
 TARGET="${1:-}"
 

@@ -10,7 +10,7 @@ CLUSTER="sentinel-aws-dr-prod"
 SERVICE="sentinel-aws-dr-prod"
 DATABASE="sentinel-aws-dr-prod"
 TARGET_GROUP="sentinel-aws-dr-prod-tg"
-STATUS_HOST="status.sentinel.sagaruprety.com.np"
+STATUS_HOST="sentinel.sagaruprety.com.np"
 
 if [ "${CONFIRM_HA:-}" != "YES" ]; then
   echo "Set CONFIRM_HA=YES to run a controlled HA drill." >&2

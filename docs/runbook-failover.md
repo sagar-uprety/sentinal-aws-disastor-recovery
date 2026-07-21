@@ -6,7 +6,7 @@ The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measure
 
 ## Preconditions
 
-- Primary serves `https://status.sentinel.sagaruprety.com.np` with two healthy ECS targets.
+- Primary serves the dashboard at `https://sentinel.sagaruprety.com.np` with two healthy ECS targets; `/healthz` is its machine-readable health endpoint.
 - DR RDS is an available read replica and DR ECS desired count is 0.
 - The immutable image digest exists in eu-west-1 ECR.
 - The eu-west-1 SSM SecureString metadata and version are current.
