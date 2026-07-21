@@ -5,11 +5,16 @@
 
 - Use Context7 MCP for latest docs when needed: syntax, latest version information, implementation details, and when stuck on a persistent error, an unexpected tool/CLI/API result, or before assuming something "just doesn't work." Verify the exact command/argument/endpoint against docs before concluding it's broken, rather than guessing or retrying blindly. If Context7 is unavailable or outdated, use web search for official docs.
 
+- YOU MUST LOAD ALL MCP available to you at the start of the session and use the relevent one when needed. PREFER MCP over context7 when the MCP covers the official info of the tool.
+
+- AWS MCP : READ ONLY ALLOWED , NO MODIFICATION IN AWS AT ALL. ONLY READ TOOLS and COMMANDS
+
+
 - always work on feature branch and use conventional commits, commit message should be short and to the point human readable.
 
 - You must always ask the user confirmation to check for code changes before committing
 
--  Create PR using gh actions after each milestone is completed.
+- Create PR using gh actions after each milestone is completed.
 
 - Use single line comment for code blocks, functions, terraform resources etc. which you think needs explanation. super obvious things do not need any comment
 
