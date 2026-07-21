@@ -12,6 +12,7 @@ The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measure
 - The eu-west-1 SSM SecureString metadata and version are current.
 - ARC controls are primary `On`, DR `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
+- Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, and ARC operations. This project does not provision a separate local recovery role.
 
 ## Drill Sequence
 
@@ -80,15 +81,25 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/failback.sh snapshot
    ```
 
-2. Declare prod RDS as a replica of promoted DR in Terraform. Review the replacement plan, apply it, then verify source and lag:
+2. Dispatch the protected workflow that validates the snapshot, discovers the promoted DR ARN, and rebuilds prod as a stopped DR replica. Approve the plan job, review its logged replacement plan, then approve the apply job:
+
+   ```bash
+   gh workflow run recovery.yml --ref main \
+     -f operation=failback-prepare \
+     -f confirm_failback=REBUILD_PROD \
+     -f failback_snapshot_id=<snapshot-id>
+   ```
+
+   Verify source and lag after the workflow succeeds:
 
    ```bash
    DRILL_LOG=./drill-events.log scripts/failback.sh verify-replica
    ```
 
-3. Promote prod, convert it to Multi-AZ, and start two prod tasks while ARC still routes to DR. Verify prod contains the exact known row written in DR:
+3. Promote prod, convert it to Multi-AZ, and start two prod tasks while ARC still routes to DR. Then verify prod contains the exact known row written in DR:
 
    ```bash
+   CONFIRM_PRIMARY_PROMOTION=YES DRILL_LOG=./drill-events.log scripts/failback.sh promote-primary
    CONFIRM_FAILBACK_READY=YES DRILL_LOG=./drill-events.log scripts/failback.sh ready
    ```
 
@@ -98,7 +109,15 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
    ```
 
-5. Rebuild DR as a replica of restored prod, return DR ECS to desired count 0, then verify reset:
+5. Dispatch the protected workflow that reconciles promoted prod as standalone, rebuilds DR as prod's replica, and returns DR ECS to desired count 0. Approve the plan job, review both logged plans, then approve the apply job:
+
+   ```bash
+   gh workflow run recovery.yml --ref main \
+     -f operation=failback-reset \
+     -f confirm_failback=RESET_DR
+   ```
+
+   Verify reset after the workflow succeeds:
 
    ```bash
    DRILL_LOG=./drill-events.log scripts/failback.sh verify-reset

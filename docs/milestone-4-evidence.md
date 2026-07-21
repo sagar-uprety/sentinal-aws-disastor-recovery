@@ -66,7 +66,7 @@ Applied: 78 resources, ~20 minutes wall time (the cross-region RDS replica domin
 
 Design notes:
 - `failover.sh` deliberately stops after DR readiness. The new `switch-traffic.sh` is a separate explicit gate that atomically changes both ARC controls and logs completion only after authoritative DNS plus `/topology` verify target-Region traffic.
-- `failback.sh` is deliberately not a blind topology mutation. Terraform direction changes remain reviewed manual edits, while the script verifies replica source and lag, the known DR-written row, primary readiness, restored DR replication, pilot-light desired count, and temporary snapshot cleanup.
+- `failback.sh` is deliberately not a blind topology mutation. Current Terraform direction changes run as saved plans through separately protected GitHub Actions plan/apply jobs, while the script handles promotion gates and verifies replica source and lag, the known DR-written row, primary readiness, restored DR replication, pilot-light desired count, and temporary snapshot cleanup.
 - `measure.sh` now isolates the newest drill segment, reports each recovery phase, measures RTO through verified public traffic, and computes row-based RPO from the same canonical target before and after promotion. Pre-promotion ReplicaLag remains separate supporting evidence.
 
 ## Cloudflare MCP

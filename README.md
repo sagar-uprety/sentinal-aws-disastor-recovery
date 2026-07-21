@@ -41,8 +41,10 @@ done
 
 Do not run live deployment or recovery commands until Milestone 6. Before that session, configure protected GitHub environments `terraform-production` and `production`, repository variables `AWS_TERRAFORM_ROLE_ARN` and `AWS_ROLE_ARN`, and secret `INFRACOST_API_KEY` as described in [docs/milestone-5-evidence.md](docs/milestone-5-evidence.md).
 
-The bootstrap Terraform role deliberately starts with AWS `PowerUserAccess` plus project-scoped IAM role management, exact `iam:PassRole` targets, and protected-environment OIDC trust. After the full M6 deploy/destroy exercise, CloudTrail-backed IAM Access Analyzer output must be reviewed and tested before replacing `PowerUserAccess` with the observed least-privilege service policy.
+Bootstrap persists the Terraform state backend, GitHub OIDC roles, and delegated Route53 zone so nameservers remain stable while workload environments are repeatedly created and destroyed. Its Terraform role deliberately starts with AWS `PowerUserAccess` plus exact workload IAM role management, exact `iam:PassRole` targets, and protected-environment OIDC trust. After the full M6 deploy/destroy exercise, CloudTrail-backed IAM Access Analyzer output must be reviewed and tested before replacing `PowerUserAccess` with the observed least-privilege service policy.
 
 Use [docs/runbook-failover.md](docs/runbook-failover.md) for recovery steps and [docs/aws-dr-architecture.drawio](docs/aws-dr-architecture.drawio) for the canonical architecture diagram. Deployment and teardown ordering is defined in `plan.md` and automated by `.github/workflows/terraform.yml`.
+
+Normal Terraform deployment and teardown run through `.github/workflows/terraform.yml`; both failback topology-reset stages run through the separately protected `.github/workflows/recovery.yml`. Time-sensitive promotion, traffic switching, and verification remain local scripts and assume the active AWS CLI credentials already have the required permissions; no separate local recovery role is provisioned.
 
 Use [docs/runbook-ha.md](docs/runbook-ha.md) for controlled in-region task, AZ-capacity, and RDS Multi-AZ drills. These are separate from regional pilot-light recovery.

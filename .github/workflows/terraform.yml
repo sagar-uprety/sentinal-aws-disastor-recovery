@@ -4,24 +4,25 @@ on:
   pull_request:
     paths:
       - "terraform/**"
+      - ".github/workflows/recovery.yml"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
   push:
     branches: [main]
     paths:
       - "terraform/**"
+      - ".github/workflows/recovery.yml"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
   workflow_dispatch:
     inputs:
       operation:
-        description: Infrastructure operation. Deploy and destroy always use dependency-safe environment order.
+        description: Infrastructure operation. Mutations always use dependency-safe environment order.
         required: true
         default: plan
         type: choice
         options:
           - plan
-          - prepare-dns
           - deploy
           - destroy
       target:
@@ -230,64 +231,6 @@ jobs:
             --behavior update \
             --github-token "$GITHUB_TOKEN"
 
-  prepare-dns:
-    name: Prepare DNS and certificate requests
-    needs: quality
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'prepare-dns' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: terraform-production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-dns-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Initialize primary state
-        working-directory: terraform/environments/prod
-        run: terraform init -input=false
-
-      - name: Plan DNS prerequisites
-        working-directory: terraform/environments/prod
-        run: >-
-          terraform plan -input=false -lock-timeout=5m -out=dns.tfplan
-          -target=aws_route53_zone.sentinel
-          -target=aws_acm_certificate.primary
-          -target=aws_acm_certificate.dr
-
-      - name: Show DNS prerequisite plan
-        working-directory: terraform/environments/prod
-        run: terraform show -no-color dns.tfplan
-
-      - name: Apply DNS prerequisite plan
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m dns.tfplan
-
-      - name: Publish nameservers for Cloudflare delegation
-        working-directory: terraform/environments/prod
-        run: |
-          {
-            echo '## Route 53 delegation required'
-            echo
-            echo 'Create these NS records for `sentinel.sagaruprety.com.np` in the Cloudflare parent zone before running `operation=deploy`:'
-            echo
-            terraform output -json route53_zone_name_servers | jq -r '.[] | "- `\(.)`"'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
   deploy:
     name: Deploy primary and DR environments
     needs: quality
@@ -330,14 +273,29 @@ jobs:
         run: terraform init -input=false
 
       - name: Verify public Route 53 delegation
-        working-directory: terraform/environments/prod
         run: |
-          for nameserver in $(terraform output -json route53_zone_name_servers | jq -r '.[]'); do
+          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name sentinel.sagaruprety.com.np. --query "HostedZones[?Name=='sentinel.sagaruprety.com.np.'].Id | [0]" --output text)"
+          for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text); do
             if ! dig +short NS sentinel.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
-              echo "Missing public delegation to $nameserver. Run operation=prepare-dns and update Cloudflare first." >&2
+              echo "Missing public delegation to $nameserver. Apply bootstrap and update Cloudflare before deployment." >&2
               exit 1
             fi
           done
+
+      - name: Refuse deployment during failback topology
+        run: |
+          prod_source="$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          dr_source="$(aws rds describe-db-instances \
+            --region eu-west-1 \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
+            echo "Database topology is in failback. Use recovery.yml instead of deploy." >&2
+            exit 1
+          fi
 
       - name: Plan primary foundation
         working-directory: terraform/environments/prod
@@ -458,6 +416,17 @@ jobs:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           role-session-name: terraform-destroy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Refuse normal destruction during reverse replication
+        run: |
+          prod_source="$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          if [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; then
+            echo "Prod is still a DR replica. Complete recovery.yml failback-reset before the normal DR-first destroy." >&2
+            exit 1
+          fi
 
       - name: Initialize DR state
         working-directory: terraform/environments/dr

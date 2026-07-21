@@ -60,28 +60,31 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
+# One stable address allows a promoted replica to become a Terraform-managed primary without replacement.
 resource "aws_db_instance" "main" {
   #checkov:skip=CKV_AWS_354:Performance Insights uses the AWS-managed alias/aws/rds key (no per-key monthly fee) rather than a customer-managed key
   #checkov:skip=CKV_AWS_293:this is a demo project torn down and rebuilt frequently; deletion protection would block terraform destroy every time
-  count = var.replicate_source_db_arn == null ? 1 : 0
+  count = 1
 
   identifier = "${var.project_name}-${var.environment}"
 
-  engine         = "postgres"
-  engine_version = var.engine_version
-  instance_class = var.instance_class
+  engine              = var.replicate_source_db_arn == null ? "postgres" : null
+  engine_version      = var.replicate_source_db_arn == null ? var.engine_version : null
+  instance_class      = var.instance_class
+  replicate_source_db = var.replicate_source_db_arn
+  kms_key_id          = var.kms_key_id
 
-  db_name  = var.db_name
-  username = var.username
+  db_name  = var.replicate_source_db_arn == null ? var.db_name : null
+  username = var.replicate_source_db_arn == null ? var.username : null
 
-  password_wo         = var.password_wo
-  password_wo_version = var.password_wo_version
+  password_wo         = var.replicate_source_db_arn == null ? var.password_wo : null
+  password_wo_version = var.replicate_source_db_arn == null ? var.password_wo_version : null
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.rds.id]
   parameter_group_name   = aws_db_parameter_group.main.name
 
-  allocated_storage   = 20
+  allocated_storage   = var.replicate_source_db_arn == null ? 20 : null
   storage_type        = "gp3"
   storage_encrypted   = true
   port                = 5432
@@ -90,8 +93,8 @@ resource "aws_db_instance" "main" {
   apply_immediately   = true
 
   backup_retention_period = 7
-  backup_window           = "03:00-04:00"
-  maintenance_window      = "sun:04:00-sun:05:00"
+  backup_window           = var.replicate_source_db_arn == null ? "03:00-04:00" : null
+  maintenance_window      = var.replicate_source_db_arn == null ? "sun:04:00-sun:05:00" : null
   copy_tags_to_snapshot   = true
 
   auto_minor_version_upgrade = true
@@ -100,7 +103,7 @@ resource "aws_db_instance" "main" {
   deletion_protection                 = false
   skip_final_snapshot                 = true
   delete_automated_backups            = true
-  iam_database_authentication_enabled = true
+  iam_database_authentication_enabled = var.replicate_source_db_arn == null ? true : null
 
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
@@ -111,48 +114,9 @@ resource "aws_db_instance" "main" {
   monitoring_role_arn = aws_iam_role.rds_monitoring.arn
 }
 
-# Cross-region read replica: engine, storage, and credentials are inherited
-# from the source instance and cannot be set here. A destination-region KMS
-# key is required because the default per-region key can't be assumed across
-# regions for encrypted storage.
-resource "aws_db_instance" "replica" {
-  #checkov:skip=CKV_AWS_354:Performance Insights uses the AWS-managed alias/aws/rds key (no per-key monthly fee) rather than a customer-managed key
-  #checkov:skip=CKV_AWS_293:this is a demo project torn down and rebuilt frequently; deletion protection would block terraform destroy every time
-  count = var.replicate_source_db_arn != null ? 1 : 0
-
-  identifier          = "${var.project_name}-${var.environment}"
-  instance_class      = var.instance_class
-  replicate_source_db = var.replicate_source_db_arn
-  kms_key_id          = var.kms_key_id
-
-  db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = [aws_security_group.rds.id]
-  parameter_group_name   = aws_db_parameter_group.main.name
-
-  storage_encrypted   = true
-  publicly_accessible = false
-  multi_az            = var.multi_az
-  apply_immediately   = true
-
-  # Read replicas default to 0 (backups disabled) unlike a standalone
-  # instance. Needed here at >0 so this replica can itself be the source of
-  # aws_db_instance_automated_backups_replication -- hit this the hard way
-  # via "Source DB instance must have backup retention enabled" on a real
-  # failback, where prod is temporarily a replica of the promoted DR primary.
-  backup_retention_period = 7
-
-  copy_tags_to_snapshot = true
-
-  auto_minor_version_upgrade = true
-  deletion_protection        = false
-  skip_final_snapshot        = true
-  delete_automated_backups   = true
-
-  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
-
-  performance_insights_enabled          = true
-  performance_insights_retention_period = 7
-
-  monitoring_interval = 60
-  monitoring_role_arn = aws_iam_role.rds_monitoring.arn
+check "replica_encryption_key" {
+  assert {
+    condition     = var.replicate_source_db_arn == null || var.kms_key_id != null
+    error_message = "kms_key_id is required for an encrypted cross-Region read replica."
+  }
 }

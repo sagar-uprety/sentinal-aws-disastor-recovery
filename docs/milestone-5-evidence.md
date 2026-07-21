@@ -35,8 +35,10 @@ Focused Go unit checks, `go vet`, Terraform validation, Checkov, actionlint, she
 
 - Pull-request and main-branch quality checks: Terraform format, root-module validation without remote state, TFLint, Checkov, and actionlint.
 - Same-repository pull-request prod speculative-plan and Infracost-diff comments. The comment states that DR depends on applied prod outputs and is planned during deployment. Fork pull requests receive neither AWS credentials nor plan/cost jobs.
-- Manual `plan`, `prepare-dns`, `deploy`, and guarded `destroy` operations. `prepare-dns` applies only the Route 53 zone and regional ACM requests, then prints nameservers for the required Cloudflare delegation. Deploy refuses to proceed until public delegation matches, then applies saved plans in prod-foundation, immutable-image, prod-service, and DR order. Destroy applies saved destroy plans in DR then prod order.
+- Manual `plan`, `deploy`, and guarded `destroy` operations. Bootstrap owns the persistent Route53 zone and emits nameservers for one-time Cloudflare delegation. Deploy refuses to proceed until public delegation matches, then applies saved plans in prod-foundation, immutable-image, prod-service, and DR order. Destroy applies saved destroy plans in DR then prod order without deleting the shared zone.
 - `terraform-production` environment gating, exact OIDC environment-subject trust, main-branch-only mutations, lock timeouts, and serialized manual operations.
+
+`.github/workflows/recovery.yml` separately provides guarded `failback-prepare` and `failback-reset` operations. Each requires explicit typed confirmation, produces saved binary plans in a protected plan job, and waits for a separately protected apply job. It shares the `terraform-operations` concurrency group with manual Terraform lifecycle operations so recovery and deployment cannot mutate state concurrently.
 
 `.github/workflows/app.yml` provides pull-request Go race/vet, frontend reproducibility, and ARM64 container-build checks. Main-branch push or dispatch can enter the protected `production` deployment job, push a uniquely tagged immutable image, deploy its digest to ECS, wait for service stability, and verify public `/healthz`.
 
@@ -56,9 +58,9 @@ These are M6 live-environment prerequisites. The role is declared in bootstrap c
 ## Final Session Procedure
 
 1. Apply bootstrap locally once, set `terraform_github_actions_role_arn` as `AWS_TERRAFORM_ROLE_ARN`, and configure protected environments before approving `terraform-production` jobs.
-2. Dispatch `terraform.yml` from `main` with `operation=prepare-dns`, delegate the emitted Route 53 nameservers in Cloudflare, verify public NS resolution, then dispatch `operation=deploy` to plan/apply prod foundation, publish and replicate the immutable image, plan/apply prod service, and plan/apply DR pilot light.
+2. Delegate bootstrap's Route53 nameservers in Cloudflare once, verify public NS resolution, then dispatch `terraform.yml` from `main` with `operation=deploy` to plan/apply prod foundation, publish and replicate the immutable image, plan/apply prod service, and plan/apply DR pilot light.
 3. Verify prod, DR, replication, ECR image digest, SSM metadata, and ARC initial state before beginning a drill.
-4. Run first drill. Complete and measure topology reset before second drill.
+4. Run first drill. Use `recovery.yml` to complete and measure topology reset before second drill.
 5. Run second drill. Capture terminal, CloudWatch/SNS, status-page, database, DNS, and Cost Explorer evidence.
 6. Dispatch `terraform.yml` from `main` with `operation=destroy` and `confirm_destroy=DESTROY` after evidence collection, unless current RDS topology requires a different dependency-safe destroy order.
 

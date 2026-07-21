@@ -55,10 +55,10 @@ output "rds_instance_class" {
 
 output "route53_zone_id" {
   description = "Hosted zone ID for sentinel.sagaruprety.com.np, read by DR Route53 records."
-  value       = aws_route53_zone.sentinel.zone_id
+  value       = data.aws_route53_zone.sentinel.zone_id
 }
 
 output "route53_zone_name_servers" {
   description = "NS records delegated from the Cloudflare-managed parent zone."
-  value       = aws_route53_zone.sentinel.name_servers
+  value       = data.aws_route53_zone.sentinel.name_servers
 }

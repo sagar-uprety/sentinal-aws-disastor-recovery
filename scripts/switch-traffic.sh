@@ -171,3 +171,9 @@ fi
 log_event "traffic_verified_${TARGET}"
 log_event "traffic_verified"
 echo "Traffic verified on $TARGET through authoritative Route 53 DNS and /topology."
+if [ "$TARGET" = "PRIMARY" ]; then
+  cat <<'EOF'
+Dispatch the protected topology-reset workflow, approve terraform-production, and review both plans:
+  gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm_failback=RESET_DR
+EOF
+fi

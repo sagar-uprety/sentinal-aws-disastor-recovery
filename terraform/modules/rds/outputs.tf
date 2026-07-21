@@ -1,21 +1,21 @@
 output "address" {
   description = "RDS hostname."
-  value       = one(concat(aws_db_instance.main[*].address, aws_db_instance.replica[*].address))
+  value       = aws_db_instance.main[0].address
 }
 
 output "arn" {
   description = "ARN of the RDS instance, for cross-region replication and IAM policies."
-  value       = one(concat(aws_db_instance.main[*].arn, aws_db_instance.replica[*].arn))
+  value       = aws_db_instance.main[0].arn
 }
 
 output "endpoint" {
   description = "RDS connection endpoint."
-  value       = one(concat(aws_db_instance.main[*].endpoint, aws_db_instance.replica[*].endpoint))
+  value       = aws_db_instance.main[0].endpoint
 }
 
 output "port" {
   description = "RDS port."
-  value       = one(concat(aws_db_instance.main[*].port, aws_db_instance.replica[*].port))
+  value       = aws_db_instance.main[0].port
 }
 
 output "security_group_id" {

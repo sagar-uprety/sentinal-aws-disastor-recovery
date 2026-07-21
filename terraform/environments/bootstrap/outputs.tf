@@ -17,3 +17,13 @@ output "terraform_github_actions_role_arn" {
   description = "ARN of the GitHub Actions role that provisions Sentinel infrastructure."
   value       = aws_iam_role.terraform_github_actions.arn
 }
+
+output "route53_zone_id" {
+  description = "Persistent hosted zone ID for sentinel.sagaruprety.com.np."
+  value       = aws_route53_zone.sentinel.zone_id
+}
+
+output "route53_zone_name_servers" {
+  description = "Nameservers delegated once from the Cloudflare-managed parent zone."
+  value       = aws_route53_zone.sentinel.name_servers
+}

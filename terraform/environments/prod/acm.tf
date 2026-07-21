@@ -2,6 +2,11 @@ locals {
   status_hostname = "status.sentinel.sagaruprety.com.np"
 }
 
+data "aws_route53_zone" "sentinel" {
+  name         = "sentinel.sagaruprety.com.np."
+  private_zone = false
+}
+
 # ACM certificates are regional, so each ALB receives a certificate issued in its own Region.
 resource "aws_acm_certificate" "primary" {
   domain_name       = local.status_hostname
@@ -37,7 +42,7 @@ resource "aws_route53_record" "certificate_validation" {
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = aws_route53_zone.sentinel.zone_id
+  zone_id         = data.aws_route53_zone.sentinel.zone_id
 }
 
 resource "aws_acm_certificate_validation" "primary" {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Verifies guarded failback phases; topology-changing Terraform edits stay manual.
+# Runs guarded failback operations while Terraform mutations stay in protected GitHub Actions jobs.
+# Assumes the active AWS CLI credentials have permission for the requested recovery operation.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,10 +48,11 @@ snapshot)
   cat <<EOF
 Snapshot $snapshot_id is available.
 
-Next manual Terraform phase:
-  1. Declare prod RDS as a cross-Region replica of the promoted DR database.
-  2. Review a plan that destroys only the stale prod DB and creates its replacement replica.
-  3. Apply, wait for the new prod replica, then run: scripts/failback.sh verify-replica
+Next protected Terraform phase:
+  1. Dispatch the protected failback-prepare workflow:
+     gh workflow run recovery.yml --ref main -f operation=failback-prepare -f confirm_failback=REBUILD_PROD -f failback_snapshot_id=$snapshot_id
+  2. Approve the plan job, review its logged replacement plan, then approve the apply job.
+  3. Wait for the workflow and run: scripts/failback.sh verify-replica
 
 Delete the snapshot after topology reset evidence is complete:
   CONFIRM_DELETE_SNAPSHOT=YES scripts/failback.sh delete-snapshot $snapshot_id
@@ -82,10 +84,58 @@ Prod is an available replica of DR with ReplicaLag ${lag}s.
 
 Next manual phase:
   1. Stop or freeze application writes briefly if this were a real incident.
-  2. Promote prod and wait until it is an available standalone DB.
-  3. Register/start prod ECS against the promoted endpoint, but keep ARC on DR.
-  4. Run: CONFIRM_FAILBACK_READY=YES scripts/failback.sh ready
+  2. Run: CONFIRM_PRIMARY_PROMOTION=YES scripts/failback.sh promote-primary
+  3. Run: CONFIRM_FAILBACK_READY=YES scripts/failback.sh ready
 EOF
+  ;;
+
+promote-primary)
+  [ "${CONFIRM_PRIMARY_PROMOTION:-}" = "YES" ] || {
+    echo "Set CONFIRM_PRIMARY_PROMOTION=YES to promote the synchronized prod replica." >&2
+    exit 1
+  }
+  require_current_event "failback_replica_verified"
+
+  read -r status source <<<"$(aws rds describe-db-instances \
+    --region "$PROD_REGION" \
+    --db-instance-identifier "$PROD_DB_ID" \
+    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+  if [ "$status" != "available" ] || [[ "$source" != *"$DR_DB_ID"* ]]; then
+    echo "ERROR: prod is not an available replica of $DR_DB_ID." >&2
+    exit 1
+  fi
+
+  aws rds promote-read-replica \
+    --region "$PROD_REGION" \
+    --db-instance-identifier "$PROD_DB_ID" >/dev/null
+  aws rds wait db-instance-available --region "$PROD_REGION" --db-instance-identifier "$PROD_DB_ID"
+  log_event "primary_promoted"
+
+  aws rds modify-db-instance \
+    --region "$PROD_REGION" \
+    --db-instance-identifier "$PROD_DB_ID" \
+    --multi-az \
+    --apply-immediately >/dev/null
+  aws rds wait db-instance-available --region "$PROD_REGION" --db-instance-identifier "$PROD_DB_ID"
+
+  aws ecs update-service \
+    --region "$PROD_REGION" \
+    --cluster "$PROD_CLUSTER" \
+    --service "$PROD_SERVICE" \
+    --desired-count 2 >/dev/null
+  aws ecs wait services-stable --region "$PROD_REGION" --cluster "$PROD_CLUSTER" --services "$PROD_SERVICE"
+
+  read -r desired running <<<"$(aws ecs describe-services \
+    --region "$PROD_REGION" \
+    --cluster "$PROD_CLUSTER" \
+    --services "$PROD_SERVICE" \
+    --query 'services[0].[desiredCount,runningCount]' --output text)"
+  if [ "$desired" != "2" ] || [ "$running" != "2" ]; then
+    echo "ERROR: prod ECS is not stable at 2/2 tasks." >&2
+    exit 1
+  fi
+  log_event "primary_service_stable"
+  echo "Prod is promoted, Multi-AZ, and stable at 2/2 tasks. Run: CONFIRM_FAILBACK_READY=YES scripts/failback.sh ready"
   ;;
 
 ready)
@@ -174,7 +224,7 @@ delete-snapshot)
   ;;
 
 *)
-  echo "Usage: $0 {snapshot|verify-replica|ready|verify-reset|delete-snapshot <id>}" >&2
+  echo "Usage: $0 {snapshot|verify-replica|promote-primary|ready|verify-reset|delete-snapshot <id>}" >&2
   exit 1
   ;;
 esac

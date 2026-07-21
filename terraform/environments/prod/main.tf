@@ -10,6 +10,10 @@ data "aws_rds_engine_version" "postgres" {
   latest  = true
 }
 
+data "aws_kms_key" "rds_primary" {
+  key_id = "alias/aws/rds"
+}
+
 ephemeral "random_password" "database" {
   length  = 32
   special = false
@@ -74,6 +78,7 @@ module "ecs" {
   db_password_ssm_arn    = aws_ssm_parameter.database_password_prod.arn
 
   deploy_service = var.deploy_service
+  desired_count  = var.desired_count
 }
 
 module "monitoring" {
@@ -117,6 +122,9 @@ module "rds" {
   engine_version = data.aws_rds_engine_version.postgres.version
   instance_class = "db.t4g.micro"
   multi_az       = var.multi_az
+
+  replicate_source_db_arn = var.replicate_source_db_arn
+  kms_key_id              = var.replicate_source_db_arn == null ? null : data.aws_kms_key.rds_primary.arn
 
   password_wo         = ephemeral.random_password.database.result
   password_wo_version = var.credential_version
