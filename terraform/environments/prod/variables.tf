@@ -11,7 +11,7 @@ variable "desired_count" {
 }
 
 variable "image_digest" {
-  description = "Immutable placeholder image digest used when Terraform creates the ECS service."
+  description = "Immutable image digest used when Terraform creates or reconciles the ECS task definition."
   type        = string
   default     = "sha256:ebb7d99a639d5bf9a20052757f890d76a5aad4118ebe1fd016275aadf23fbc9a"
 }

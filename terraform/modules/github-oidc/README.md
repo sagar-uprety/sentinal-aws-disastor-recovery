@@ -4,7 +4,7 @@ IAM OpenID Connect provider and role that let GitHub Actions (`app.yml`) authent
 
 ## Design Intent
 
-GitHub Actions requests a short-lived OIDC token and exchanges it for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`. The trust policy requires the exact `production` GitHub environment subject for this repository, so repository identity and environment protection rules both gate assumption. The attached policy is scoped to exactly what `app.yml` needs: push an image to one ECR repository, pass the reviewed task and execution roles, register a task definition revision, and update one ECS service, with no broader ECS, ECR, or IAM access.
+GitHub Actions requests a short-lived OIDC token and exchanges it for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`. The trust policy requires the exact `production` GitHub environment subject for this repository, so repository identity and environment protection rules both gate assumption. The attached policy is scoped to exactly what `app.yml` needs: push an image to one ECR repository, pass the reviewed regional task and execution roles, register task definition revisions, and update the prod and DR ECS services, with no broader ECS, ECR, or IAM access.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -35,7 +35,11 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| <a name="input_deployed_image_digest_ssm_arn"></a> [deployed\_image\_digest\_ssm\_arn](#input\_deployed\_image\_digest\_ssm\_arn) | ARN of the SSM parameter where app.yml writes the deployed image digest. | `string` | `""` | no |
+| <a name="input_dr_ecr_repository_arn"></a> [dr\_ecr\_repository\_arn](#input\_dr\_ecr\_repository\_arn) | ARN of the replicated DR ECR repository checked by application deployments. | `string` | n/a | yes |
+| <a name="input_dr_ecs_cluster_arn"></a> [dr\_ecs\_cluster\_arn](#input\_dr\_ecs\_cluster\_arn) | ARN of the DR ECS cluster updated by application deployments. | `string` | n/a | yes |
+| <a name="input_dr_ecs_service_arn"></a> [dr\_ecs\_service\_arn](#input\_dr\_ecs\_service\_arn) | ARN of the DR ECS service updated by application deployments. | `string` | n/a | yes |
+| <a name="input_dr_ecs_task_execution_role_arn"></a> [dr\_ecs\_task\_execution\_role\_arn](#input\_dr\_ecs\_task\_execution\_role\_arn) | ARN of the DR ECS task execution role passed during task definition registration. | `string` | n/a | yes |
+| <a name="input_dr_ecs_task_role_arn"></a> [dr\_ecs\_task\_role\_arn](#input\_dr\_ecs\_task\_role\_arn) | ARN of the DR ECS task role passed during task definition registration. | `string` | n/a | yes |
 | <a name="input_ecr_repository_arn"></a> [ecr\_repository\_arn](#input\_ecr\_repository\_arn) | ARN of the ECR repository app.yml pushes images to. | `string` | n/a | yes |
 | <a name="input_ecs_cluster_arn"></a> [ecs\_cluster\_arn](#input\_ecs\_cluster\_arn) | ARN of the ECS cluster app.yml deploys to. | `string` | n/a | yes |
 | <a name="input_ecs_service_arn"></a> [ecs\_service\_arn](#input\_ecs\_service\_arn) | ARN of the ECS service app.yml updates. | `string` | n/a | yes |

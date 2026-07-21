@@ -212,7 +212,7 @@ resource "aws_ecs_service" "app" {
     container_port   = var.container_port
   }
 
-  # CI/CD pipeline owns the task definition after initial creation.
+  # Application CI/CD owns regional task definition promotion after initial creation.
   lifecycle {
     ignore_changes = [task_definition]
   }

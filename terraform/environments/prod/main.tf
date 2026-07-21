@@ -109,7 +109,11 @@ module "github_oidc" {
   ecs_task_execution_role_arn = module.ecs.task_execution_role_arn
   ecs_task_role_arn           = module.ecs.task_role_arn
 
-  deployed_image_digest_ssm_arn = aws_ssm_parameter.deployed_image_digest.arn
+  dr_ecs_cluster_arn             = "arn:aws:ecs:eu-west-1:${data.aws_caller_identity.current.account_id}:cluster/${local.project_name}-dr"
+  dr_ecr_repository_arn          = "arn:aws:ecr:eu-west-1:${data.aws_caller_identity.current.account_id}:repository/${local.project_name}-prod"
+  dr_ecs_service_arn             = "arn:aws:ecs:eu-west-1:${data.aws_caller_identity.current.account_id}:service/${local.project_name}-dr/${local.project_name}-dr"
+  dr_ecs_task_execution_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.project_name}-dr-ecs-task-exec"
+  dr_ecs_task_role_arn           = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.project_name}-dr-ecs-task"
 }
 
 module "rds" {
@@ -144,27 +148,6 @@ resource "aws_ssm_parameter" "database_password_prod" {
 
   value_wo         = ephemeral.random_password.database.result
   value_wo_version = var.credential_version
-}
-
-# Source of truth for the currently deployed image digest. The CI/CD pipeline
-# (app.yml) writes the digest after every deploy; DR reads it to deploy the
-# same image. Terraform only creates the parameter — it does not update the
-# value after initial creation.
-resource "aws_ssm_parameter" "deployed_image_digest" {
-  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key
-  #checkov:skip=CKV2_AWS_34:non-secret image digest does not require encryption
-  name        = "/${local.project_name}/prod/deployed-image-digest"
-  description = "ECR image digest currently deployed to prod, updated by the CI/CD pipeline"
-  type        = "String"
-  tier        = "Standard"
-
-  # Initial placeholder; overwritten by app.yml via aws ssm put-parameter.
-  value = var.image_digest
-
-  # CI/CD owns this value after initial creation — Terraform must not revert it.
-  lifecycle {
-    ignore_changes = [value]
-  }
 }
 
 # AWS-managed key, not a customer-managed key: no per-key monthly fee, matches
