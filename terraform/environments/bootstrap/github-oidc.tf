@@ -65,6 +65,20 @@ resource "aws_iam_role_policy" "terraform_plan_state" {
       Effect   = "Allow"
       Action   = ["s3:GetObject"]
       Resource = ["${aws_s3_bucket.state.arn}/*"]
+      }, {
+      Effect = "Allow"
+      Action = [
+        "iam:GetOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviders",
+      ]
+      Resource = "*"
+      }, {
+      Effect = "Allow"
+      Action = ["kms:DescribeKey"]
+      Resource = [
+        "arn:aws:kms:eu-central-1:${data.aws_caller_identity.current.account_id}:key/*",
+        "arn:aws:kms:eu-west-1:${data.aws_caller_identity.current.account_id}:key/*",
+      ]
     }]
   })
 }
