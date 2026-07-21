@@ -11,12 +11,19 @@ data "terraform_remote_state" "prod" {
   }
 }
 
-# Reads the deployed image digest directly from prod's SSM parameter.
-# SSM is readable cross-region — avoids depending on TF state for the
-# volatile, frequently-updated image reference.
-data "aws_ssm_parameter" "deployed_image_digest" {
+data "aws_caller_identity" "current" {}
+
+# ECS service pointer is the source of truth for the image promoted to prod.
+data "aws_ecs_service" "prod" {
   provider = aws.prod
-  name     = "/${local.project_name}/prod/deployed-image-digest"
+
+  cluster_arn  = "arn:aws:ecs:eu-central-1:${data.aws_caller_identity.current.account_id}:cluster/${local.project_name}-prod"
+  service_name = "${local.project_name}-prod"
+}
+
+data "aws_ecs_task_definition" "prod" {
+  provider        = aws.prod
+  task_definition = data.aws_ecs_service.prod.task_definition
 }
 
 data "aws_rds_engine_version" "postgres" {
@@ -75,7 +82,7 @@ module "ecs" {
 
   # Same repository name and digest as prod; ECR replication (configured in
   # the prod environment) mirrors the image into this region.
-  image_uri              = "${local.ecr_repository_url}@${data.aws_ssm_parameter.deployed_image_digest.value}"
+  image_uri              = "${local.ecr_repository_url}@${local.prod_image_digest}"
   db_endpoint            = module.rds.endpoint
   db_name                = "sentinel"
   db_user                = "sentinel"
@@ -126,4 +133,6 @@ data "aws_ecr_repository" "app" {
 
 locals {
   ecr_repository_url = data.aws_ecr_repository.app.repository_url
+  prod_container     = one([for container in jsondecode(nonsensitive(data.aws_ecs_task_definition.prod.container_definitions)) : container if container.name == "sentinel"])
+  prod_image_digest  = split("@", local.prod_container.image)[1]
 }

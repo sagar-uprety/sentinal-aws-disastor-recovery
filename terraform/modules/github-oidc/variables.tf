@@ -48,8 +48,27 @@ variable "ecs_task_role_arn" {
   type        = string
 }
 
-variable "deployed_image_digest_ssm_arn" {
-  description = "ARN of the SSM parameter where app.yml writes the deployed image digest."
+variable "dr_ecr_repository_arn" {
+  description = "ARN of the replicated DR ECR repository checked by application deployments."
   type        = string
-  default     = ""
+}
+
+variable "dr_ecs_cluster_arn" {
+  description = "ARN of the DR ECS cluster updated by application deployments."
+  type        = string
+}
+
+variable "dr_ecs_service_arn" {
+  description = "ARN of the DR ECS service updated by application deployments."
+  type        = string
+}
+
+variable "dr_ecs_task_execution_role_arn" {
+  description = "ARN of the DR ECS task execution role passed during task definition registration."
+  type        = string
+}
+
+variable "dr_ecs_task_role_arn" {
+  description = "ARN of the DR ECS task role passed during task definition registration."
+  type        = string
 }

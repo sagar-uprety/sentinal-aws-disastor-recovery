@@ -33,11 +33,6 @@ output "dr_certificate_arn" {
   value       = aws_acm_certificate_validation.dr.certificate_arn
 }
 
-output "deployed_image_digest_ssm_arn" {
-  description = "ARN of the SSM parameter holding the deployed image digest, written by the CI/CD pipeline."
-  value       = aws_ssm_parameter.deployed_image_digest.arn
-}
-
 output "rds_engine_version" {
   description = "Resolved PostgreSQL engine version running in prod, read by the DR environment to validate the replica matches before creation."
   value       = data.aws_rds_engine_version.postgres.version

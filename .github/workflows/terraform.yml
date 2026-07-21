@@ -23,6 +23,7 @@ on:
         type: choice
         options:
           - plan
+          - foundation
           - deploy
           - destroy
       target:
@@ -35,6 +36,10 @@ on:
           - dr
       confirm_destroy:
         description: Type DESTROY to authorize a destroy operation.
+        required: false
+        type: string
+      image_digest:
+        description: Initial immutable image digest from app.yml publish-only mode. Required when creating the ECS service.
         required: false
         type: string
 
@@ -199,7 +204,8 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy')
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.operation == 'foundation' || inputs.operation == 'deploy'))
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment:
@@ -256,9 +262,47 @@ jobs:
 
       - name: Plan primary foundation
         working-directory: terraform/environments/prod
-        run: >-
-          terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan
-          -var='deploy_service=true' -var='multi_az=true'
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          plan_args=("-var=multi_az=true")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "foundation" ]; then
+            service_arn="$(aws ecs describe-services \
+              --cluster sentinel-aws-dr-prod \
+              --services sentinel-aws-dr-prod \
+              --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
+            if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
+              echo "Foundation mode is only valid before the prod ECS service exists." >&2
+              exit 1
+            fi
+            plan_args+=("-var=deploy_service=false")
+          else
+            plan_args+=("-var=deploy_service=true")
+            if [ -z "$IMAGE_DIGEST" ]; then
+              service_arn="$(aws ecs describe-services \
+                --cluster sentinel-aws-dr-prod \
+                --services sentinel-aws-dr-prod \
+                --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
+              if [ -z "$service_arn" ] || [ "$service_arn" = "None" ]; then
+                echo "A fresh service deployment requires image_digest from app.yml publish-only mode." >&2
+                exit 1
+              fi
+              task_definition="$(aws ecs describe-services \
+                --cluster sentinel-aws-dr-prod \
+                --services sentinel-aws-dr-prod \
+                --query 'services[0].taskDefinition' --output text)"
+              image="$(aws ecs describe-task-definition \
+                --task-definition "$task_definition" \
+                --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+              IMAGE_DIGEST="${image##*@}"
+            fi
+            if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "image_digest must be a sha256 digest." >&2
+              exit 1
+            fi
+            plan_args+=("-var=image_digest=$IMAGE_DIGEST")
+          fi
+          terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan "${plan_args[@]}"
 
       - name: Show primary foundation plan
         working-directory: terraform/environments/prod
@@ -269,22 +313,27 @@ jobs:
         run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
 
       - name: Initialize DR state
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform init -input=false
 
       - name: Plan DR pilot light
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform plan -input=false -lock-timeout=5m -out=dr.tfplan
 
       - name: Show DR pilot-light plan
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform show -no-color dr.tfplan
 
       - name: Apply DR pilot-light plan
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform apply -input=false -lock-timeout=5m dr.tfplan
 
       - name: Verify DR pilot-light state
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         run: |
           desired="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
           source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
