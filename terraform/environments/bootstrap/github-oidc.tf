@@ -46,9 +46,14 @@ resource "aws_iam_role" "terraform_github_plan" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "terraform_plan_view_only" {
+resource "aws_iam_role_policy_attachment" "terraform_plan_read_only" {
   role       = aws_iam_role.terraform_github_plan.name
-  policy_arn = "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.terraform_plan_view_only
+  to   = aws_iam_role_policy_attachment.terraform_plan_read_only
 }
 
 resource "aws_iam_role_policy" "terraform_plan_state" {

@@ -42,7 +42,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ github.event_name == 'workflow_dispatch' && 'operations' || github.ref }}
+  group: terraform-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && 'operations' || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -146,7 +146,7 @@ jobs:
         run: |
           plan_args=()
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            plan_args+=("-lock=false" "-refresh=false")
+            plan_args+=("-lock=false")
           fi
           if [ "${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}" = "prod" ]; then
             plan_args+=("-var=deploy_service=true" "-var=multi_az=true")
@@ -196,7 +196,10 @@ jobs:
   deploy:
     name: Provision primary and DR infrastructure
     needs: quality
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment:
