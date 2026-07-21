@@ -364,6 +364,8 @@ Tasks:
 - [ ] Between drills, execute and measure the topology reset. Do not begin drill two until replication, known-row verification, desired counts, ARC state, and readiness checks are restored.
 - [ ] Query DR checks for each outage window and retain screenshots or exports. Record terminal, CloudWatch/SNS evidence, and status page side by side; produce short GIF and full MP4.
 - [ ] Complete `docs/postmortem.md`, final architecture PNG export, and final README with measured drill results, actual Cost Explorer amount/session duration, verified rebuild instructions, and accurate failback status.
+- [ ] Reduce DR coupling to prod remote state: retain only unavoidable cross-region contracts; move DR-owned ACM lifecycle fully into DR state; resolve the Route53 zone and regional SSM parameter through explicit interfaces or AWS data sources; query primary RDS identity/version directly; configure DR instance class explicitly; and remove obsolete prod outputs. Delete the detached legacy `status.sentinel.sagaruprety.com.np` DR certificate after verifying the apex certificate is attached.
+- [ ] Add a DR speculative plan to pull requests using currently applied prod dependencies, label it non-authoritative when prod outputs change, and retain the post-prod-apply DR plan as the authoritative approval gate before DR apply.
 - [ ] Destroy DR before prod after evidence capture, unless live topology dictates a different dependency-safe order. Record teardown result and reconcile Terraform state/configuration.
 
 Acceptance criteria:
