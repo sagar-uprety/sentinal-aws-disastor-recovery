@@ -5,8 +5,8 @@ on:
     paths:
       - ".github/workflows/m6-scheduled-deploy.yml"
   schedule:
-    # 11:00 Europe/Berlin (CEST) on 2026-07-23.
-    - cron: "0 9 23 7 *"
+    # 10:00 Europe/Berlin (CEST) on 2026-07-23.
+    - cron: "0 8 23 7 *"
 
 permissions:
   contents: read
