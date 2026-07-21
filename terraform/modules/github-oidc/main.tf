@@ -47,6 +47,12 @@ resource "aws_iam_role_policy" "app_deploy" {
         Resource = [var.ecr_repository_arn]
       },
       {
+        Sid      = "EcrReadReplica"
+        Effect   = "Allow"
+        Action   = ["ecr:DescribeImages"]
+        Resource = [var.dr_ecr_repository_arn]
+      },
+      {
         # RegisterTaskDefinition and DescribeTaskDefinition do not support resource-level
         # scoping to a specific family/revision at register time, per Hard Rule 7.
         Sid      = "EcsTaskDefinitions"
@@ -64,24 +70,25 @@ resource "aws_iam_role_policy" "app_deploy" {
         Resource = [
           var.ecs_cluster_arn,
           var.ecs_service_arn,
+          var.dr_ecs_cluster_arn,
+          var.dr_ecs_service_arn,
         ]
       },
       {
-        Sid      = "PassTaskRoles"
-        Effect   = "Allow"
-        Action   = ["iam:PassRole"]
-        Resource = [var.ecs_task_execution_role_arn, var.ecs_task_role_arn]
+        Sid    = "PassTaskRoles"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          var.ecs_task_execution_role_arn,
+          var.ecs_task_role_arn,
+          var.dr_ecs_task_execution_role_arn,
+          var.dr_ecs_task_role_arn,
+        ]
         Condition = {
           StringEquals = {
             "iam:PassedToService" = "ecs-tasks.amazonaws.com"
           }
         }
-      },
-      {
-        Sid      = "WriteDeployedImageDigest"
-        Effect   = "Allow"
-        Action   = ["ssm:PutParameter"]
-        Resource = [var.deployed_image_digest_ssm_arn]
       },
     ]
   })

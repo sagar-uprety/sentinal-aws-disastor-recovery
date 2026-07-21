@@ -47,4 +47,11 @@ Use [docs/runbook-failover.md](docs/runbook-failover.md) for recovery steps and 
 
 Normal Terraform deployment and teardown run through `.github/workflows/terraform.yml`; both failback topology-reset stages run through the separately protected `.github/workflows/recovery.yml`. Time-sensitive promotion, traffic switching, and verification remain local scripts and assume the active AWS CLI credentials already have the required permissions; no separate local recovery role is provisioned.
 
+For a deployment from empty workload accounts after bootstrap:
+
+1. Dispatch `terraform.yml` with `operation=foundation`. This creates prod infrastructure, ECR, and the application OIDC role without an ECS task definition or service.
+2. Set `AWS_ROLE_ARN` from the prod `github_actions_role_arn` output, then dispatch `app.yml` with `mode=publish-only`.
+3. Copy the reported `sha256:...` digest and dispatch `terraform.yml` with `operation=deploy` and that `image_digest`. Terraform creates the prod service and DR pilot light from the replicated image.
+4. Use normal `app.yml` deployments afterward; each release promotes one immutable digest to prod and DR.
+
 Use [docs/runbook-ha.md](docs/runbook-ha.md) for controlled in-region task, AZ-capacity, and RDS Multi-AZ drills. These are separate from regional pilot-light recovery.

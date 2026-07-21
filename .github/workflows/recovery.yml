@@ -130,10 +130,21 @@ jobs:
         run: terraform init -input=false
 
       - name: Read deployed image digest
-        run: >-
-          echo "IMAGE_DIGEST=$(aws ssm get-parameter
-          --name /sentinel-aws-dr/prod/deployed-image-digest
-          --query Parameter.Value --output text)" >> "$GITHUB_ENV"
+        run: |
+          task_definition="$(aws ecs describe-services \
+            --region eu-west-1 \
+            --cluster sentinel-aws-dr-dr \
+            --services sentinel-aws-dr-dr \
+            --query 'services[0].taskDefinition' --output text)"
+          # JMESPath backticks are literals, not shell substitutions.
+          # shellcheck disable=SC2016
+          image="$(aws ecs describe-task-definition \
+            --region eu-west-1 \
+            --task-definition "$task_definition" \
+            --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+          image_digest="${image##*@}"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
 
       - name: Plan reverse replication to primary
         working-directory: terraform/environments/prod
@@ -273,10 +284,21 @@ jobs:
         run: terraform init -input=false
 
       - name: Read deployed image digest
-        run: >-
-          echo "IMAGE_DIGEST=$(aws ssm get-parameter
-          --name /sentinel-aws-dr/prod/deployed-image-digest
-          --query Parameter.Value --output text)" >> "$GITHUB_ENV"
+        run: |
+          task_definition="$(aws ecs describe-services \
+            --region eu-central-1 \
+            --cluster sentinel-aws-dr-prod \
+            --services sentinel-aws-dr-prod \
+            --query 'services[0].taskDefinition' --output text)"
+          # JMESPath backticks are literals, not shell substitutions.
+          # shellcheck disable=SC2016
+          image="$(aws ecs describe-task-definition \
+            --region eu-central-1 \
+            --task-definition "$task_definition" \
+            --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+          image_digest="${image##*@}"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
 
       - name: Plan primary reconciliation
         working-directory: terraform/environments/prod
