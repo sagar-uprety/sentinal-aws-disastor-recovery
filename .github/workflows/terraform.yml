@@ -58,6 +58,7 @@ env:
 jobs:
   quality:
     name: Validate Terraform configuration
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -202,6 +203,8 @@ jobs:
     name: Provision primary and DR infrastructure
     needs: quality
     if: >-
+      always() &&
+      (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' &&
