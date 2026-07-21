@@ -23,51 +23,6 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-sentinel}?sslmode=disable
       CHECK_INTERVAL_SECONDS: "30"
       PORT: "8080"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
     depends_on:
       db:
         condition: service_healthy
-      collector:
-        condition: service_started
-
-  collector:
-    image: otel/opentelemetry-collector-contrib:0.156.0
-    command: ["--config=/etc/otel-collector-config.yaml"]
-    volumes:
-      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml
-    ports:
-      - "4318:4318"
-    depends_on:
-      prometheus:
-        condition: service_started
-
-  prometheus:
-    image: prom/prometheus:v3.13.1
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=7d
-    volumes:
-      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
-
-  grafana:
-    image: grafana/grafana-oss:13.1.0
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-    volumes:
-      - ./observability/grafana/datasources:/etc/grafana/provisioning/datasources
-      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - grafana_data:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    depends_on:
-      prometheus:
-        condition: service_started
-
-volumes:
-  prometheus_data:
-  grafana_data:

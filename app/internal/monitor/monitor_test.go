@@ -31,7 +31,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if _, err := testDB.ExecContext(ctx, "TRUNCATE targets, checks RESTART IDENTITY CASCADE"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
-	if err := db.SeedTargets(ctx, testDB, ""); err != nil {
+	if err := db.SeedTargets(ctx, testDB, []string{"https://example.com"}); err != nil {
 		t.Fatalf("seed targets: %v", err)
 	}
 	return testDB
@@ -151,6 +151,9 @@ func TestStatusJSON(t *testing.T) {
 	testDB := openTestDB(t)
 	defer closeTestDB(t, testDB)
 
+	if err := db.SeedTargetsFromList(context.Background(), testDB, []string{"https://example.com"}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
 	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(200), 100, true)
 
 	mux := http.NewServeMux()

@@ -8,6 +8,18 @@ variable "project_name" {
   }
 }
 
+variable "github_org" {
+  description = "GitHub organization or user allowed to assume bootstrap OIDC roles."
+  type        = string
+  default     = "sagar-uprety"
+}
+
+variable "github_repo" {
+  description = "GitHub repository allowed to assume bootstrap OIDC roles."
+  type        = string
+  default     = "sentinal-aws-disastor-recovery"
+}
+
 variable "state_bucket_name" {
   description = "Globally unique name of the S3 bucket that stores Terraform state."
   type        = string

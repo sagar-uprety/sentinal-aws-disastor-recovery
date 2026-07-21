@@ -1,0 +1,394 @@
+name: Disaster Recovery Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Guarded failback topology operation.
+        required: true
+        type: choice
+        options:
+          - failback-prepare
+          - failback-reset
+      confirm_failback:
+        description: Type REBUILD_PROD for failback-prepare or RESET_DR for failback-reset.
+        required: true
+        type: string
+      failback_snapshot_id:
+        description: Available prod safety snapshot required by failback-prepare.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-operations
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  preflight:
+    name: Validate recovery request
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate typed confirmation
+        env:
+          CONFIRM_FAILBACK: ${{ inputs.confirm_failback }}
+          OPERATION: ${{ inputs.operation }}
+          SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
+        run: |
+          if [ "$OPERATION" = "failback-prepare" ]; then
+            test "$CONFIRM_FAILBACK" = "REBUILD_PROD" || {
+              echo "failback-prepare requires confirm_failback=REBUILD_PROD." >&2
+              exit 1
+            }
+            test -n "$SNAPSHOT_ID" || {
+              echo "failback-prepare requires failback_snapshot_id." >&2
+              exit 1
+            }
+          elif [ "$CONFIRM_FAILBACK" != "RESET_DR" ]; then
+            echo "failback-reset requires confirm_failback=RESET_DR." >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Validate recovery root modules
+        run: |
+          for root in terraform/environments/prod terraform/environments/dr; do
+            data_dir="$RUNNER_TEMP/recovery-${root##*/}"
+            TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
+            TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
+          done
+
+  failback-prepare-plan:
+    name: Plan primary reverse replica
+    needs: preflight
+    if: inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PROD' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: terraform-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-failback-prepare-plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify safety snapshot and promoted DR writer
+        env:
+          SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
+        run: |
+          snapshot_status="$(aws rds describe-db-snapshots \
+            --region eu-central-1 \
+            --db-snapshot-identifier "$SNAPSHOT_ID" \
+            --query 'DBSnapshots[0].Status' --output text)"
+          test "$snapshot_status" = "available" || {
+            echo "Safety snapshot $SNAPSHOT_ID is not available." >&2
+            exit 1
+          }
+
+          read -r dr_status dr_source dr_arn <<<"$(aws rds describe-db-instances \
+            --region eu-west-1 \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,DBInstanceArn]' \
+            --output text)"
+          if [ "$dr_status" != "available" ] || { [ -n "$dr_source" ] && [ "$dr_source" != "None" ]; }; then
+            echo "DR must be an available standalone writer before reverse replication." >&2
+            exit 1
+          fi
+          echo "DR_SOURCE_ARN=$dr_arn" >> "$GITHUB_ENV"
+
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Read deployed image digest
+        working-directory: terraform/environments/prod
+        run: echo "IMAGE_DIGEST=$(terraform output -raw image_digest)" >> "$GITHUB_ENV"
+
+      - name: Plan reverse replication to primary
+        working-directory: terraform/environments/prod
+        run: |
+          terraform plan -input=false -lock-timeout=5m -out=failback-prepare.tfplan \
+            -var='deploy_service=true' \
+            -var='desired_count=0' \
+            -var='multi_az=false' \
+            -var="image_digest=$IMAGE_DIGEST" \
+            -var="replicate_source_db_arn=$DR_SOURCE_ARN"
+
+      - name: Show reverse-replication plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color failback-prepare.tfplan
+
+      - name: Save reverse-replication plan for approval
+        uses: actions/upload-artifact@v6
+        with:
+          name: failback-prepare-plan-${{ github.run_id }}
+          path: terraform/environments/prod/failback-prepare.tfplan
+          retention-days: 1
+
+  failback-prepare-apply:
+    name: Apply primary reverse replica
+    needs: failback-prepare-plan
+    if: inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PROD' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: terraform-production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-failback-prepare-apply-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Recheck safety snapshot
+        env:
+          SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
+        run: |
+          snapshot_status="$(aws rds describe-db-snapshots \
+            --region eu-central-1 \
+            --db-snapshot-identifier "$SNAPSHOT_ID" \
+            --query 'DBSnapshots[0].Status' --output text)"
+          test "$snapshot_status" = "available"
+
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Download approved reverse-replication plan
+        uses: actions/download-artifact@v7
+        with:
+          name: failback-prepare-plan-${{ github.run_id }}
+          path: terraform/environments/prod
+
+      - name: Show approved reverse-replication plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color failback-prepare.tfplan
+
+      - name: Apply approved reverse-replication plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m failback-prepare.tfplan
+
+      - name: Verify primary reverse replica
+        run: |
+          aws rds wait db-instance-available --region eu-central-1 --db-instance-identifier sentinel-aws-dr-prod
+          source="$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          desired="$(aws ecs describe-services \
+            --region eu-central-1 \
+            --cluster sentinel-aws-dr-prod \
+            --services sentinel-aws-dr-prod \
+            --query 'services[0].desiredCount' --output text)"
+          [[ "$source" == *"sentinel-aws-dr-dr"* ]]
+          test "$desired" = "0"
+
+  failback-reset-plan:
+    name: Plan primary-to-DR pilot-light restoration
+    needs: preflight
+    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_DR' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: terraform-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-failback-reset-plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify traffic and primary readiness
+        run: |
+          topology="$(curl --fail --show-error --silent https://status.sentinel.sagaruprety.com.np/topology)"
+          jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
+
+          read -r status source <<<"$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+          if [ "$status" != "available" ] || { [ -n "$source" ] && [ "$source" != "None" ]; }; then
+            echo "Primary must be an available standalone writer before DR reset." >&2
+            exit 1
+          fi
+
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Read deployed image digest
+        working-directory: terraform/environments/prod
+        run: echo "IMAGE_DIGEST=$(terraform output -raw image_digest)" >> "$GITHUB_ENV"
+
+      - name: Plan primary reconciliation
+        working-directory: terraform/environments/prod
+        run: |
+          terraform plan -input=false -lock-timeout=5m -out=failback-primary.tfplan \
+            -var='deploy_service=true' \
+            -var='desired_count=2' \
+            -var='multi_az=true' \
+            -var="image_digest=$IMAGE_DIGEST"
+
+      - name: Show primary reconciliation plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color failback-primary.tfplan
+
+      - name: Initialize DR state
+        working-directory: terraform/environments/dr
+        run: terraform init -input=false
+
+      - name: Plan DR pilot-light restoration
+        working-directory: terraform/environments/dr
+        run: terraform plan -input=false -lock-timeout=5m -out=failback-dr.tfplan -var='desired_count=0' -var='multi_az=false'
+
+      - name: Show DR restoration plan
+        working-directory: terraform/environments/dr
+        run: terraform show -no-color failback-dr.tfplan
+
+      - name: Save primary reconciliation plan for approval
+        uses: actions/upload-artifact@v6
+        with:
+          name: failback-primary-plan-${{ github.run_id }}
+          path: terraform/environments/prod/failback-primary.tfplan
+          retention-days: 1
+
+      - name: Save DR restoration plan for approval
+        uses: actions/upload-artifact@v6
+        with:
+          name: failback-dr-plan-${{ github.run_id }}
+          path: terraform/environments/dr/failback-dr.tfplan
+          retention-days: 1
+
+  failback-reset-apply:
+    name: Apply primary-to-DR pilot-light restoration
+    needs: failback-reset-plan
+    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_DR' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: terraform-production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-failback-reset-apply-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Recheck primary traffic and readiness
+        run: |
+          topology="$(curl --fail --show-error --silent https://status.sentinel.sagaruprety.com.np/topology)"
+          jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
+
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Initialize DR state
+        working-directory: terraform/environments/dr
+        run: terraform init -input=false
+
+      - name: Download approved primary plan
+        uses: actions/download-artifact@v7
+        with:
+          name: failback-primary-plan-${{ github.run_id }}
+          path: terraform/environments/prod
+
+      - name: Download approved DR plan
+        uses: actions/download-artifact@v7
+        with:
+          name: failback-dr-plan-${{ github.run_id }}
+          path: terraform/environments/dr
+
+      - name: Show and apply approved primary plan
+        working-directory: terraform/environments/prod
+        run: |
+          terraform show -no-color failback-primary.tfplan
+          terraform apply -input=false -lock-timeout=5m failback-primary.tfplan
+
+      - name: Show and apply approved DR plan
+        working-directory: terraform/environments/dr
+        run: |
+          terraform show -no-color failback-dr.tfplan
+          terraform apply -input=false -lock-timeout=5m failback-dr.tfplan
+
+      - name: Verify restored pilot light
+        run: |
+          aws rds wait db-instance-available --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr
+          source="$(aws rds describe-db-instances \
+            --region eu-west-1 \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          desired="$(aws ecs describe-services \
+            --region eu-west-1 \
+            --cluster sentinel-aws-dr-dr \
+            --services sentinel-aws-dr-dr \
+            --query 'services[0].desiredCount' --output text)"
+          [[ "$source" == *"sentinel-aws-dr-prod"* ]]
+          test "$desired" = "0"

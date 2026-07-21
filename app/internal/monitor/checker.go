@@ -12,21 +12,17 @@ import (
 
 type Checker struct {
 	database    *sql.DB
-	metrics     *Metrics
 	client      *http.Client
-	selfURL     string
 	interval    time.Duration
 	httpTimeout time.Duration
 }
 
 // Creates an HTTP checker with bounded request duration and no redirect following.
-func NewChecker(database *sql.DB, m *Metrics, interval, timeout time.Duration, selfURL string) *Checker {
+func NewChecker(database *sql.DB, interval, timeout time.Duration) *Checker {
 	return &Checker{
 		database:    database,
-		metrics:     m,
 		interval:    interval,
 		httpTimeout: timeout,
-		selfURL:     selfURL,
 		client: &http.Client{
 			Timeout: timeout,
 			// A redirect proves reachability and should retain its original status code.
@@ -102,7 +98,7 @@ func httpCheck(ctx context.Context, client *http.Client, url string) checkResult
 	return cr
 }
 
-// Records one check result in PostgreSQL, logs, and metrics.
+// Records one check result in PostgreSQL and writes a structured log entry.
 func (c *Checker) checkTarget(ctx context.Context, t db.TargetRow) {
 	cr := httpCheck(ctx, c.client, t.URL)
 
@@ -114,5 +110,4 @@ func (c *Checker) checkTarget(ctx context.Context, t db.TargetRow) {
 	)
 
 	db.RecordCheck(ctx, c.database, cr.url, cr.statusCode, cr.responseMs, cr.isUp)
-	c.metrics.Observe(context.Background(), cr.url, cr.responseMs, cr.isUp)
 }

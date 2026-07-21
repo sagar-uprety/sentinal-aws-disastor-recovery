@@ -1,18 +1,3 @@
-resource "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
-
-  client_id_list = ["sts.amazonaws.com"]
-
-  # SHA1 thumbprints of token.actions.githubusercontent.com's current TLS chain
-  # (ISRG root + intermediate), fetched directly rather than relying on a possibly
-  # stale copy-pasted constant. AWS only requires a syntactically valid value here;
-  # it does not re-validate GitHub's chain against it.
-  thumbprint_list = [
-    "ab9d0263244dd0326eb67015705a667e79cfe998",
-    "2d74d6dfd96eea55ad7baafa0d3c6552b2dadc37",
-  ]
-}
-
 resource "aws_iam_role" "github_actions" {
   name = "${var.project_name}-${var.environment}-github-actions"
 
@@ -20,14 +5,12 @@ resource "aws_iam_role" "github_actions" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+      Principal = { Federated = var.github_oidc_provider_arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        }
-        StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:production"
         }
       }
     }]
@@ -82,10 +65,10 @@ resource "aws_iam_role_policy" "app_deploy" {
         ]
       },
       {
-        Sid      = "PassTaskExecutionRole"
+        Sid      = "PassTaskRoles"
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
-        Resource = [var.ecs_task_execution_role_arn]
+        Resource = [var.ecs_task_execution_role_arn, var.ecs_task_role_arn]
         Condition = {
           StringEquals = {
             "iam:PassedToService" = "ecs-tasks.amazonaws.com"

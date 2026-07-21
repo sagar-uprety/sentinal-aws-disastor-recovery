@@ -29,9 +29,6 @@ repos:
           # flags them as unattached (per-resource skip comments don't propagate
           # through count-indexed resources).
           - --skip-check=CKV2_AWS_19
-          # ALB is HTTP-only: no domain/ACM certificate exists anywhere in this repo,
-          # so HTTPS, TLS1.2, HTTP->HTTPS redirect, and WAF can't be wired up without
-          # that decision being made first. Revisit once a domain is chosen.
           - --skip-check=CKV_AWS_260
           - --skip-check=CKV_AWS_2
           - --skip-check=CKV2_AWS_20
@@ -41,6 +38,14 @@ repos:
           # RDS Multi-AZ roughly doubles instance cost; toggle var.multi_az instead of
           # forcing it on. Revisit as a deliberate cost decision.
           - --skip-check=CKV_AWS_157
+          # Workflow dispatch inputs are constrained to choices and an exact
+          # destroy confirmation. This exception preserves operator gating.
+          - --skip-check=CKV_GHA_7
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
 
   - repo: https://github.com/golangci/golangci-lint
     rev: v2.12.2
