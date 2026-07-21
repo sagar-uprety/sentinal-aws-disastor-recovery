@@ -267,7 +267,7 @@ jobs:
 
       - name: Verify traffic and primary readiness
         run: |
-          topology="$(curl --fail --show-error --silent https://status.sentinel.sagaruprety.com.np/topology)"
+          topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
           jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
 
           read -r status source <<<"$(aws rds describe-db-instances \
@@ -369,7 +369,7 @@ jobs:
 
       - name: Recheck primary traffic and readiness
         run: |
-          topology="$(curl --fail --show-error --silent https://status.sentinel.sagaruprety.com.np/topology)"
+          topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
           jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
 
       - name: Initialize primary state

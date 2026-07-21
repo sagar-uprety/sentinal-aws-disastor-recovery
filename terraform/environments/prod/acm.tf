@@ -1,5 +1,5 @@
 locals {
-  status_hostname = "status.sentinel.sagaruprety.com.np"
+  app_hostname = "sentinel.sagaruprety.com.np"
 }
 
 data "aws_route53_zone" "sentinel" {
@@ -9,7 +9,7 @@ data "aws_route53_zone" "sentinel" {
 
 # ACM certificates are regional, so each ALB receives a certificate issued in its own Region.
 resource "aws_acm_certificate" "primary" {
-  domain_name       = local.status_hostname
+  domain_name       = local.app_hostname
   validation_method = "DNS"
 
   lifecycle {
@@ -20,7 +20,7 @@ resource "aws_acm_certificate" "primary" {
 resource "aws_acm_certificate" "dr" {
   provider = aws.dr
 
-  domain_name       = local.status_hostname
+  domain_name       = local.app_hostname
   validation_method = "DNS"
 
   lifecycle {

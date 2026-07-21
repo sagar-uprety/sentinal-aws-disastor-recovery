@@ -14,7 +14,7 @@ DR_SERVICE="sentinel-aws-dr-dr"
 DR_DB_ID="sentinel-aws-dr-dr"
 TARGET_GROUP="sentinel-aws-dr-prod-tg"
 LOAD_BALANCER="sentinel-aws-dr-prod-alb"
-STATUS_HOST="status.sentinel.sagaruprety.com.np"
+STATUS_HOST="sentinel.sagaruprety.com.np"
 RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
 
 if [ "${CONFIRM_DISASTER:-}" != "YES" ]; then

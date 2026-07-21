@@ -2,6 +2,8 @@
 
 A multi-AZ AWS workload with pilot light DR in a second region, fully defined in Terraform. The app monitors external sites and confirms public reachability after recovery, while AWS-native health signals and drill timestamps measure the outage, RTO, and RPO.
 
+The dashboard is served at `https://sentinel.sagaruprety.com.np`; its machine-readable health endpoint is `/healthz`.
+
 Portfolio project by Sagar Koirala. Target: Senior DevOps Engineer / Platform Engineer (Germany).
 
 ## Status

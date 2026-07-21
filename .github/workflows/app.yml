@@ -37,7 +37,7 @@ env:
   ECS_CLUSTER: sentinel-aws-dr-prod
   ECS_SERVICE: sentinel-aws-dr-prod
   CONTAINER_NAME: sentinel
-  STATUS_URL: https://status.sentinel.sagaruprety.com.np
+  STATUS_URL: https://sentinel.sagaruprety.com.np
 
 jobs:
   quality:
