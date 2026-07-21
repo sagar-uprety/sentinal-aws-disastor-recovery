@@ -130,8 +130,10 @@ jobs:
         run: terraform init -input=false
 
       - name: Read deployed image digest
-        working-directory: terraform/environments/prod
-        run: echo "IMAGE_DIGEST=$(terraform output -raw image_digest)" >> "$GITHUB_ENV"
+        run: >-
+          echo "IMAGE_DIGEST=$(aws ssm get-parameter
+          --name /sentinel-aws-dr/prod/deployed-image-digest
+          --query Parameter.Value --output text)" >> "$GITHUB_ENV"
 
       - name: Plan reverse replication to primary
         working-directory: terraform/environments/prod
@@ -271,8 +273,10 @@ jobs:
         run: terraform init -input=false
 
       - name: Read deployed image digest
-        working-directory: terraform/environments/prod
-        run: echo "IMAGE_DIGEST=$(terraform output -raw image_digest)" >> "$GITHUB_ENV"
+        run: >-
+          echo "IMAGE_DIGEST=$(aws ssm get-parameter
+          --name /sentinel-aws-dr/prod/deployed-image-digest
+          --query Parameter.Value --output text)" >> "$GITHUB_ENV"
 
       - name: Plan primary reconciliation
         working-directory: terraform/environments/prod

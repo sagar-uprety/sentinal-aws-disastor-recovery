@@ -8,3 +8,9 @@ provider "aws" {
     }
   }
 }
+
+# Alias for the prod region — lets DR read prod SSM parameters cross-region.
+provider "aws" {
+  alias  = "prod"
+  region = "eu-central-1"
+}

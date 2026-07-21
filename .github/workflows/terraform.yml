@@ -194,7 +194,7 @@ jobs:
           path: plan-comment.md
 
   deploy:
-    name: Deploy primary and DR environments
+    name: Provision primary and DR infrastructure
     needs: quality
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -214,14 +214,6 @@ jobs:
         with:
           terraform_version: 1.15.5
           terraform_wrapper: false
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -273,53 +265,6 @@ jobs:
         working-directory: terraform/environments/prod
         run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
 
-      - name: Log in to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push immutable image
-        id: build-image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app
-          platforms: linux/arm64
-          push: true
-          tags: ${{ steps.login-ecr.outputs.registry }}/sentinel-aws-dr-prod:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          cache-from: type=gha,scope=application
-          cache-to: type=gha,mode=max,scope=application
-
-      - name: Wait for image replication to DR
-        env:
-          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
-        run: |
-          for _ in {1..60}; do
-            if aws ecr describe-images \
-              --region eu-west-1 \
-              --repository-name sentinel-aws-dr-prod \
-              --image-ids imageDigest="$IMAGE_DIGEST" >/dev/null 2>&1; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "ECR image $IMAGE_DIGEST did not replicate to eu-west-1 within 10 minutes." >&2
-          exit 1
-
-      - name: Plan primary service
-        working-directory: terraform/environments/prod
-        env:
-          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
-        run: >-
-          terraform plan -input=false -lock-timeout=5m -out=service.tfplan
-          -var='deploy_service=true' -var='multi_az=true' -var="image_digest=$IMAGE_DIGEST"
-
-      - name: Show primary service plan
-        working-directory: terraform/environments/prod
-        run: terraform show -no-color service.tfplan
-
-      - name: Apply primary service plan
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m service.tfplan
-
       - name: Initialize DR state
         working-directory: terraform/environments/dr
         run: terraform init -input=false
@@ -335,11 +280,6 @@ jobs:
       - name: Apply DR pilot-light plan
         working-directory: terraform/environments/dr
         run: terraform apply -input=false -lock-timeout=5m dr.tfplan
-
-      - name: Verify primary service health
-        run: |
-          aws ecs wait services-stable --region eu-central-1 --cluster sentinel-aws-dr-prod --services sentinel-aws-dr-prod
-          curl --fail --show-error --silent --retry 18 --retry-delay 10 --retry-all-errors https://status.sentinel.sagaruprety.com.np/healthz
 
       - name: Verify DR pilot-light state
         run: |

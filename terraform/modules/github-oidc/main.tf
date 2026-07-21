@@ -75,6 +75,12 @@ resource "aws_iam_role_policy" "app_deploy" {
           }
         }
       },
+      {
+        Sid      = "WriteDeployedImageDigest"
+        Effect   = "Allow"
+        Action   = ["ssm:PutParameter"]
+        Resource = [var.deployed_image_digest_ssm_arn]
+      },
     ]
   })
 }

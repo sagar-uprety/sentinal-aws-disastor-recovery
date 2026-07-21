@@ -11,6 +11,14 @@ data "terraform_remote_state" "prod" {
   }
 }
 
+# Reads the deployed image digest directly from prod's SSM parameter.
+# SSM is readable cross-region — avoids depending on TF state for the
+# volatile, frequently-updated image reference.
+data "aws_ssm_parameter" "deployed_image_digest" {
+  provider = aws.prod
+  name     = "/${local.project_name}/prod/deployed-image-digest"
+}
+
 data "aws_rds_engine_version" "postgres" {
   engine  = "postgres"
   version = "18"
@@ -67,7 +75,7 @@ module "ecs" {
 
   # Same repository name and digest as prod; ECR replication (configured in
   # the prod environment) mirrors the image into this region.
-  image_uri              = "${local.ecr_repository_url}@${data.terraform_remote_state.prod.outputs.image_digest}"
+  image_uri              = "${local.ecr_repository_url}@${data.aws_ssm_parameter.deployed_image_digest.value}"
   db_endpoint            = module.rds.endpoint
   db_name                = "sentinel"
   db_user                = "sentinel"
@@ -110,8 +118,13 @@ module "rds" {
   username = "sentinel"
 }
 
+# ECR replication (configured in the prod environment) mirrors the
+# repository into this region under the same account and name.
+data "aws_ecr_repository" "app" {
+  provider = aws.prod
+  name     = local.project_name
+}
+
 locals {
-  # ECR replication (configured in the prod environment) mirrors the
-  # repository into this region under the same account and name.
-  ecr_repository_url = replace(data.terraform_remote_state.prod.outputs.ecr_repository_url, "eu-central-1", "eu-west-1")
+  ecr_repository_url = replace(data.aws_ecr_repository.app.repository_url, "eu-central-1", "eu-west-1")
 }
