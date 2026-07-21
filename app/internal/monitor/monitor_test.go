@@ -63,6 +63,9 @@ func TestHTTPCheckUp(t *testing.T) {
 	if !cr.isUp {
 		t.Error("expected isUp = true")
 	}
+	if cr.err != nil {
+		t.Errorf("expected no request error, got %v", cr.err)
+	}
 }
 
 // verifies server errors are reported as down.
@@ -103,6 +106,9 @@ func TestHTTPCheckTimeout(t *testing.T) {
 	if cr.isUp {
 		t.Error("expected isUp = false on timeout")
 	}
+	if cr.err == nil {
+		t.Error("expected timeout error")
+	}
 }
 
 // verifies redirects remain reachable without being followed.
@@ -122,6 +128,54 @@ func TestHTTPCheckRedirect(t *testing.T) {
 	}
 	if !cr.isUp {
 		t.Error("expected isUp = true for 301 (redirects are reachable)")
+	}
+}
+
+// verifies only one database session can lead checks and release permits takeover.
+func TestCheckerLeadership(t *testing.T) {
+	testDB := openTestDB(t)
+	defer closeTestDB(t, testDB)
+
+	ctx := context.Background()
+	leader, err := testDB.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open leader connection: %v", err)
+	}
+	defer func() {
+		if closeErr := leader.Close(); closeErr != nil {
+			t.Errorf("close leader connection: %v", closeErr)
+		}
+	}()
+	standby, err := testDB.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open standby connection: %v", err)
+	}
+	defer func() {
+		if closeErr := standby.Close(); closeErr != nil {
+			t.Errorf("close standby connection: %v", closeErr)
+		}
+	}()
+
+	var acquired bool
+	if err := leader.QueryRowContext(ctx, checkerLockQuery).Scan(&acquired); err != nil || !acquired {
+		t.Fatalf("leader acquire: acquired=%t err=%v", acquired, err)
+	}
+	if err := standby.QueryRowContext(ctx, checkerLockQuery).Scan(&acquired); err != nil {
+		t.Fatalf("standby acquire: %v", err)
+	}
+	if acquired {
+		t.Fatal("expected standby leadership to be denied")
+	}
+
+	var released bool
+	if err := leader.QueryRowContext(ctx, checkerUnlockQuery).Scan(&released); err != nil || !released {
+		t.Fatalf("leader release: released=%t err=%v", released, err)
+	}
+	if err := standby.QueryRowContext(ctx, checkerLockQuery).Scan(&acquired); err != nil || !acquired {
+		t.Fatalf("standby takeover: acquired=%t err=%v", acquired, err)
+	}
+	if err := standby.QueryRowContext(ctx, checkerUnlockQuery).Scan(&released); err != nil || !released {
+		t.Fatalf("standby release: released=%t err=%v", released, err)
 	}
 }
 
