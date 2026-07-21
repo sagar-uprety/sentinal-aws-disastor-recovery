@@ -81,7 +81,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/failback.sh snapshot
    ```
 
-2. Dispatch the protected workflow that validates the snapshot, discovers the promoted DR ARN, and rebuilds prod as a stopped DR replica. Approve the plan job, review its logged replacement plan, then approve the apply job:
+2. Dispatch the protected workflow that validates the snapshot, discovers the promoted DR ARN, saves the logged replacement plan, and applies that exact plan in its dependent job:
 
    ```bash
    gh workflow run recovery.yml --ref main \
@@ -109,7 +109,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
    ```
 
-5. Dispatch the protected workflow that reconciles promoted prod as standalone, rebuilds DR as prod's replica, and returns DR ECS to desired count 0. Approve the plan job, review both logged plans, then approve the apply job:
+5. Dispatch the protected workflow that saves both logged plans, reconciles promoted prod as standalone, rebuilds DR as prod's replica, and returns DR ECS to desired count 0:
 
    ```bash
    gh workflow run recovery.yml --ref main \

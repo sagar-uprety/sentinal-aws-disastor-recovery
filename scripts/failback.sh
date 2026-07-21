@@ -51,7 +51,7 @@ Snapshot $snapshot_id is available.
 Next protected Terraform phase:
   1. Dispatch the protected failback-prepare workflow:
      gh workflow run recovery.yml --ref main -f operation=failback-prepare -f confirm_failback=REBUILD_PROD -f failback_snapshot_id=$snapshot_id
-  2. Approve the plan job, review its logged replacement plan, then approve the apply job.
+  2. Follow the plan and apply job logs; the apply job consumes the saved plan.
   3. Wait for the workflow and run: scripts/failback.sh verify-replica
 
 Delete the snapshot after topology reset evidence is complete:

@@ -34,11 +34,11 @@ Focused Go unit checks, `go vet`, Terraform validation, Checkov, actionlint, she
 `.github/workflows/terraform.yml` provides:
 
 - Pull-request and main-branch quality checks: Terraform format, root-module validation without remote state, TFLint, Checkov, and actionlint.
-- Same-repository pull-request prod speculative-plan and Infracost-diff comments. The comment states that DR depends on applied prod outputs and is planned during deployment. Fork pull requests receive neither AWS credentials nor plan/cost jobs.
+- Same-repository pull-request prod speculative-plan comments. The comment states that DR depends on applied prod outputs and is planned during deployment. Fork pull requests receive no AWS credentials or plan job. Infracost remains local through pre-commit by project-owner decision.
 - Manual `plan`, `deploy`, and guarded `destroy` operations. Bootstrap owns the persistent Route53 zone and emits nameservers for one-time Cloudflare delegation. Deploy refuses to proceed until public delegation matches, then applies saved plans in prod-foundation, immutable-image, prod-service, and DR order. Destroy applies saved destroy plans in DR then prod order without deleting the shared zone.
 - `terraform-production` environment gating, exact OIDC environment-subject trust, main-branch-only mutations, lock timeouts, and serialized manual operations.
 
-`.github/workflows/recovery.yml` separately provides guarded `failback-prepare` and `failback-reset` operations. Each requires explicit typed confirmation, produces saved binary plans in a protected plan job, and waits for a separately protected apply job. It shares the `terraform-operations` concurrency group with manual Terraform lifecycle operations so recovery and deployment cannot mutate state concurrently.
+`.github/workflows/recovery.yml` separately provides guarded `failback-prepare` and `failback-reset` operations. Each requires explicit typed confirmation, produces saved binary plans, and applies those exact plans in dependent jobs. It shares the `terraform-operations` concurrency group with manual Terraform lifecycle operations so recovery and deployment cannot mutate state concurrently.
 
 `.github/workflows/app.yml` provides pull-request Go race/vet, frontend reproducibility, and ARM64 container-build checks. Main-branch push or dispatch can enter the protected `production` deployment job, push a uniquely tagged immutable image, deploy its digest to ECS, wait for service stability, and verify public `/healthz`.
 
@@ -46,18 +46,17 @@ The first PR quality run exposed that `setup-tflint` installs the binary but doe
 
 Before its first GitHub Actions run, repository settings must provide:
 
-- Environments `terraform-production` and `production`, both restricted to `main` and configured with required reviewers.
+- Environments `terraform-production` and `production`, both restricted to `main`. Required reviewers are unavailable on the repository's current GitHub billing plan, so manual workflow dispatch, typed confirmations, safety prechecks, saved plans, and separate plan/apply jobs are the available gates.
 - Bootstrap apply output `terraform_github_actions_role_arn`, set as repository variable `AWS_TERRAFORM_ROLE_ARN`. Bootstrap manages this reviewed, explicit-action Terraform role; the existing `AWS_ROLE_ARN` is app-deploy-only and must not be reused.
 - Prod foundation output `github_actions_role_arn`, set as repository variable `AWS_ROLE_ARN` before using application deployment.
-- Repository secret `INFRACOST_API_KEY` for pull-request cost comments.
 
 The Terraform role uses a staged-permission model for its first complete deployment: AWS `PowerUserAccess` covers non-IAM service APIs, while inline IAM permissions are limited to project-prefixed roles, exact workload `iam:PassRole` targets, the repository OIDC provider, and required service-linked roles. This is intentionally broader than the final target. M6 must use CloudTrail-backed IAM Access Analyzer policy generation, review and test the result, then replace `PowerUserAccess`; generated policy output is a starting point, not automatically trusted.
 
-These are M6 live-environment prerequisites. The role is declared in bootstrap configuration but is not created until the approved bootstrap apply.
+The Terraform role and persistent hosted zone were created by the approved bootstrap apply on 2026-07-21. Remaining live-environment prerequisites are tracked below.
 
 ## Final Session Procedure
 
-1. Apply bootstrap locally once, set `terraform_github_actions_role_arn` as `AWS_TERRAFORM_ROLE_ARN`, and configure protected environments before approving `terraform-production` jobs.
+1. Bootstrap was applied on 2026-07-21 and `terraform_github_actions_role_arn` was set as `AWS_TERRAFORM_ROLE_ARN`. `terraform-production` is restricted to `main`; configure `production` before application deployment.
 2. Delegate bootstrap's Route53 nameservers in Cloudflare once, verify public NS resolution, then dispatch `terraform.yml` from `main` with `operation=deploy` to plan/apply prod foundation, publish and replicate the immutable image, plan/apply prod service, and plan/apply DR pilot light.
 3. Verify prod, DR, replication, ECR image digest, SSM metadata, and ARC initial state before beginning a drill.
 4. Run first drill. Use `recovery.yml` to complete and measure topology reset before second drill.
@@ -66,7 +65,7 @@ These are M6 live-environment prerequisites. The role is declared in bootstrap c
 
 ## Pending Live Evidence
 
-- GitHub Actions PR plan and Infracost comments.
+- GitHub Actions PR plan comment and retained local Infracost output.
 - CloudTrail/IAM Access Analyzer evidence and replacement of temporary `PowerUserAccess` after the full deployment and teardown paths have run.
 - Approval-gated deployment and destroy workflow runs.
 - Second drill RTO/RPO and topology-reset duration.

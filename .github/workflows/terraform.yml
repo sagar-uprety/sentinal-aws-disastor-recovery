@@ -191,46 +191,6 @@ jobs:
           header: terraform-plan-prod
           path: plan-comment.md
 
-  cost:
-    name: Estimate infrastructure cost change
-    needs: quality
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Check out pull-request base
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: Set up Infracost
-        uses: infracost/actions/setup@v3
-        with:
-          api-key: ${{ secrets.INFRACOST_API_KEY }}
-
-      - name: Generate baseline estimate
-        run: infracost breakdown --path terraform --format json --out-file /tmp/infracost-base.json
-
-      - name: Check out pull-request revision
-        uses: actions/checkout@v7
-
-      - name: Generate cost diff
-        run: infracost diff --path terraform --compare-to /tmp/infracost-base.json --format json --out-file /tmp/infracost-diff.json
-
-      - name: Publish cost comment
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          infracost comment github \
-            --repo "$GITHUB_REPOSITORY" \
-            --pull-request "${{ github.event.pull_request.number }}" \
-            --path /tmp/infracost-diff.json \
-            --behavior update \
-            --github-token "$GITHUB_TOKEN"
-
   deploy:
     name: Deploy primary and DR environments
     needs: quality
