@@ -3,7 +3,7 @@
   "scripts": {
     "build": "npm run build:assets && npm run build:css",
     "build:assets": "cp ./node_modules/uplot/dist/uPlot.iife.min.js ./static/uPlot.iife.min.js && cp ./node_modules/uplot/dist/uPlot.min.css ./static/uPlot.min.css",
-    "build:css": "tailwindcss -i ./static/tailwind.css -o ./static/app.css --minify"
+    "build:css": "tailwindcss -i ./static/tailwind.css -o ./static/app.css --minify && printf '\\n' >> ./static/app.css"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.17",
