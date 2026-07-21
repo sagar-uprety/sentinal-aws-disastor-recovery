@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
@@ -17,9 +19,7 @@ resource "aws_iam_role" "terraform_github_actions" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        }
-        StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:terraform-production"
         }
       }
     }]
@@ -44,33 +44,99 @@ resource "aws_iam_role_policy" "terraform_state" {
   })
 }
 
+# Broad non-IAM access avoids brittle first-deploy failures; CloudTrail and Access Analyzer evidence will replace it with a least-privilege policy after M6.
+resource "aws_iam_role_policy_attachment" "terraform_power_user" {
+  role       = aws_iam_role.terraform_github_actions.name
+  policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
+}
+
 resource "aws_iam_role_policy" "terraform_workload" {
-  #checkov:skip=CKV_AWS_289,CKV_AWS_290,CKV_AWS_355:Terraform needs these explicit multi-service control-plane actions; many create, describe, and IAM bootstrap APIs cannot be ARN-scoped.
-  name = "${var.project_name}-terraform-workload"
+  name = "${var.project_name}-terraform-iam"
   role = aws_iam_role.terraform_github_actions.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ec2:AllocateAddress", "ec2:AssociateRouteTable", "ec2:AttachInternetGateway", "ec2:AuthorizeSecurityGroupIngress", "ec2:CreateFlowLogs", "ec2:CreateInternetGateway", "ec2:CreateNatGateway", "ec2:CreateRoute", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup", "ec2:CreateSubnet", "ec2:CreateTags", "ec2:CreateVpc", "ec2:CreateVpcEndpoint", "ec2:DeleteFlowLogs", "ec2:DeleteInternetGateway", "ec2:DeleteNatGateway", "ec2:DeleteRoute", "ec2:DeleteRouteTable", "ec2:DeleteSecurityGroup", "ec2:DeleteSubnet", "ec2:DeleteTags", "ec2:DeleteVpc", "ec2:DescribeAddresses", "ec2:DescribeAvailabilityZones", "ec2:DescribeFlowLogs", "ec2:DescribeInternetGateways", "ec2:DescribeNatGateways", "ec2:DescribeNetworkInterfaces", "ec2:DescribeRouteTables", "ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVpcs", "ec2:DescribeVpcEndpoints", "ec2:DetachInternetGateway", "ec2:DisassociateRouteTable", "ec2:ModifyVpcAttribute", "ec2:ReleaseAddress", "ec2:RevokeSecurityGroupIngress",
-        "elasticloadbalancing:AddTags", "elasticloadbalancing:CreateListener", "elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:DeleteListener", "elasticloadbalancing:DeleteLoadBalancer", "elasticloadbalancing:DeleteTargetGroup", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeLoadBalancerAttributes", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth", "elasticloadbalancing:ModifyLoadBalancerAttributes", "elasticloadbalancing:RemoveTags", "elasticloadbalancing:SetSecurityGroups", "elasticloadbalancing:SetSubnets",
-        "ecs:CreateCluster", "ecs:CreateService", "ecs:DeleteCluster", "ecs:DeleteService", "ecs:DeregisterTaskDefinition", "ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:ListTagsForResource", "ecs:ListTaskDefinitions", "ecs:RegisterTaskDefinition", "ecs:TagResource", "ecs:UntagResource", "ecs:UpdateService",
-        "ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteLifecyclePolicy", "ecr:DeleteRepository", "ecr:DescribeImages", "ecr:DescribeRegistry", "ecr:DescribeRepositories", "ecr:GetAuthorizationToken", "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:PutImageScanningConfiguration", "ecr:PutImageTagMutability", "ecr:PutLifecyclePolicy", "ecr:PutReplicationConfiguration", "ecr:TagResource", "ecr:UploadLayerPart",
-        "rds:AddTagsToResource", "rds:CreateDBInstance", "rds:CreateDBInstanceReadReplica", "rds:CreateDBParameterGroup", "rds:CreateDBSubnetGroup", "rds:DeleteDBInstance", "rds:DeleteDBParameterGroup", "rds:DeleteDBSubnetGroup", "rds:DescribeDBEngineVersions", "rds:DescribeDBInstances", "rds:DescribeDBParameterGroups", "rds:DescribeDBSubnetGroups", "rds:DescribeDBSnapshots", "rds:ListTagsForResource", "rds:ModifyDBInstance", "rds:ModifyDBParameterGroup", "rds:RemoveTagsFromResource", "rds:StartDBInstanceAutomatedBackupsReplication", "rds:StopDBInstanceAutomatedBackupsReplication",
-        "iam:AttachRolePolicy", "iam:CreateRole", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:GetRole", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies", "iam:PassRole", "iam:PutRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
-        "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:PutRetentionPolicy", "logs:TagResource",
-        "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:PutMetricAlarm", "cloudwatch:TagResource",
-        "events:DeleteRule", "events:DescribeRule", "events:ListTargetsByRule", "events:PutRule", "events:PutTargets", "events:RemoveTargets",
-        "servicediscovery:CreatePrivateDnsNamespace", "servicediscovery:CreateService", "servicediscovery:DeleteNamespace", "servicediscovery:DeleteService", "servicediscovery:GetNamespace", "servicediscovery:GetService", "servicediscovery:ListNamespaces", "servicediscovery:ListServices",
-        "sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes", "sns:Subscribe", "sns:TagResource", "sns:Unsubscribe",
-        "ssm:AddTagsToResource", "ssm:DeleteParameter", "ssm:DescribeParameters", "ssm:PutParameter", "ssm:RemoveTagsFromResource",
-        "route53:ChangeResourceRecordSets", "route53:ChangeTagsForResource", "route53:CreateHealthCheck", "route53:CreateHostedZone", "route53:DeleteHealthCheck", "route53:DeleteHostedZone", "route53:GetHealthCheck", "route53:GetHostedZone", "route53:ListHostedZonesByName", "route53:ListResourceRecordSets", "route53:UpdateHealthCheck",
-        "route53-recovery-control-config:CreateCluster", "route53-recovery-control-config:CreateControlPanel", "route53-recovery-control-config:CreateRoutingControl", "route53-recovery-control-config:CreateSafetyRule", "route53-recovery-control-config:DeleteCluster", "route53-recovery-control-config:DeleteControlPanel", "route53-recovery-control-config:DeleteRoutingControl", "route53-recovery-control-config:DeleteSafetyRule", "route53-recovery-control-config:DescribeCluster", "route53-recovery-control-config:DescribeControlPanel", "route53-recovery-control-config:DescribeRoutingControl", "route53-recovery-control-config:DescribeSafetyRule", "route53-recovery-control-config:ListClusters", "route53-recovery-control-config:ListControlPanels", "route53-recovery-control-config:ListRoutingControls", "route53-recovery-control-config:ListSafetyRules",
-        "kms:DescribeKey", "sts:GetCallerIdentity", "tag:GetResources"
-      ]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Sid    = "ManageProjectRoles"
+        Effect = "Allow"
+        Action = [
+          "iam:AttachRolePolicy",
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:DeleteRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListRolePolicies",
+          "iam:ListRoleTags",
+          "iam:PutRolePolicy",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:UpdateAssumeRolePolicy",
+        ]
+        Resource = [
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-github-actions",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-ecs-task-exec",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-ecs-task",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-vpc-flow-logs",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-rds-monitoring",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-ecs-task-exec",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-ecs-task",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-vpc-flow-logs",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-rds-monitoring",
+        ]
+      },
+      {
+        Sid    = "PassWorkloadRoles"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-ecs-task-exec",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-ecs-task",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-vpc-flow-logs",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-prod-rds-monitoring",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-ecs-task-exec",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-ecs-task",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-vpc-flow-logs",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-rds-monitoring",
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = ["ecs-tasks.amazonaws.com", "monitoring.rds.amazonaws.com", "vpc-flow-logs.amazonaws.com"]
+          }
+        }
+      },
+      {
+        Sid    = "ReadGitHubOIDCProvider"
+        Effect = "Allow"
+        Action = [
+          "iam:GetOpenIDConnectProvider",
+        ]
+        Resource = aws_iam_openid_connect_provider.github.arn
+      },
+      {
+        Sid      = "ListGitHubOIDCProviders"
+        Effect   = "Allow"
+        Action   = ["iam:ListOpenIDConnectProviders"]
+        Resource = "*"
+      },
+      {
+        Sid      = "CreateServiceLinkedRoles"
+        Effect   = "Allow"
+        Action   = ["iam:CreateServiceLinkedRole"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "iam:AWSServiceName" = [
+              "ecs.amazonaws.com",
+              "elasticloadbalancing.amazonaws.com",
+              "rds.amazonaws.com",
+            ]
+          }
+        }
+      },
+    ]
   })
 }

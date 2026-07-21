@@ -4,7 +4,7 @@ IAM OpenID Connect provider and role that let GitHub Actions (`app.yml`) authent
 
 ## Design Intent
 
-GitHub Actions requests a short-lived OIDC token scoped to this repository and exchanges it for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`. The trust policy's `sub` condition restricts assumption to `repo:${github_org}/${github_repo}:*`, so no other repository or fork can assume the role. The attached policy is scoped to exactly what `app.yml` needs: push an image to one ECR repository, register a new task definition revision, and update one ECS service, no broader ECS, ECR, or IAM access.
+GitHub Actions requests a short-lived OIDC token and exchanges it for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`. The trust policy requires the exact `production` GitHub environment subject for this repository, so repository identity and environment protection rules both gate assumption. The attached policy is scoped to exactly what `app.yml` needs: push an image to one ECR repository, pass the reviewed task and execution roles, register a task definition revision, and update one ECS service, with no broader ECS, ECR, or IAM access.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -39,6 +39,7 @@ No modules.
 | <a name="input_ecs_cluster_arn"></a> [ecs\_cluster\_arn](#input\_ecs\_cluster\_arn) | ARN of the ECS cluster app.yml deploys to. | `string` | n/a | yes |
 | <a name="input_ecs_service_arn"></a> [ecs\_service\_arn](#input\_ecs\_service\_arn) | ARN of the ECS service app.yml updates. | `string` | n/a | yes |
 | <a name="input_ecs_task_execution_role_arn"></a> [ecs\_task\_execution\_role\_arn](#input\_ecs\_task\_execution\_role\_arn) | ARN of the ECS task execution role that app.yml must be able to pass when registering a new task definition revision. | `string` | n/a | yes |
+| <a name="input_ecs_task_role_arn"></a> [ecs\_task\_role\_arn](#input\_ecs\_task\_role\_arn) | ARN of the ECS application task role that app.yml must be able to pass when registering a new task definition revision. | `string` | n/a | yes |
 | <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment name. | `string` | n/a | yes |
 | <a name="input_github_oidc_provider_arn"></a> [github\_oidc\_provider\_arn](#input\_github\_oidc\_provider\_arn) | ARN of the shared GitHub Actions OIDC provider created by bootstrap. | `string` | n/a | yes |
 | <a name="input_github_org"></a> [github\_org](#input\_github\_org) | GitHub organization or user that owns the repository. | `string` | n/a | yes |

@@ -102,6 +102,7 @@ module "github_oidc" {
   # Constructed rather than referenced because the service only exists when deploy_service is true.
   ecs_service_arn             = "arn:aws:ecs:eu-central-1:${data.aws_caller_identity.current.account_id}:service/${local.project_name}-${local.environment}/${local.project_name}-${local.environment}"
   ecs_task_execution_role_arn = module.ecs.task_execution_role_arn
+  ecs_task_role_arn           = module.ecs.task_role_arn
 }
 
 module "rds" {

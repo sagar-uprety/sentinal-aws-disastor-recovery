@@ -39,7 +39,9 @@ done
 
 ## Final Live Session
 
-Do not run live deployment or recovery commands until Milestone 6. Before that session, configure GitHub environment `terraform-production`, `AWS_TERRAFORM_ROLE_ARN`, and `INFRACOST_API_KEY` as described in [docs/milestone-5-evidence.md](docs/milestone-5-evidence.md).
+Do not run live deployment or recovery commands until Milestone 6. Before that session, configure protected GitHub environments `terraform-production` and `production`, repository variables `AWS_TERRAFORM_ROLE_ARN` and `AWS_ROLE_ARN`, and secret `INFRACOST_API_KEY` as described in [docs/milestone-5-evidence.md](docs/milestone-5-evidence.md).
+
+The bootstrap Terraform role deliberately starts with AWS `PowerUserAccess` plus project-scoped IAM role management, exact `iam:PassRole` targets, and protected-environment OIDC trust. After the full M6 deploy/destroy exercise, CloudTrail-backed IAM Access Analyzer output must be reviewed and tested before replacing `PowerUserAccess` with the observed least-privilege service policy.
 
 Use [docs/runbook-failover.md](docs/runbook-failover.md) for recovery steps and [docs/aws-dr-architecture.drawio](docs/aws-dr-architecture.drawio) for the canonical architecture diagram. Deployment and teardown ordering is defined in `plan.md` and automated by `.github/workflows/terraform.yml`.
 

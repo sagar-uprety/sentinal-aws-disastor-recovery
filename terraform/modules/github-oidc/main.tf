@@ -10,9 +10,7 @@ resource "aws_iam_role" "github_actions" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        }
-        StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:production"
         }
       }
     }]
@@ -67,10 +65,10 @@ resource "aws_iam_role_policy" "app_deploy" {
         ]
       },
       {
-        Sid      = "PassTaskExecutionRole"
+        Sid      = "PassTaskRoles"
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
-        Resource = [var.ecs_task_execution_role_arn]
+        Resource = [var.ecs_task_execution_role_arn, var.ecs_task_role_arn]
         Condition = {
           StringEquals = {
             "iam:PassedToService" = "ecs-tasks.amazonaws.com"

@@ -42,3 +42,8 @@ variable "ecs_task_execution_role_arn" {
   description = "ARN of the ECS task execution role that app.yml must be able to pass when registering a new task definition revision."
   type        = string
 }
+
+variable "ecs_task_role_arn" {
+  description = "ARN of the ECS application task role that app.yml must be able to pass when registering a new task definition revision."
+  type        = string
+}

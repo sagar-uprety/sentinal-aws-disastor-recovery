@@ -33,31 +33,39 @@ Focused Go unit checks, `go vet`, Terraform validation, Checkov, actionlint, she
 
 `.github/workflows/terraform.yml` provides:
 
-- Pull request quality checks: Terraform format, root-module validation without remote state, TFLint, and Checkov.
-- Same-repository pull request plan and Infracost-diff comments. Fork pull requests do not receive AWS credentials or execute Terraform plans.
-- Manual `plan`, `deploy`, and guarded `destroy` operations. Deploy uses prod-foundation, image-push, prod-service, then DR order. Destroy uses DR, then prod order.
-- `terraform-production` environment gating for any operation that reads remote state or changes AWS.
+- Pull-request and main-branch quality checks: Terraform format, root-module validation without remote state, TFLint, Checkov, and actionlint.
+- Same-repository pull-request prod speculative-plan and Infracost-diff comments. The comment states that DR depends on applied prod outputs and is planned during deployment. Fork pull requests receive neither AWS credentials nor plan/cost jobs.
+- Manual `plan`, `prepare-dns`, `deploy`, and guarded `destroy` operations. `prepare-dns` applies only the Route 53 zone and regional ACM requests, then prints nameservers for the required Cloudflare delegation. Deploy refuses to proceed until public delegation matches, then applies saved plans in prod-foundation, immutable-image, prod-service, and DR order. Destroy applies saved destroy plans in DR then prod order.
+- `terraform-production` environment gating, exact OIDC environment-subject trust, main-branch-only mutations, lock timeouts, and serialized manual operations.
+
+`.github/workflows/app.yml` provides pull-request Go race/vet, frontend reproducibility, and ARM64 container-build checks. Main-branch push or dispatch can enter the protected `production` deployment job, push a uniquely tagged immutable image, deploy its digest to ECS, wait for service stability, and verify public `/healthz`.
+
+The first PR quality run exposed that `setup-tflint` installs the binary but does not initialize the configured AWS plugin. The workflow now runs `tflint --init` explicitly before recursive linting; the earlier failure is retained as pipeline-hardening evidence rather than presented as a passing run.
 
 Before its first GitHub Actions run, repository settings must provide:
 
-- Environment `terraform-production` with required reviewers.
+- Environments `terraform-production` and `production`, both restricted to `main` and configured with required reviewers.
 - Bootstrap apply output `terraform_github_actions_role_arn`, set as repository variable `AWS_TERRAFORM_ROLE_ARN`. Bootstrap manages this reviewed, explicit-action Terraform role; the existing `AWS_ROLE_ARN` is app-deploy-only and must not be reused.
+- Prod foundation output `github_actions_role_arn`, set as repository variable `AWS_ROLE_ARN` before using application deployment.
 - Repository secret `INFRACOST_API_KEY` for pull-request cost comments.
+
+The Terraform role uses a staged-permission model for its first complete deployment: AWS `PowerUserAccess` covers non-IAM service APIs, while inline IAM permissions are limited to project-prefixed roles, exact workload `iam:PassRole` targets, the repository OIDC provider, and required service-linked roles. This is intentionally broader than the final target. M6 must use CloudTrail-backed IAM Access Analyzer policy generation, review and test the result, then replace `PowerUserAccess`; generated policy output is a starting point, not automatically trusted.
 
 These are M6 live-environment prerequisites. The role is declared in bootstrap configuration but is not created until the approved bootstrap apply.
 
 ## Final Session Procedure
 
-1. Apply bootstrap, set `terraform_github_actions_role_arn` as `AWS_TERRAFORM_ROLE_ARN`, then approve the `terraform-production` environment.
-2. Dispatch `terraform.yml` with `action=deploy` to build prod, publish and replicate the immutable image, create prod service, and build DR pilot light.
+1. Apply bootstrap locally once, set `terraform_github_actions_role_arn` as `AWS_TERRAFORM_ROLE_ARN`, and configure protected environments before approving `terraform-production` jobs.
+2. Dispatch `terraform.yml` from `main` with `operation=prepare-dns`, delegate the emitted Route 53 nameservers in Cloudflare, verify public NS resolution, then dispatch `operation=deploy` to plan/apply prod foundation, publish and replicate the immutable image, plan/apply prod service, and plan/apply DR pilot light.
 3. Verify prod, DR, replication, ECR image digest, SSM metadata, and ARC initial state before beginning a drill.
 4. Run first drill. Complete and measure topology reset before second drill.
 5. Run second drill. Capture terminal, CloudWatch/SNS, status-page, database, DNS, and Cost Explorer evidence.
-6. Dispatch `terraform.yml` with `action=destroy` and `confirm_destroy=DESTROY` after evidence collection, unless current RDS topology requires a different dependency-safe destroy order.
+6. Dispatch `terraform.yml` from `main` with `operation=destroy` and `confirm_destroy=DESTROY` after evidence collection, unless current RDS topology requires a different dependency-safe destroy order.
 
 ## Pending Live Evidence
 
 - GitHub Actions PR plan and Infracost comments.
+- CloudTrail/IAM Access Analyzer evidence and replacement of temporary `PowerUserAccess` after the full deployment and teardown paths have run.
 - Approval-gated deployment and destroy workflow runs.
 - Second drill RTO/RPO and topology-reset duration.
 - DR outage-window query/export, recording, final Cost Explorer amount, and teardown output.

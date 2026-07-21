@@ -1,4 +1,4 @@
-name: terraform
+name: Terraform Infrastructure
 
 on:
   pull_request:
@@ -6,19 +6,26 @@ on:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+      - ".tflint.hcl"
   workflow_dispatch:
     inputs:
-      action:
-        description: Terraform operation to run.
+      operation:
+        description: Infrastructure operation. Deploy and destroy always use dependency-safe environment order.
         required: true
         default: plan
         type: choice
         options:
           - plan
+          - prepare-dns
           - deploy
           - destroy
-      environment:
-        description: Root module for a plan. Deploy and destroy always operate on prod then DR in dependency-safe order.
+      target:
+        description: Root module for a manual speculative plan. Ignored by deploy and destroy.
         required: true
         default: prod
         type: choice
@@ -26,38 +33,41 @@ on:
           - prod
           - dr
       confirm_destroy:
-        description: Type DESTROY to enable a destroy operation.
+        description: Type DESTROY to authorize a destroy operation.
         required: false
         type: string
 
 permissions:
   contents: read
-  id-token: write
-  pull-requests: write
 
 concurrency:
-  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  group: terraform-${{ github.event_name == 'workflow_dispatch' && 'operations' || github.ref }}
   cancel-in-progress: false
 
 env:
   AWS_REGION: eu-central-1
   TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
 
 jobs:
   quality:
-    name: Format, validate, lint, and scan
+    name: Validate Terraform configuration
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.5
           terraform_wrapper: false
 
-      - uses: terraform-linters/setup-tflint@v5
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v5
 
-      - name: Check formatting
+      - name: Verify Terraform formatting
         run: terraform fmt -check -recursive terraform
 
       - name: Validate root modules without remote state
@@ -69,7 +79,9 @@ jobs:
           done
 
       - name: Run TFLint
-        run: tflint --recursive --config="$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform
+        run: |
+          tflint --init --config="$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config="$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform
 
       - name: Run Checkov
         uses: bridgecrewio/checkov-action@v12
@@ -82,64 +94,86 @@ jobs:
       - name: Run actionlint
         shell: bash
         run: |
-          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+          bash <(curl --fail --silent --show-error --location https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
 
+      - name: Validate destructive-operation confirmation
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'destroy'
+        run: |
+          if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "Destroy requires confirm_destroy=DESTROY." >&2
+            exit 1
+          fi
+
   plan:
-    name: Plan ${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+    name: Plan ${{ github.event_name == 'pull_request' && 'primary environment' || inputs.target }}
     needs: quality
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.action == 'plan' ||
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'plan' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: terraform-production
     permissions:
       contents: read
       id-token: write
       pull-requests: write
+    env:
+      TF_ROOT: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.5
           terraform_wrapper: false
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-plan-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Initialize remote state
-        working-directory: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+        working-directory: ${{ env.TF_ROOT }}
         run: terraform init -input=false
 
-      - name: Create plan
-        id: terraform-plan
-        working-directory: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+      - name: Create speculative plan
+        working-directory: ${{ env.TF_ROOT }}
         run: |
+          plan_args=()
+          if [ "${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}" = "prod" ]; then
+            plan_args+=("-var=deploy_service=false" "-var=multi_az=true")
+          fi
           set +e
-          terraform plan -detailed-exitcode -no-color -input=false > plan.txt 2>&1
+          terraform plan -detailed-exitcode -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}" > plan.log 2>&1
           status=$?
           set -e
-          cat plan.txt
-          test "$status" -eq 0 -o "$status" -eq 2
+          cat plan.log
+          if [ "$status" -eq 1 ]; then
+            exit 1
+          fi
+          terraform show -no-color tfplan > plan.txt
 
-      - name: Upload plan
+      - name: Upload human-readable plan
         uses: actions/upload-artifact@v6
         with:
-          name: terraform-plan-${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
-          path: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}/plan.txt
+          name: terraform-plan-${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}
+          path: ${{ env.TF_ROOT }}/plan.txt
           retention-days: 7
 
-      - name: Comment plan on pull request
+      - name: Prepare pull-request plan comment
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ github.token }}
           PLAN_FILE: terraform/environments/prod/plan.txt
         run: |
           {
-            echo '## Terraform plan (prod)'
+            echo '## Terraform speculative plan (prod)'
+            echo
+            echo '> This pull-request plan covers prod. DR depends on applied prod remote-state outputs and is planned during the approved deployment sequence.'
             echo
             echo '<details><summary>Show plan</summary>'
             echo
@@ -147,35 +181,45 @@ jobs:
             tail -c 60000 "$PLAN_FILE"
             echo '```'
             echo '</details>'
-          } > comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+          } > plan-comment.md
 
-  infracost:
-    name: Infracost diff
+      - name: Publish pull-request plan comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: terraform-plan-prod
+          path: plan-comment.md
+
+  cost:
+    name: Estimate infrastructure cost change
     needs: quality
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out pull-request base
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
 
-      - uses: infracost/actions/setup@v3
+      - name: Set up Infracost
+        uses: infracost/actions/setup@v3
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
 
-      - name: Generate baseline cost estimate
+      - name: Generate baseline estimate
         run: infracost breakdown --path terraform --format json --out-file /tmp/infracost-base.json
 
-      - uses: actions/checkout@v7
+      - name: Check out pull-request revision
+        uses: actions/checkout@v7
 
       - name: Generate cost diff
         run: infracost diff --path terraform --compare-to /tmp/infracost-base.json --format json --out-file /tmp/infracost-diff.json
 
-      - name: Comment cost diff on pull request
+      - name: Publish cost comment
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -186,57 +230,152 @@ jobs:
             --behavior update \
             --github-token "$GITHUB_TOKEN"
 
-  deploy:
-    name: Deploy prod then DR
+  prepare-dns:
+    name: Prepare DNS and certificate requests
     needs: quality
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'prepare-dns' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: terraform-production
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.5
           terraform_wrapper: false
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-dns-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Plan DNS prerequisites
+        working-directory: terraform/environments/prod
+        run: >-
+          terraform plan -input=false -lock-timeout=5m -out=dns.tfplan
+          -target=aws_route53_zone.sentinel
+          -target=aws_acm_certificate.primary
+          -target=aws_acm_certificate.dr
+
+      - name: Show DNS prerequisite plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color dns.tfplan
+
+      - name: Apply DNS prerequisite plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m dns.tfplan
+
+      - name: Publish nameservers for Cloudflare delegation
+        working-directory: terraform/environments/prod
+        run: |
+          {
+            echo '## Route 53 delegation required'
+            echo
+            echo 'Create these NS records for `sentinel.sagaruprety.com.np` in the Cloudflare parent zone before running `operation=deploy`:'
+            echo
+            terraform output -json route53_zone_name_servers | jq -r '.[] | "- `\(.)`"'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy primary and DR environments
+    needs: quality
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment:
+      name: terraform-production
+      url: https://status.sentinel.sagaruprety.com.np
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Apply prod foundation
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Verify public Route 53 delegation
         working-directory: terraform/environments/prod
         run: |
-          terraform init -input=false
-          terraform apply -auto-approve -input=false -var='deploy_service=false' -var='multi_az=true'
+          for nameserver in $(terraform output -json route53_zone_name_servers | jq -r '.[]'); do
+            if ! dig +short NS sentinel.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
+              echo "Missing public delegation to $nameserver. Run operation=prepare-dns and update Cloudflare first." >&2
+              exit 1
+            fi
+          done
+
+      - name: Plan primary foundation
+        working-directory: terraform/environments/prod
+        run: >-
+          terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan
+          -var='deploy_service=false' -var='multi_az=true'
+
+      - name: Show primary foundation plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color foundation.tfplan
+
+      - name: Apply primary foundation plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push immutable image
-        id: image
-        env:
-          ECR_REPOSITORY: sentinel-aws-dr-prod
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
-          docker build --platform linux/arm64 -t "$registry/$ECR_REPOSITORY:$IMAGE_TAG" ./app
-          docker push "$registry/$ECR_REPOSITORY:$IMAGE_TAG"
-          digest="$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        id: build-image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/sentinel-aws-dr-prod:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=application
+          cache-to: type=gha,mode=max,scope=application
 
-      - name: Wait for ECR replication to DR
+      - name: Wait for image replication to DR
         env:
-          ECR_REPOSITORY: sentinel-aws-dr-prod
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
         run: |
           for _ in {1..60}; do
             if aws ecr describe-images \
               --region eu-west-1 \
-              --repository-name "$ECR_REPOSITORY" \
+              --repository-name sentinel-aws-dr-prod \
               --image-ids imageDigest="$IMAGE_DIGEST" >/dev/null 2>&1; then
               exit 0
             fi
@@ -245,43 +384,109 @@ jobs:
           echo "ECR image $IMAGE_DIGEST did not replicate to eu-west-1 within 10 minutes." >&2
           exit 1
 
-      - name: Apply prod service
+      - name: Plan primary service
         working-directory: terraform/environments/prod
-        run: terraform apply -auto-approve -input=false -var='deploy_service=true' -var='multi_az=true' -var='image_digest=${{ steps.image.outputs.digest }}'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: >-
+          terraform plan -input=false -lock-timeout=5m -out=service.tfplan
+          -var='deploy_service=true' -var='multi_az=true' -var="image_digest=$IMAGE_DIGEST"
 
-      - name: Apply DR pilot light
+      - name: Show primary service plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color service.tfplan
+
+      - name: Apply primary service plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m service.tfplan
+
+      - name: Initialize DR state
         working-directory: terraform/environments/dr
+        run: terraform init -input=false
+
+      - name: Plan DR pilot light
+        working-directory: terraform/environments/dr
+        run: terraform plan -input=false -lock-timeout=5m -out=dr.tfplan
+
+      - name: Show DR pilot-light plan
+        working-directory: terraform/environments/dr
+        run: terraform show -no-color dr.tfplan
+
+      - name: Apply DR pilot-light plan
+        working-directory: terraform/environments/dr
+        run: terraform apply -input=false -lock-timeout=5m dr.tfplan
+
+      - name: Verify primary service health
         run: |
-          terraform init -input=false
-          terraform apply -auto-approve -input=false
+          aws ecs wait services-stable --region eu-central-1 --cluster sentinel-aws-dr-prod --services sentinel-aws-dr-prod
+          curl --fail --show-error --silent --retry 18 --retry-delay 10 --retry-all-errors https://status.sentinel.sagaruprety.com.np/healthz
+
+      - name: Verify DR pilot-light state
+        run: |
+          desired="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
+          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          test "$desired" = "0"
+          test -n "$source" && test "$source" != "None"
 
   destroy:
-    name: Destroy DR then prod
+    name: Destroy DR and primary environments
     needs: quality
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' && inputs.confirm_destroy == 'DESTROY'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'destroy' &&
+      inputs.confirm_destroy == 'DESTROY' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     environment: terraform-production
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.5
           terraform_wrapper: false
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-destroy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Destroy DR
+      - name: Initialize DR state
         working-directory: terraform/environments/dr
-        run: |
-          terraform init -input=false
-          terraform destroy -auto-approve -input=false
+        run: terraform init -input=false
 
-      - name: Destroy prod
+      - name: Plan DR destruction
+        working-directory: terraform/environments/dr
+        run: terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
+
+      - name: Show DR destruction plan
+        working-directory: terraform/environments/dr
+        run: terraform show -no-color destroy.tfplan
+
+      - name: Apply DR destruction plan
+        working-directory: terraform/environments/dr
+        run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
+
+      - name: Initialize primary state
         working-directory: terraform/environments/prod
-        run: |
-          terraform init -input=false
-          terraform destroy -auto-approve -input=false
+        run: terraform init -input=false
+
+      - name: Plan primary destruction
+        working-directory: terraform/environments/prod
+        run: terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
+
+      - name: Show primary destruction plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color destroy.tfplan
+
+      - name: Apply primary destruction plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
