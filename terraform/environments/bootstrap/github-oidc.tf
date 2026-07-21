@@ -131,6 +131,7 @@ resource "aws_iam_role_policy" "terraform_workload" {
           "iam:GetRole",
           "iam:GetRolePolicy",
           "iam:ListAttachedRolePolicies",
+          "iam:ListInstanceProfilesForRole",
           "iam:ListRolePolicies",
           "iam:ListRoleTags",
           "iam:PutRolePolicy",
