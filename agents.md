@@ -2,7 +2,6 @@
 
 - **Infrastructure**: Terraform (AWS provider ~6.0)
 - **Language**: Go
-- **Monitoring**: Prometheus + Grafana
 
 - Use Context7 MCP for latest docs when needed: syntax, latest version information, implementation details, and when stuck on a persistent error, an unexpected tool/CLI/API result, or before assuming something "just doesn't work." Verify the exact command/argument/endpoint against docs before concluding it's broken, rather than guessing or retrying blindly. If Context7 is unavailable or outdated, use web search for official docs.
 

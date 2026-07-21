@@ -1,176 +1,218 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sentinel Status</title>
-<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:system-ui,-apple-system,sans-serif; background:#f6f8fa; color:#24292f; line-height:1.5; }
-.container { max-width:800px; margin:0 auto; padding:24px 16px; }
-h1 { font-size:1.5rem; font-weight:600; margin-bottom:8px; }
-.banner { padding:16px 20px; border-radius:8px; font-weight:600; font-size:1.1rem; margin-bottom:24px; }
-.banner.ok { background:#dafbe1; color:#116329; }
-.banner.fail { background:#ffebe9; color:#cf222e; }
-.card { background:#fff; border:1px solid #d0d7de; border-radius:8px; padding:20px; margin-bottom:16px; }
-.card-header { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
-.dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
-.dot.up { background:#3fb950; }
-.dot.down { background:#cf222e; }
-.hostname { font-weight:600; font-size:1rem; }
-.meta { font-size:0.85rem; color:#656d76; display:flex; gap:16px; flex-wrap:wrap; margin-bottom:12px; }
-.bar-chart { margin-bottom:12px; }
-.chart-container { height:120px; margin-bottom:4px; }
-.refresh { font-size:0.8rem; color:#656d76; text-align:center; margin-top:24px; }
-.loading { text-align:center; padding:40px; color:#656d76; }
-.error-state { text-align:center; padding:40px; color:#cf222e; }
-@media (max-width:600px) {
-  .container { padding:16px 8px; }
-  .meta { gap:8px; }
-}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f8fafc">
+  <title>Sentinel Status</title>
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark' || (!savedTheme && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    }
+  </script>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/uPlot.min.css">
+  <script src="/uPlot.iife.min.js"></script>
 </head>
 <body>
-<div class="container">
-  <h1>Sentinel Status</h1>
-  <div id="banner" class="banner loading">Loading...</div>
-  <div id="cards"></div>
-  <div class="refresh" id="refresh">Refreshing every 15s</div>
-</div>
-<script>
-const REFRESH_MS = 15000;
-const BAR_COUNT = 50;
-
-function hostname(url) {
-  try { return new URL(url).hostname; } catch { return url; }
-}
-
-function timeAgo(t) {
-  const s = Math.floor((Date.now() - new Date(t).getTime()) / 1000);
-  if (s < 5) return "just now";
-  if (s < 60) return s + "s ago";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + "m ago";
-  return Math.floor(m / 60) + "h ago";
-}
-
-function renderBars(checks) {
-  const slice = checks.slice(0, BAR_COUNT).reverse();
-  const w = 6, gap = 2, h = 40;
-  const totalW = slice.length * (w + gap) - gap;
-  const bars = slice.map((c, i) => {
-    const bh = Math.max(1, Math.min(h, (c.response_ms || 0) / 5000 * h));
-    const x = i * (w + gap);
-    const y = h - bh;
-    const color = c.is_up ? '#3fb950' : '#cf222e';
-    return `<rect x="${x}" y="${y}" width="${w}" height="${bh}" rx="1" fill="${color}"><title>${c.response_ms}ms ${c.is_up ? 'up' : 'down'}</title></rect>`;
-  }).join('');
-  return `<svg width="${totalW}" height="${h}" viewBox="0 0 ${totalW} ${h}" style="display:block">${bars}</svg>`;
-}
-
-function renderCards(statuses) {
-  const container = document.getElementById('cards');
-  if (!statuses || statuses.length === 0) {
-    container.innerHTML = '<div class="loading">Waiting for first check results...</div>';
-    return;
-  }
-  let allUp = true;
-  let html = '';
-  for (const s of statuses) {
-    if (!s.is_up) allUp = false;
-    const host = hostname(s.url);
-    html += `
-      <div class="card" id="card-${CSS.escape(host)}">
-        <div class="card-header">
-          <div class="dot ${s.is_up ? 'up' : 'down'}"></div>
-          <div class="hostname">${host}</div>
-        </div>
-        <div class="meta">
-          <span>${s.response_ms}ms</span>
-          <span>${timeAgo(s.last_checked)}</span>
-          <span>${s.uptime_pct_24h}% uptime (24h)</span>
-        </div>
-        <div class="bar-chart" id="bars-${CSS.escape(host)}"></div>
-        <div class="chart-container" id="chart-${CSS.escape(host)}"></div>
+  <main class="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+    <header class="mb-8 flex items-center justify-between gap-4">
+      <div>
+        <p class="text-sm font-medium text-muted-foreground">Infrastructure monitoring</p>
+        <h1 class="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">Sentinel status</h1>
       </div>
-    `;
-  }
-  container.innerHTML = html;
+      <button id="theme-toggle" type="button" class="inline-flex size-10 shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Switch color theme">
+        <svg class="size-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="hidden size-4 dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.64 15.35A9 9 0 1 1 8.65 3.36 7 7 0 0 0 20.64 15.35z"/></svg>
+      </button>
+    </header>
 
-  const banner = document.getElementById('banner');
-  if (statuses.length === 0) {
-    banner.className = 'banner loading';
-    banner.textContent = 'Waiting for data...';
-  } else if (allUp) {
-    banner.className = 'banner ok';
-    banner.textContent = 'All systems operational';
-  } else {
-    banner.className = 'banner fail';
-    banner.textContent = 'Service disruption';
-  }
-}
+    <section id="banner" class="mb-6 flex items-center gap-3 rounded-lg border bg-card px-4 py-3 text-sm font-medium" role="status" aria-live="polite">
+      <span class="size-2 shrink-0 rounded-full bg-muted-foreground"></span>
+      Loading status
+    </section>
 
-function renderHistoryChart(host, checks) {
-  if (!checks || checks.length < 2) return;
-  const container = document.getElementById('chart-' + CSS.escape(host));
-  if (!container) return;
+    <section class="mb-8 overflow-hidden rounded-lg border bg-card" aria-labelledby="topology-title">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-4">
+        <div>
+          <p class="text-xs font-medium uppercase tracking-widest text-muted-foreground">Runtime view</p>
+          <h2 id="topology-title" class="mt-1 text-base font-semibold">Recovery topology</h2>
+        </div>
+        <p id="topology-updated" class="text-xs text-muted-foreground">Loading runtime metadata</p>
+      </div>
+      <div id="topology-grid" class="grid gap-px bg-border md:grid-cols-3"></div>
+      <p class="border-t px-5 py-3 text-xs leading-5 text-muted-foreground">Shows the task serving this response, live ECS service spread, and RDS control-plane topology. Managed standby does not accept application traffic.</p>
+    </section>
 
-  const rev = checks.slice().reverse();
-  const data = [
-    rev.map(c => new Date(c.checked_at).getTime() / 1000),
-    rev.map(c => c.response_ms || 0),
-  ];
+    <section aria-labelledby="checks-title">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 id="checks-title" class="text-base font-semibold">Monitored services</h2>
+        <p id="refresh" class="text-xs text-muted-foreground">Refreshes every 15s</p>
+      </div>
+      <div id="cards" class="grid gap-3"></div>
+    </section>
+  </main>
 
-  const opts = {
-    width: container.clientWidth || 600,
-    height: 120,
-    cursor: { show: false },
-    select: { show: false },
-    legend: { show: false },
-    axes: [
-      { show: false },
-      { show: false },
-    ],
-    series: [
-      {},
-      {
-        stroke: '#3fb950',
-        width: 1.5,
-        fill: 'rgba(63,185,80,0.1)',
-        points: { show: false },
-      },
-    ],
-  };
-  new uPlot(opts, data, container);
-}
+  <script>
+    const REFRESH_MS = 15000;
+    const BAR_COUNT = 50;
 
-async function fetchChecks() {
-  try {
-    const statuses = await fetch('/status').then(r => r.json());
-    renderCards(statuses);
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const dark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('theme', dark ? 'dark' : 'light');
+      document.querySelector('meta[name="theme-color"]').content = dark ? '#202938' : '#f8fafc';
+      fetchChecks();
+    });
 
-    const historyEntries = await Promise.all(
-      statuses.map(s =>
-        fetch(`/history?target=${encodeURIComponent(s.url)}&limit=100`)
-          .then(r => r.json())
-          .then(checks => [hostname(s.url), checks])
-      )
-    );
-    for (const [host, checks] of historyEntries) {
-      const barsEl = document.getElementById('bars-' + CSS.escape(host));
-      if (barsEl) barsEl.innerHTML = renderBars(checks);
-      renderHistoryChart(host, checks);
+    function hostname(url) {
+      try { return new URL(url).hostname; } catch { return url; }
     }
-  } catch (err) {
-    document.getElementById('cards').innerHTML =
-      '<div class="error-state">Failed to fetch status. Retrying...</div>';
-  }
-}
 
-fetchChecks();
-setInterval(fetchChecks, REFRESH_MS);
-</script>
+    function escapeHTML(value) {
+      return String(value || 'Unavailable').replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[c]);
+    }
+
+    function node(label, title, details, badge, unavailable) {
+      return `<article class="bg-card px-5 py-5">
+        <p class="text-xs font-medium uppercase tracking-widest text-muted-foreground">${label}</p>
+        <h3 class="mt-2 break-all text-sm font-semibold">${title}</h3>
+        <dl class="mt-4 grid gap-2 text-sm">${details}</dl>
+        <span class="mt-4 inline-flex rounded-full px-2 py-1 text-xs font-medium ${unavailable ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'}">${badge}</span>
+      </article>`;
+    }
+
+    function detail(label, value) {
+      return `<div class="flex justify-between gap-4"><dt class="text-muted-foreground">${label}</dt><dd class="text-right font-medium">${value}</dd></div>`;
+    }
+
+    function renderTopology(topology) {
+      const grid = document.getElementById('topology-grid');
+      const updated = document.getElementById('topology-updated');
+      if (!topology) {
+        grid.innerHTML = node('Application', 'Runtime metadata unavailable', '', 'Retrying', true);
+        updated.textContent = 'Retrying with next refresh';
+        return;
+      }
+      const app = topology.application || {};
+      const compute = topology.compute || {};
+      const db = topology.database || {};
+      const appDetails = [
+        detail('Region', escapeHTML(app.region)),
+        detail('Availability zone', escapeHTML(app.availability_zone)),
+        detail('Task', escapeHTML(app.task_id)),
+        detail('Revision', escapeHTML(app.revision)),
+      ].join('');
+      const taskIDs = Array.isArray(compute.task_ids) && compute.task_ids.length ? compute.task_ids.map(escapeHTML).join(', ') : 'None reported';
+      const zones = Array.isArray(compute.availability_zones) && compute.availability_zones.length ? compute.availability_zones.map(escapeHTML).join(', ') : 'None reported';
+      const computeDetails = [
+        detail('Region', escapeHTML(compute.region)),
+        detail('Tasks', `${Number(compute.running_count || 0)} / ${Number(compute.desired_count || 0)} running`),
+        detail('Availability zones', zones),
+        detail('Task IDs', taskIDs),
+      ].join('');
+      const dbDetails = [
+        detail('Region', escapeHTML(db.region)),
+        detail('Writer zone', escapeHTML(db.availability_zone)),
+        detail('Managed standby', escapeHTML(db.secondary_availability_zone || 'Not reported')),
+        detail('Status', escapeHTML(db.status)),
+      ].join('');
+      const computeReady = compute.available && compute.desired_count > 0 && compute.running_count === compute.desired_count && compute.multi_az;
+      grid.innerHTML = node('Responding application', escapeHTML(app.task_definition || 'Local development'), appDetails, escapeHTML(app.launch_type || 'local'), false)
+        + node('ECS service', escapeHTML(compute.name), computeDetails, computeReady ? 'HA ready' : 'Degraded', !computeReady)
+        + node('Database control plane', escapeHTML(db.identifier), dbDetails, escapeHTML(db.available ? db.role : 'unavailable'), !db.available);
+      updated.textContent = 'Updated with page data';
+    }
+
+    function timeAgo(t) {
+      const s = Math.floor((Date.now() - new Date(t).getTime()) / 1000);
+      if (s < 5) return 'just now';
+      if (s < 60) return s + 's ago';
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + 'm ago';
+      return Math.floor(m / 60) + 'h ago';
+    }
+
+    function renderBars(checks) {
+      const slice = checks.slice(0, BAR_COUNT).reverse();
+      const width = 5, gap = 2, height = 28;
+      const total = slice.length * (width + gap) - gap;
+      const bars = slice.map((check, index) => {
+        const barHeight = Math.max(1, Math.min(height, (check.response_ms || 0) / 5000 * height));
+        const color = check.is_up ? '#10b981' : '#ef4444';
+        return `<rect x="${index * (width + gap)}" y="${height - barHeight}" width="${width}" height="${barHeight}" rx="1" fill="${color}"><title>${check.response_ms}ms ${check.is_up ? 'up' : 'down'}</title></rect>`;
+      }).join('');
+      return `<svg width="${total}" height="${height}" viewBox="0 0 ${total} ${height}" aria-label="Recent response times">${bars}</svg>`;
+    }
+
+    function renderCards(statuses) {
+      const container = document.getElementById('cards');
+      if (!statuses || statuses.length === 0) {
+        container.innerHTML = '<div class="rounded-lg border bg-card px-5 py-10 text-center text-sm text-muted-foreground">Waiting for first check results.</div>';
+        return;
+      }
+      let allUp = true;
+      container.innerHTML = statuses.map(status => {
+        if (!status.is_up) allUp = false;
+        const host = hostname(status.url);
+        return `<article class="rounded-lg border bg-card px-5 py-4" id="card-${CSS.escape(host)}">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="flex min-w-0 items-center gap-3"><span class="size-2.5 shrink-0 rounded-full ${status.is_up ? 'bg-emerald-500' : 'bg-red-500'}"></span><h3 class="truncate text-sm font-semibold">${escapeHTML(host)}</h3></div>
+            <span class="text-xs text-muted-foreground">${timeAgo(status.last_checked)}</span>
+          </div>
+          <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
+            <span><strong class="font-medium text-foreground">${status.response_ms}ms</strong> response</span>
+            <span><strong class="font-medium text-foreground">${status.uptime_pct_24h}%</strong> uptime, 24h</span>
+            <div class="ml-auto" id="bars-${CSS.escape(host)}"></div>
+          </div>
+          <div class="chart-container mt-4" id="chart-${CSS.escape(host)}"></div>
+        </article>`;
+      }).join('');
+
+      const banner = document.getElementById('banner');
+      banner.className = `mb-6 flex items-center gap-3 rounded-lg border px-4 py-3 text-sm font-medium ${allUp ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-400'}`;
+      banner.innerHTML = `<span class="size-2 shrink-0 rounded-full ${allUp ? 'bg-emerald-500' : 'bg-red-500'}"></span>${allUp ? 'All systems operational' : 'Service disruption detected'}`;
+    }
+
+    function renderHistoryChart(host, checks) {
+      if (!checks || checks.length < 2) return;
+      const container = document.getElementById('chart-' + CSS.escape(host));
+      if (!container) return;
+      const values = checks.slice().reverse();
+      const dark = document.documentElement.classList.contains('dark');
+      new uPlot({
+        width: container.clientWidth || 600,
+        height: 84,
+        cursor: { show: false },
+        select: { show: false },
+        legend: { show: false },
+        axes: [{ show: false }, { show: false }],
+        series: [{}, { stroke: '#10b981', width: 1.5, fill: dark ? 'rgba(16,185,129,.12)' : 'rgba(16,185,129,.08)', points: { show: false } }],
+      }, [values.map(check => new Date(check.checked_at).getTime() / 1000), values.map(check => check.response_ms || 0)], container);
+    }
+
+    async function fetchChecks() {
+      try {
+        const [statuses, topology] = await Promise.all([
+          fetch('/status').then(response => response.json()),
+          fetch('/topology').then(response => response.ok ? response.json() : null),
+        ]);
+        renderCards(statuses);
+        renderTopology(topology);
+        const historyEntries = await Promise.all(statuses.map(status => fetch(`/history?target=${encodeURIComponent(status.url)}&limit=100`).then(response => response.json()).then(checks => [hostname(status.url), checks])));
+        for (const [host, checks] of historyEntries) {
+          const bars = document.getElementById('bars-' + CSS.escape(host));
+          if (bars) bars.innerHTML = renderBars(checks);
+          renderHistoryChart(host, checks);
+        }
+      } catch (error) {
+        renderTopology(null);
+        document.getElementById('cards').innerHTML = '<div class="rounded-lg border border-red-500/20 bg-red-500/10 px-5 py-10 text-center text-sm text-red-700 dark:text-red-400">Unable to fetch status. Retrying.</div>';
+      }
+    }
+
+    fetchChecks();
+    setInterval(fetchChecks, REFRESH_MS);
+  </script>
 </body>
 </html>

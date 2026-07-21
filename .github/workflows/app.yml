@@ -1,16 +1,23 @@
-name: app
+name: Application CI/CD
 
 on:
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/app.yml"
   push:
     branches: [main]
     paths:
       - "app/**"
       - ".github/workflows/app.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
+
+concurrency:
+  group: application-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   AWS_REGION: eu-central-1
@@ -18,16 +25,18 @@ env:
   ECS_CLUSTER: sentinel-aws-dr-prod
   ECS_SERVICE: sentinel-aws-dr-prod
   CONTAINER_NAME: sentinel
+  STATUS_URL: https://status.sentinel.sagaruprety.com.np
 
 jobs:
-  test:
+  quality:
+    name: Test and build application
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: app
     services:
       postgres:
-        # Match the RDS major version (PostgreSQL 18) so CI tests the same engine.
         image: postgres:18-alpine
         env:
           POSTGRES_USER: postgres
@@ -41,59 +50,129 @@ jobs:
           --health-timeout 2s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
         with:
           go-version-file: app/go.mod
-      - run: go test ./...
+          cache-dependency-path: app/go.sum
 
-  build-and-deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Verify generated assets are committed
+        run: git diff --exit-code -- static/app.css static/uPlot.iife.min.js static/uPlot.min.css
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Run Go tests with race detection
+        run: go test -race ./...
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ARM64 container image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          platforms: linux/arm64
+          push: false
+          cache-from: type=gha,scope=application
+          cache-to: type=gha,mode=max,scope=application
+
+  deploy:
+    name: Deploy application to production
+    needs: quality
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ env.STATUS_URL }}
+    concurrency:
+      group: application-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: app-deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - id: login-ecr
+      - name: Log in to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - id: build-push
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build --platform linux/arm64 -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" ./app
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          digest=$(aws ecr describe-images \
-            --repository-name "$ECR_REPOSITORY" \
-            --image-ids imageTag="$IMAGE_TAG" \
-            --query 'imageDetails[0].imageDigest' --output text)
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
+      - name: Build and push immutable image
+        id: build-image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=application
+          cache-to: type=gha,mode=max,scope=application
 
-      - id: current-task-def
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition "$ECS_SERVICE" \
-            --query 'taskDefinition' > task-definition.json
+      - name: Read current ECS task definition
+        run: >-
+          aws ecs describe-task-definition
+          --task-definition "$ECS_SERVICE"
+          --query taskDefinition
+          > task-definition.json
 
-      - id: render-task-def
+      - name: Render task definition with immutable image
+        id: render-task-definition
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.build-push.outputs.image }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build-image.outputs.digest }}
 
-      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      - name: Deploy task definition to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
           cluster: ${{ env.ECS_CLUSTER }}
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
+          wait-for-minutes: 15
+          wait-max-delay-seconds: 15
+
+      - name: Verify public application health
+        run: curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors "$STATUS_URL/healthz"

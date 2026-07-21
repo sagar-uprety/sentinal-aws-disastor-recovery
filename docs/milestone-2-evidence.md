@@ -6,6 +6,10 @@ Verified on 2026-07-11 against AWS account `926883320788`, region `eu-central-1`
 
 Phase 1 + Phase 2 applied successfully. 41 Terraform resources for the prod environment.
 
+## Post-Session Corrections
+
+The session used a managed `random_password` resource, so the original claim that the generated password was absent from Terraform state was incorrect. Current configuration replaces it with Terraform's `ephemeral "random_password"` and passes it only through write-only arguments. The M6 rebuild verifies this live before the secret-state claim is restored.
+
 ## Application
 
 | Check | Status | Evidence |
@@ -13,7 +17,7 @@ Phase 1 + Phase 2 applied successfully. 41 Terraform resources for the prod envi
 | /healthz through ALB | 200 | `curl http://ALB/healthz` → `{"status":"ok"}` |
 | /status through ALB | Up | google.com (411ms up), github.com (13ms up) |
 | / through ALB | Served | Status page HTML with all expected markup |
-| Self-check target | N/A | SELF_URL not set; self-check gracefully skipped |
+| Canonical status URL target | N/A | Not present in this historical M2 run. Current configuration defines it in `app/targets.json`; M6 verifies it live. |
 
 App reached healthy state ~30s after task start.
 

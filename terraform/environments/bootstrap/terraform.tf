@@ -15,7 +15,6 @@ provider "aws" {
       Project     = var.project_name
       ManagedBy   = "terraform"
       Environment = "prod"
-      Purpose     = "state-storage"
     }
   }
 }

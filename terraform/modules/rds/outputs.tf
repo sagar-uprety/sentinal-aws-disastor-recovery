@@ -1,16 +1,21 @@
-output "endpoint" {
-  description = "RDS connection endpoint."
-  value       = aws_db_instance.main.endpoint
-}
-
 output "address" {
   description = "RDS hostname."
-  value       = aws_db_instance.main.address
+  value       = aws_db_instance.main[0].address
+}
+
+output "arn" {
+  description = "ARN of the RDS instance, for cross-region replication and IAM policies."
+  value       = aws_db_instance.main[0].arn
+}
+
+output "endpoint" {
+  description = "RDS connection endpoint."
+  value       = aws_db_instance.main[0].endpoint
 }
 
 output "port" {
   description = "RDS port."
-  value       = aws_db_instance.main.port
+  value       = aws_db_instance.main[0].port
 }
 
 output "security_group_id" {

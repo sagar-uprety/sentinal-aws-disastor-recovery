@@ -16,11 +16,13 @@ import (
 
 	"sentinel-aws-dr/app/internal/db"
 	"sentinel-aws-dr/app/internal/monitor"
+	"sentinel-aws-dr/app/internal/topology"
 )
 
 type config struct {
 	databaseURL   string
-	selfURL       string
+	region        string
+	databaseID    string
 	port          int
 	checkInterval time.Duration
 	httpTimeout   time.Duration
@@ -43,7 +45,8 @@ func loadConfig() (config, error) {
 	return config{
 		port:          port,
 		databaseURL:   databaseURL,
-		selfURL:       os.Getenv("SELF_URL"),
+		region:        envOrDefault("AWS_REGION", "local"),
+		databaseID:    os.Getenv("DB_INSTANCE_IDENTIFIER"),
 		checkInterval: time.Duration(interval) * time.Second,
 		httpTimeout:   5 * time.Second,
 	}, nil
@@ -106,7 +109,7 @@ func main() {
 	}
 }
 
-// Starts the checker, metrics pipeline, and HTTP server.
+// Starts the checker and HTTP server.
 func run() error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -130,32 +133,24 @@ func run() error {
 	if err = db.Migrate(ctx, database); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
-	if err = db.SeedTargets(ctx, database, cfg.selfURL); err != nil {
+	targets, err := db.LoadTargets("targets.json")
+	if err != nil {
+		return fmt.Errorf("load targets: %w", err)
+	}
+	if err = db.SeedTargets(ctx, database, targets); err != nil {
 		return fmt.Errorf("failed to seed targets: %w", err)
 	}
-	if custom := os.Getenv("TARGETS"); custom != "" {
-		urls := strings.Split(custom, ",")
-		for i := range urls {
-			urls[i] = strings.TrimSpace(urls[i])
-		}
-		if err = db.SeedTargetsFromList(ctx, database, urls); err != nil {
-			return fmt.Errorf("failed to seed custom targets: %w", err)
-		}
-	}
 
-	metrics, shutdown, err := monitor.NewMetrics(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create metrics pipeline: %w", err)
-	}
-
-	checker := monitor.NewChecker(database, metrics, cfg.checkInterval, cfg.httpTimeout, cfg.selfURL)
+	checker := monitor.NewChecker(database, cfg.checkInterval, cfg.httpTimeout)
 	go checker.Run(ctx)
+	topologyService := topology.New(ctx, cfg.region, cfg.databaseID)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", monitor.HandleHealthz(database))
 	mux.HandleFunc("GET /targets", monitor.HandleTargets(database))
 	mux.HandleFunc("GET /status", monitor.HandleStatus(database))
 	mux.HandleFunc("GET /history", monitor.HandleHistory(database))
+	mux.HandleFunc("GET /topology", monitor.HandleTopology(topologyService))
 	mux.Handle("GET /", http.FileServer(http.Dir("static")))
 
 	server := &http.Server{
@@ -178,9 +173,6 @@ func run() error {
 			slog.Error("http server shutdown failed", "error", shutdownErr)
 		}
 		cancel()
-		if shutdownErr := shutdown(ctxShutdown); shutdownErr != nil {
-			slog.Error("metrics shutdown failed", "error", shutdownErr)
-		}
 	}()
 
 	slog.Info("listening", "addr", server.Addr)

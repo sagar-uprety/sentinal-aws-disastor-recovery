@@ -32,7 +32,7 @@ Terraform 1.15 deprecates DynamoDB backend locking. The table remains provisione
 - Public ACLs ignored: true
 - Public buckets restricted: true
 - Bucket deletion protection: `force_destroy = false`
-- Bucket and lock table tags: `Project=sentinel-aws-dr`, `ManagedBy=terraform`, `Environment=prod`, `Purpose=state-storage`
+- Bucket and lock table tags: `Project=sentinel-aws-dr`, `ManagedBy=terraform`, `Environment=prod`
 
 ## Budget Check
 

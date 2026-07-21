@@ -8,23 +8,8 @@ variable "environment" {
   type        = string
 }
 
-variable "vpc_id" {
-  description = "ID of the VPC."
-  type        = string
-}
-
-variable "app_subnet_ids" {
-  description = "IDs of the application private subnets."
-  type        = list(string)
-}
-
 variable "ecs_cluster_name" {
-  description = "Name of the existing ECS cluster to run the monitoring services in."
-  type        = string
-}
-
-variable "app_security_group_id" {
-  description = "Security group ID of the Sentinel app ECS tasks, allowed to push OTLP metrics to the collector."
+  description = "ECS cluster name used in the running-task-count alarm."
   type        = string
 }
 

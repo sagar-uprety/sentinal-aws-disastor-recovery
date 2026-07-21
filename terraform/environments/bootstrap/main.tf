@@ -3,7 +3,8 @@ resource "aws_s3_bucket" "state" {
   bucket        = var.state_bucket_name
   force_destroy = false
   tags = {
-    Name = "${var.project_name}-terraform-state"
+    Name    = "${var.project_name}-terraform-state"
+    Purpose = "state-storage"
   }
 }
 
@@ -60,7 +61,8 @@ resource "aws_s3_bucket" "logs" {
   bucket        = "${var.state_bucket_name}-access-logs"
   force_destroy = true
   tags = {
-    Name = "${var.project_name}-terraform-state-access-logs"
+    Name    = "${var.project_name}-terraform-state-access-logs"
+    Purpose = "state-storage"
   }
 }
 
@@ -131,5 +133,9 @@ resource "aws_dynamodb_table" "lock" {
   # Uses the AWS-owned default key (free) rather than a customer-managed key.
   server_side_encryption {
     enabled = true
+  }
+
+  tags = {
+    Purpose = "state-storage"
   }
 }

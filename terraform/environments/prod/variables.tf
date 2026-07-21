@@ -4,6 +4,12 @@ variable "deploy_service" {
   default     = false
 }
 
+variable "desired_count" {
+  description = "Desired ECS task count for prod. Set to 0 while prod is rebuilt as a failback replica."
+  type        = number
+  default     = 2
+}
+
 variable "image_digest" {
   description = "Immutable ECR image digest for the ECS service, set after the phase 2 image push."
   type        = string
@@ -20,6 +26,17 @@ variable "multi_az" {
   description = "Enable RDS Multi-AZ for high availability testing."
   type        = bool
   default     = false
+}
+
+variable "replicate_source_db_arn" {
+  description = "Temporary source DB ARN used only while rebuilding prod as a failback replica."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.replicate_source_db_arn == null || can(regex("^arn:aws:rds:[a-z0-9-]+:[0-9]{12}:db:[a-zA-Z0-9-]+$", var.replicate_source_db_arn))
+    error_message = "replicate_source_db_arn must be null or an RDS DB instance ARN."
+  }
 }
 
 variable "alert_email" {
