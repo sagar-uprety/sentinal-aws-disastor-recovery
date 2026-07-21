@@ -1,0 +1,197 @@
+name: M6 Scheduled Deployment
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/m6-scheduled-deploy.yml"
+  schedule:
+    # 11:00 Europe/Berlin (CEST) on 2026-07-23.
+    - cron: "0 9 23 7 *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-operations
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  DR_AWS_REGION: eu-west-1
+  ECR_REPOSITORY: sentinel-aws-dr-prod
+  SCHEDULED_DEPLOY_DATE: "2026-07-23"
+  STATUS_URL: https://sentinel.sagaruprety.com.np
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  validate:
+    name: Validate scheduled workflow
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Run actionlint
+        shell: bash
+        run: |
+          bash <(curl --fail --silent --show-error --location https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
+  deploy:
+    name: Deploy prod and DR from zero
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment:
+      name: terraform-production
+      url: https://sentinel.sagaruprety.com.np
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Enforce one-time deployment date
+        run: |
+          actual_date="$(TZ=Europe/Berlin date +%F)"
+          if [ "$actual_date" != "$SCHEDULED_DEPLOY_DATE" ]; then
+            echo "Scheduled deployment is authorized only on $SCHEDULED_DEPLOY_DATE, not $actual_date." >&2
+            exit 1
+          fi
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: m6-scheduled-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify public Route 53 delegation
+        run: |
+          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name sentinel.sagaruprety.com.np. --query "HostedZones[?Name=='sentinel.sagaruprety.com.np.'].Id | [0]" --output text)"
+          for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text); do
+            if ! dig +short NS sentinel.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
+              echo "Missing public delegation to $nameserver." >&2
+              exit 1
+            fi
+          done
+
+      - name: Refuse deployment during failback topology
+        run: |
+          prod_source="$(aws rds describe-db-instances \
+            --region "$AWS_REGION" \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          dr_source="$(aws rds describe-db-instances \
+            --region "$DR_AWS_REGION" \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
+            echo "Database topology is in failback; refusing normal deployment." >&2
+            exit 1
+          fi
+
+      - name: Initialize prod state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Plan prod foundation
+        working-directory: terraform/environments/prod
+        run: terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan -var=multi_az=true -var=deploy_service=false
+
+      - name: Show prod foundation plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color foundation.tfplan
+
+      - name: Apply prod foundation plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=application
+          cache-to: type=gha,mode=max,scope=application
+
+      - name: Plan prod service
+        working-directory: terraform/environments/prod
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: terraform plan -input=false -lock-timeout=5m -out=service.tfplan -var=multi_az=true -var=deploy_service=true -var="image_digest=$IMAGE_DIGEST"
+
+      - name: Show prod service plan
+        working-directory: terraform/environments/prod
+        run: terraform show -no-color service.tfplan
+
+      - name: Apply prod service plan
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -lock-timeout=5m service.tfplan
+
+      - name: Wait for image replication to DR
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          for _ in {1..60}; do
+            if aws ecr describe-images \
+              --region "$DR_AWS_REGION" \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageDigest="$IMAGE_DIGEST" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "ECR image $IMAGE_DIGEST did not replicate to $DR_AWS_REGION within 10 minutes." >&2
+          exit 1
+
+      - name: Initialize DR state
+        working-directory: terraform/environments/dr
+        run: terraform init -input=false
+
+      - name: Plan DR pilot light
+        working-directory: terraform/environments/dr
+        run: terraform plan -input=false -lock-timeout=5m -out=dr.tfplan
+
+      - name: Show DR pilot-light plan
+        working-directory: terraform/environments/dr
+        run: terraform show -no-color dr.tfplan
+
+      - name: Apply DR pilot-light plan
+        working-directory: terraform/environments/dr
+        run: terraform apply -input=false -lock-timeout=5m dr.tfplan
+
+      - name: Verify DR pilot-light state
+        run: |
+          desired="$(aws ecs describe-services --region "$DR_AWS_REGION" --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
+          source="$(aws rds describe-db-instances --region "$DR_AWS_REGION" --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          test "$desired" = "0"
+          test -n "$source" && test "$source" != "None"
+
+      - name: Verify public health
+        run: curl --fail --show-error --silent --retry 30 --retry-delay 10 --retry-all-errors "$STATUS_URL/healthz"
