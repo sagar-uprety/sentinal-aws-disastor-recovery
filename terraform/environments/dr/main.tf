@@ -52,6 +52,7 @@ module "alb" {
   environment       = local.environment
   vpc_id            = module.vpc.vpc_id
   public_subnet_ids = module.vpc.public_subnet_ids
+  certificate_arn   = data.terraform_remote_state.prod.outputs.dr_certificate_arn
 }
 
 module "ecs" {
@@ -66,12 +67,12 @@ module "ecs" {
 
   # Same repository name and digest as prod; ECR replication (configured in
   # the prod environment) mirrors the image into this region.
-  image_uri           = "${local.ecr_repository_url}@${data.terraform_remote_state.prod.outputs.image_digest}"
-  db_endpoint         = module.rds.endpoint
-  db_name             = "sentinel"
-  db_user             = "sentinel"
-  db_password_ssm_arn = data.terraform_remote_state.prod.outputs.database_password_dr_ssm_arn
-  otel_endpoint       = module.monitoring.otel_collector_endpoint
+  image_uri              = "${local.ecr_repository_url}@${data.terraform_remote_state.prod.outputs.image_digest}"
+  db_endpoint            = module.rds.endpoint
+  db_name                = "sentinel"
+  db_user                = "sentinel"
+  db_instance_identifier = "${local.project_name}-${local.environment}"
+  db_password_ssm_arn    = data.terraform_remote_state.prod.outputs.database_password_dr_ssm_arn
 
   deploy_service = true
   desired_count  = var.desired_count
@@ -82,10 +83,7 @@ module "monitoring" {
 
   project_name            = local.project_name
   environment             = local.environment
-  vpc_id                  = module.vpc.vpc_id
-  app_subnet_ids          = module.vpc.app_subnet_ids
   ecs_cluster_name        = module.ecs.cluster_name
-  app_security_group_id   = module.ecs.security_group_id
   alb_arn_suffix          = module.alb.alb_arn_suffix
   target_group_arn_suffix = module.alb.target_group_arn_suffix
   ecs_desired_count       = var.desired_count

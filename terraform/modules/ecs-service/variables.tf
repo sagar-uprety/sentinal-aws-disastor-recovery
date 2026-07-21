@@ -53,10 +53,9 @@ variable "db_password_ssm_arn" {
   type        = string
 }
 
-variable "self_url" {
-  description = "Public URL of the status page for self-monitoring."
+variable "db_instance_identifier" {
+  description = "RDS DB instance identifier queried by the status page for topology metadata."
   type        = string
-  default     = ""
 }
 
 variable "deploy_service" {
@@ -87,10 +86,4 @@ variable "container_port" {
   description = "Container port for HTTP traffic."
   type        = number
   default     = 8080
-}
-
-variable "otel_endpoint" {
-  description = "OTLP HTTP endpoint for the OTel Collector."
-  type        = string
-  default     = "http://localhost:4318"
 }

@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm run build:assets && npm run build:css",
+    "build:assets": "cp ./node_modules/uplot/dist/uPlot.iife.min.js ./static/uPlot.iife.min.js && cp ./node_modules/uplot/dist/uPlot.min.css ./static/uPlot.min.css",
+    "build:css": "tailwindcss -i ./static/tailwind.css -o ./static/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.17",
+    "tailwindcss": "^4.1.17",
+    "uplot": "1.6.31"
+  }
+}

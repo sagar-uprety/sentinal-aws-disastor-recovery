@@ -18,11 +18,6 @@ output "github_actions_role_arn" {
   value       = module.github_oidc.role_arn
 }
 
-output "grafana_service_name" {
-  description = "ECS service name for Grafana, used with SSM port-forward to reach the dashboard."
-  value       = module.monitoring.grafana_service_name
-}
-
 output "sns_topic_arn" {
   description = "SNS topic ARN that CloudWatch alarms and the ECS deployment-failure EventBridge rule notify."
   value       = module.monitoring.sns_topic_arn
@@ -31,6 +26,11 @@ output "sns_topic_arn" {
 output "database_password_dr_ssm_arn" {
   description = "ARN of the DR-region SSM SecureString parameter holding the database password, read by the DR environment via remote state."
   value       = aws_ssm_parameter.database_password_dr.arn
+}
+
+output "dr_certificate_arn" {
+  description = "Validated ACM certificate ARN for the eu-west-1 DR ALB."
+  value       = aws_acm_certificate_validation.dr.certificate_arn
 }
 
 output "image_digest" {
@@ -51,4 +51,14 @@ output "rds_instance_arn" {
 output "rds_instance_class" {
   description = "Instance class of the prod RDS instance, read by the DR environment so the replica matches the same Graviton class."
   value       = "db.t4g.micro"
+}
+
+output "route53_zone_id" {
+  description = "Hosted zone ID for sentinel.sagaruprety.com.np, read by DR Route53 records."
+  value       = aws_route53_zone.sentinel.zone_id
+}
+
+output "route53_zone_name_servers" {
+  description = "NS records delegated from the Cloudflare-managed parent zone."
+  value       = aws_route53_zone.sentinel.name_servers
 }

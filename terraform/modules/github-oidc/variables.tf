@@ -18,6 +18,11 @@ variable "github_repo" {
   type        = string
 }
 
+variable "github_oidc_provider_arn" {
+  description = "ARN of the shared GitHub Actions OIDC provider created by bootstrap."
+  type        = string
+}
+
 variable "ecr_repository_arn" {
   description = "ARN of the ECR repository app.yml pushes images to."
   type        = string

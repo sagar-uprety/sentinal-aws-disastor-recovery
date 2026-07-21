@@ -1,0 +1,287 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+      - ".tflint.hcl"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Terraform operation to run.
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - deploy
+          - destroy
+      environment:
+        description: Root module for a plan. Deploy and destroy always operate on prod then DR in dependency-safe order.
+        required: true
+        default: prod
+        type: choice
+        options:
+          - prod
+          - dr
+      confirm_destroy:
+        description: Type DESTROY to enable a destroy operation.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  quality:
+    name: Format, validate, lint, and scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - uses: terraform-linters/setup-tflint@v5
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Validate root modules without remote state
+        run: |
+          for root in terraform/environments/bootstrap terraform/environments/prod terraform/environments/dr; do
+            data_dir="$RUNNER_TEMP/tf-data-${root##*/}"
+            TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
+            TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
+          done
+
+      - name: Run TFLint
+        run: tflint --recursive --config="$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          quiet: true
+          compact: true
+          skip_check: CKV_AWS_219,CKV2_AWS_19,CKV_AWS_260,CKV_AWS_2,CKV2_AWS_20,CKV_AWS_103,CKV2_AWS_28,CKV_AWS_378,CKV_AWS_157
+
+      - name: Run actionlint
+        shell: bash
+        run: |
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
+  plan:
+    name: Plan ${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+    needs: quality
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.action == 'plan' ||
+      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: terraform-production
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Initialize remote state
+        working-directory: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+        run: terraform init -input=false
+
+      - name: Create plan
+        id: terraform-plan
+        working-directory: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -no-color -input=false > plan.txt 2>&1
+          status=$?
+          set -e
+          cat plan.txt
+          test "$status" -eq 0 -o "$status" -eq 2
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v6
+        with:
+          name: terraform-plan-${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}
+          path: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.environment }}/plan.txt
+          retention-days: 7
+
+      - name: Comment plan on pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_FILE: terraform/environments/prod/plan.txt
+        run: |
+          {
+            echo '## Terraform plan (prod)'
+            echo
+            echo '<details><summary>Show plan</summary>'
+            echo
+            echo '```terraform'
+            tail -c 60000 "$PLAN_FILE"
+            echo '```'
+            echo '</details>'
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+
+  infracost:
+    name: Infracost diff
+    needs: quality
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate baseline cost estimate
+        run: infracost breakdown --path terraform --format json --out-file /tmp/infracost-base.json
+
+      - uses: actions/checkout@v7
+
+      - name: Generate cost diff
+        run: infracost diff --path terraform --compare-to /tmp/infracost-base.json --format json --out-file /tmp/infracost-diff.json
+
+      - name: Comment cost diff on pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          infracost comment github \
+            --repo "$GITHUB_REPOSITORY" \
+            --pull-request "${{ github.event.pull_request.number }}" \
+            --path /tmp/infracost-diff.json \
+            --behavior update \
+            --github-token "$GITHUB_TOKEN"
+
+  deploy:
+    name: Deploy prod then DR
+    needs: quality
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    environment: terraform-production
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Apply prod foundation
+        working-directory: terraform/environments/prod
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false -var='deploy_service=false' -var='multi_az=true'
+
+      - name: Build and push immutable image
+        id: image
+        env:
+          ECR_REPOSITORY: sentinel-aws-dr-prod
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
+          docker build --platform linux/arm64 -t "$registry/$ECR_REPOSITORY:$IMAGE_TAG" ./app
+          docker push "$registry/$ECR_REPOSITORY:$IMAGE_TAG"
+          digest="$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for ECR replication to DR
+        env:
+          ECR_REPOSITORY: sentinel-aws-dr-prod
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          for _ in {1..60}; do
+            if aws ecr describe-images \
+              --region eu-west-1 \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageDigest="$IMAGE_DIGEST" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "ECR image $IMAGE_DIGEST did not replicate to eu-west-1 within 10 minutes." >&2
+          exit 1
+
+      - name: Apply prod service
+        working-directory: terraform/environments/prod
+        run: terraform apply -auto-approve -input=false -var='deploy_service=true' -var='multi_az=true' -var='image_digest=${{ steps.image.outputs.digest }}'
+
+      - name: Apply DR pilot light
+        working-directory: terraform/environments/dr
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+  destroy:
+    name: Destroy DR then prod
+    needs: quality
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' && inputs.confirm_destroy == 'DESTROY'
+    runs-on: ubuntu-latest
+    environment: terraform-production
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Destroy DR
+        working-directory: terraform/environments/dr
+        run: |
+          terraform init -input=false
+          terraform destroy -auto-approve -input=false
+
+      - name: Destroy prod
+        working-directory: terraform/environments/prod
+        run: |
+          terraform init -input=false
+          terraform destroy -auto-approve -input=false

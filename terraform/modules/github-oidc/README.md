@@ -6,24 +6,51 @@ IAM OpenID Connect provider and role that let GitHub Actions (`app.yml`) authent
 
 GitHub Actions requests a short-lived OIDC token scoped to this repository and exchanges it for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`. The trust policy's `sub` condition restricts assumption to `repo:${github_org}/${github_repo}:*`, so no other repository or fork can assume the role. The attached policy is scoped to exactly what `app.yml` needs: push an image to one ECR repository, register a new task definition revision, and update one ECS service, no broader ECS, ECR, or IAM access.
 
+<!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name | Version |
+| ---- | ------- |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11, < 2.0 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
+
+## Providers
+
+| Name | Version |
+| ---- | ------- |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.55.0 |
+
+## Modules
+
+No modules.
+
+## Resources
+
+| Name | Type |
+| ---- | ---- |
+| [aws_iam_role.github_actions](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.app_deploy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+
 ## Inputs
 
-| Name | Description | Type | Default |
-|---|---|---|---|
-| `project_name` | Project name | `string` | — |
-| `environment` | Deployment environment | `string` | — |
-| `github_org` | GitHub org or user | `string` | — |
-| `github_repo` | GitHub repository name | `string` | — |
-| `ecr_repository_arn` | ECR repository ARN to push images to | `string` | — |
-| `ecs_cluster_arn` | ECS cluster ARN to deploy to | `string` | — |
-| `ecs_service_arn` | ECS service ARN to update | `string` | — |
-| `ecs_task_execution_role_arn` | Task execution role ARN, passed when registering a new task definition | `string` | — |
+| Name | Description | Type | Default | Required |
+| ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_ecr_repository_arn"></a> [ecr\_repository\_arn](#input\_ecr\_repository\_arn) | ARN of the ECR repository app.yml pushes images to. | `string` | n/a | yes |
+| <a name="input_ecs_cluster_arn"></a> [ecs\_cluster\_arn](#input\_ecs\_cluster\_arn) | ARN of the ECS cluster app.yml deploys to. | `string` | n/a | yes |
+| <a name="input_ecs_service_arn"></a> [ecs\_service\_arn](#input\_ecs\_service\_arn) | ARN of the ECS service app.yml updates. | `string` | n/a | yes |
+| <a name="input_ecs_task_execution_role_arn"></a> [ecs\_task\_execution\_role\_arn](#input\_ecs\_task\_execution\_role\_arn) | ARN of the ECS task execution role that app.yml must be able to pass when registering a new task definition revision. | `string` | n/a | yes |
+| <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment name. | `string` | n/a | yes |
+| <a name="input_github_oidc_provider_arn"></a> [github\_oidc\_provider\_arn](#input\_github\_oidc\_provider\_arn) | ARN of the shared GitHub Actions OIDC provider created by bootstrap. | `string` | n/a | yes |
+| <a name="input_github_org"></a> [github\_org](#input\_github\_org) | GitHub organization or user that owns the repository. | `string` | n/a | yes |
+| <a name="input_github_repo"></a> [github\_repo](#input\_github\_repo) | GitHub repository name (without owner). | `string` | n/a | yes |
+| <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
 
 ## Outputs
 
 | Name | Description |
-|---|---|
-| `role_arn` | IAM role ARN GitHub Actions assumes (set as the `AWS_ROLE_ARN` secret/var for `app.yml`) |
+| ---- | ----------- |
+| <a name="output_role_arn"></a> [role\_arn](#output\_role\_arn) | ARN of the IAM role GitHub Actions assumes via OIDC (used as AWS\_ROLE\_ARN in app.yml). |
+<!-- END_TF_DOCS -->
 
 ## IAM Exceptions
 

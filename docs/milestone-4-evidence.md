@@ -1,6 +1,6 @@
-# Milestone 4 Evidence (interim — session in progress)
+# Milestone 4 Evidence
 
-Verified on 2026-07-17 against AWS account `926883320788`, regions `eu-central-1` (prod) and `eu-west-1` (dr). Prod's workload resources had been deleted between sessions to save cost. This session: (1) rebuilt prod from zero, (2) reconciled a state-drift incident from an interrupted apply, (3) extended the `rds` module for cross-region replicas, (4) built and applied the DR environment, (5) wrote the four operator scripts. Route53/Cloudflare delegation, Route53 ARC, PITR restore, and the actual failover rehearsal are not started — see `plan.md` M4 section for why each is gated rather than incomplete.
+Verified on 2026-07-17 against AWS account `926883320788`, regions `eu-central-1` (prod) and `eu-west-1` (dr). This session rebuilt prod from zero, reconciled interrupted-apply drift, built the DR environment, delegated Route53 through Cloudflare, exercised ARC, completed an isolated PITR restore, and ran a real failover rehearsal. The reverse-replication leg of failback began but was intentionally stopped before topology reset; all workload resources were then destroyed to control cost.
 
 ## Prod Rebuild
 
@@ -58,16 +58,16 @@ Applied: 78 resources, ~20 minutes wall time (the cross-region RDS replica domin
 - CloudWatch `ReplicaLag`: spiked to ~500-600s during initial catch-up, settled to 10-17s — well under the 30s acceptance target.
 - ECS service `sentinel-aws-dr-dr`: `ACTIVE`, 0/0 running (pilot-light, as designed).
 
-**Cost note, decided explicitly, not unilaterally:** the DR stack is not free even at `desired_count=0` — NAT gateway (~$32/mo), ALB (~$16/mo), RDS replica (~$12-15/mo), and the monitoring module's OTel/Prometheus/Grafana Fargate tasks running continuously regardless of app desired_count (~$25-30/mo) puts recurring DR-only cost around $90-100+/month. Flagged to the project owner before applying (full-stack vs. trimmed-monitoring vs. hold-and-review options); project owner chose full-stack.
+**Historical cost note:** this rehearsal ran the now-removed OTel/Prometheus/Grafana Fargate stack in DR, adding roughly $25-30/month. It was removed during Milestone 5 scope review because it duplicated app data and shared the regional workload failure domain. Current DR cost estimates exclude those tasks.
 
 ## Operator Scripts
 
-`scripts/simulate-disaster.sh`, `scripts/failover.sh`, `scripts/failback.sh`, `scripts/measure.sh` — written, executable, not yet run.
+`scripts/simulate-disaster.sh`, `scripts/failover.sh`, `scripts/failback.sh`, and `scripts/measure.sh` were written and executed during the rehearsal. Those M4 revisions remain the source of the historical evidence below. A later review replaced them with hardened versions and added `switch-traffic.sh`; the current versions have passed shell syntax checks but have not run live and must be exercised in M6.
 
 Design notes:
-- None of them switch traffic automatically. `failover.sh` promotes the replica, scales DR to 2 tasks, verifies healthy targets and a fresh write via `/status`, then stops and prints the operator's next step (ARC toggle or the documented fallback) — matching the plan's "never route automatically to zero-capacity DR" rule, and the corollary that a human must also gate the *return* trip once DR is capable.
-- `failback.sh` is deliberately not a single push-button reversal: after DR accepts writes, prod's old database has diverged, and rebuilding it as a fresh replica *of* DR requires editing which environment's Terraform points at which as the replication source — a real config change, not something safe to script blind. It automates the safe, mechanical pieces (pre-failback snapshot, post-rebuild lag/verification) and prints the manual Terraform steps for the rest.
-- `measure.sh` derives RPO from the newest check row present in DR's `/status` after promotion relative to the recorded disaster-declared timestamp, per the plan's specified method — not from a replication-lag proxy.
+- `failover.sh` deliberately stops after DR readiness. The new `switch-traffic.sh` is a separate explicit gate that atomically changes both ARC controls and logs completion only after authoritative DNS plus `/topology` verify target-Region traffic.
+- `failback.sh` is deliberately not a blind topology mutation. Terraform direction changes remain reviewed manual edits, while the script verifies replica source and lag, the known DR-written row, primary readiness, restored DR replication, pilot-light desired count, and temporary snapshot cleanup.
+- `measure.sh` now isolates the newest drill segment, reports each recovery phase, measures RTO through verified public traffic, and computes row-based RPO from the same canonical target before and after promotion. Pre-promotion ReplicaLag remains separate supporting evidence.
 
 ## Cloudflare MCP
 
@@ -169,7 +169,7 @@ Route53's `HealthCheckStatus` CloudWatch metric (namespace `AWS/Route53`, region
 
 **RPO, honestly reported as two different numbers because `measure.sh`'s method has a real limitation.** The script computes RPO from the newest row DR is currently serving vs. `disaster_declared` — but by the time it was run (minutes after DR started serving traffic), DR had already resumed writing fresh checks, so the "newest row" reflects DR's own new data, not the promotion-time boundary. Its output (`RPO ~0s`, DR "fully caught up") is true but not the number that matters here. The number that matters — replica lag at the moment of promotion — was already measured continuously all session at **10-17s**, well under the 60s target. `measure.sh` also had a real bug independent of this limitation: `to_epoch` choked on fractional-second timestamps from Postgres (`date: illegal option -- d` — the BSD/GNU fallback logic was broken on both branches at once for that input). Fixed (strip trailing `Z` and fractional seconds before parsing) and verified against both a fractional and non-fractional timestamp.
 
-**Drift, confirmed visible as required:** `terraform plan` in `environments/dr` after the drill shows exactly what `docs/architecture.md` predicted — `desired_count` wanting to revert 2→0, the task definition revision wanting to revert 2→1, and the promoted RDS instance showing Terraform wanting to re-assert `replicate_source_db` (which would attempt to recreate it as a replica if applied blindly). Not applied — this is evidence to observe, not something to reconcile by blindly running `apply`.
+**Drift, confirmed visible as required:** `terraform plan` in `environments/dr` after the drill showed `desired_count` wanting to revert 2→0, the task definition revision wanting to revert 2→1, and the promoted RDS instance showing Terraform wanting to re-assert `replicate_source_db` (which would attempt to recreate it as a replica if applied blindly). Not applied — this is evidence to observe, not something to reconcile by blindly running `apply`.
 
 **Monitoring verified meaningful on both sides during activation**, not just "alarms exist": DR's five alarms (`alb-5xx`, `alb-healthy-hosts`, `ecs-running-tasks`, `rds-cpu`, `rds-free-storage`) all read `OK`. Prod's alarms correctly flipped to `ALARM` on exactly `alb-healthy-hosts` and `ecs-running-tasks` — the two signals that should trip for this specific failure — while `rds-cpu`/`rds-free-storage`/`alb-5xx` stayed `OK` (the outage was zero targets, not errors or DB load).
 
@@ -199,6 +199,6 @@ At the point of teardown, the real topology was: **DR was primary** (promoted du
 
 Before destroying, reverted `environments/prod/main.tf`'s `module.rds` block back to a standalone configuration (removed `replicate_source_db_arn` / `kms_key_id`, which pointed at DR's ARN) — left as-is, a from-zero `terraform apply` next session would try to recreate prod as a replica of an ARN that no longer exists and fail immediately.
 
-Destroy order executed: `environments/prod` first, then `environments/dr`. [Fill in actual destroy results/timings/costs here once executed.]
+Destroy order executed: `environments/prod` first, then `environments/dr`, because prod was the replica of DR at that moment. Destroy timings and Cost Explorer results were not retained; M6 records both after its final teardown.
 
 **What this means for next session:** this is not a resume-in-place. DR was destroyed along with prod, so the half-finished failback state (prod configured as DR's replica) doesn't carry forward — there's no DR left for it to replicate from. Next session starts by re-applying prod from zero (same M2 two-phase sequence) and DR from zero (same sequence as the start of this session), then re-running the topology-reset sequence documented above to actually reach the M5-ready end state this session stopped short of.

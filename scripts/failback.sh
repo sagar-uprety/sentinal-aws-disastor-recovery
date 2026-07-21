@@ -1,83 +1,180 @@
 #!/usr/bin/env bash
-# Failback is NOT a single reversible command: once DR has accepted writes,
-# the old prod database has diverged and cannot simply "resume" as primary.
-# This script automates the safe, mechanical pieces (snapshot, post-rebuild
-# verification) and prints the manual Terraform steps for the parts that
-# require editing which environment replicates from which -- doing that
-# silently from a script would be a bigger blast radius than typing it.
-#
-# Usage:
-#   ./failback.sh snapshot   Snapshot the stale prod DB before touching it.
-#   ./failback.sh verify     After the Terraform rebuild below, verify the
-#                            new prod replica is lagging < 30s and has a
-#                            known post-promotion row.
+# Verifies guarded failback phases; topology-changing Terraform edits stay manual.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/drill-lib.sh"
 
 PROD_REGION="eu-central-1"
 DR_REGION="eu-west-1"
 PROD_DB_ID="sentinel-aws-dr-prod"
 DR_DB_ID="sentinel-aws-dr-dr"
-DRILL_LOG="${DRILL_LOG:-./drill-events.log}"
+PROD_CLUSTER="sentinel-aws-dr-prod"
+PROD_SERVICE="sentinel-aws-dr-prod"
+DR_CLUSTER="sentinel-aws-dr-dr"
+DR_SERVICE="sentinel-aws-dr-dr"
+STATUS_HOST="status.sentinel.sagaruprety.com.np"
+RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
+FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-30}"
 
-log_event() {
-  echo "${1}	$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$DRILL_LOG"
+latest_replica_lag() {
+  local region="$1" database="$2" start
+  start="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+  aws cloudwatch get-metric-statistics \
+    --region "$region" \
+    --namespace AWS/RDS \
+    --metric-name ReplicaLag \
+    --dimensions Name=DBInstanceIdentifier,Value="$database" \
+    --start-time "$start" \
+    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --period 60 --statistics Maximum \
+    --query 'sort_by(Datapoints, &Timestamp)[-1].Maximum' --output text
 }
 
-cmd="${1:-}"
-
-case "$cmd" in
+case "${1:-}" in
 snapshot)
+  [ "${CONFIRM_FAILBACK_SNAPSHOT:-}" = "YES" ] || {
+    echo "Set CONFIRM_FAILBACK_SNAPSHOT=YES to create the temporary safety snapshot." >&2
+    exit 1
+  }
   snapshot_id="${PROD_DB_ID}-pre-failback-$(date -u +%Y%m%d%H%M%S)"
-  echo "Snapshotting stale prod DB as ${snapshot_id} before any failback changes..."
   aws rds create-db-snapshot \
     --region "$PROD_REGION" \
     --db-instance-identifier "$PROD_DB_ID" \
     --db-snapshot-identifier "$snapshot_id" >/dev/null
   aws rds wait db-snapshot-available --region "$PROD_REGION" --db-snapshot-identifier "$snapshot_id"
-  log_event "prod_pre_failback_snapshot:${snapshot_id}"
-  echo "Snapshot complete. Now do the manual rebuild steps below, then run: $0 verify"
-  cat <<'EOF'
+  record_event_at "prod_pre_failback_snapshot" "$snapshot_id"
+  cat <<EOF
+Snapshot $snapshot_id is available.
 
-Manual rebuild (Terraform-driven, not scripted):
-  1. In terraform/environments/prod/main.tf, point module.rds at the DR
-     instance as its replication source (replicate_source_db_arn = DR's
-     ARN, same pattern the dr environment currently uses against prod).
-  2. terraform destroy -target=module.rds in prod (removes the stale,
-     diverged instance -- the snapshot above is the safety net).
-  3. terraform apply in prod to create the new prod-region replica of the
-     now-primary DR database.
-  4. Do NOT revert step 1 in DR yet -- DR remains primary until this new
-     replica is available and verified.
+Next manual Terraform phase:
+  1. Declare prod RDS as a cross-Region replica of the promoted DR database.
+  2. Review a plan that destroys only the stale prod DB and creates its replacement replica.
+  3. Apply, wait for the new prod replica, then run: scripts/failback.sh verify-replica
 
-Destructive alternative (documented, not automated): restore prod directly
-from the pre-failback snapshot instead of reverse-replicating. Faster, but
-loses every write made in DR after promotion -- state the data-loss window
-and RTO explicitly if you use this path instead.
+Delete the snapshot after topology reset evidence is complete:
+  CONFIRM_DELETE_SNAPSHOT=YES scripts/failback.sh delete-snapshot $snapshot_id
 EOF
   ;;
 
-verify)
-  echo "Checking replica lag on rebuilt prod (${PROD_DB_ID})..."
-  lag="$(aws cloudwatch get-metric-statistics \
+verify-replica)
+  read -r status source <<<"$(aws rds describe-db-instances \
     --region "$PROD_REGION" \
-    --namespace AWS/RDS \
-    --metric-name ReplicaLag \
-    --dimensions Name=DBInstanceIdentifier,Value="$PROD_DB_ID" \
-    --start-time "$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
-    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --period 60 --statistics Average \
-    --query 'sort_by(Datapoints, &Timestamp)[-1].Average' --output text)"
-  echo "Replica lag: ${lag}s"
-  if [ "$lag" = "None" ]; then
-    echo "No lag datapoint yet -- replica may still be initializing. Retry shortly." >&2
+    --db-instance-identifier "$PROD_DB_ID" \
+    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+  if [ "$status" != "available" ] || [[ "$source" != *"$DR_DB_ID"* ]]; then
+    echo "ERROR: prod is not an available replica of $DR_DB_ID." >&2
     exit 1
   fi
-  log_event "failback_replica_lag:${lag}s"
-  echo "Confirm a known row written in DR is present in the rebuilt prod replica before switching traffic back."
+  lag="$(latest_replica_lag "$PROD_REGION" "$PROD_DB_ID")"
+  if [ -z "$lag" ] || [ "$lag" = "None" ] || [ "$lag" = "-1" ]; then
+    echo "ERROR: prod replica lag is unavailable." >&2
+    exit 1
+  fi
+  if ! awk -v lag="$lag" -v target="$FAILBACK_LAG_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
+    echo "ERROR: prod replica lag ${lag}s exceeds ${FAILBACK_LAG_TARGET_SECONDS}s." >&2
+    exit 1
+  fi
+  record_event_at "failback_replica_lag_seconds" "$lag"
+  log_event "failback_replica_verified"
+  cat <<EOF
+Prod is an available replica of DR with ReplicaLag ${lag}s.
+
+Next manual phase:
+  1. Stop or freeze application writes briefly if this were a real incident.
+  2. Promote prod and wait until it is an available standalone DB.
+  3. Register/start prod ECS against the promoted endpoint, but keep ARC on DR.
+  4. Run: CONFIRM_FAILBACK_READY=YES scripts/failback.sh ready
+EOF
+  ;;
+
+ready)
+  [ "${CONFIRM_FAILBACK_READY:-}" = "YES" ] || {
+    echo "Set CONFIRM_FAILBACK_READY=YES after prod promotion and service startup." >&2
+    exit 1
+  }
+  require_current_event "failback_replica_verified"
+  require_current_event "dr_known_row"
+  known_row="$(current_event_ts dr_known_row)"
+
+  read -r db_status source multi_az <<<"$(aws rds describe-db-instances \
+    --region "$PROD_REGION" \
+    --db-instance-identifier "$PROD_DB_ID" \
+    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
+  if [ "$db_status" != "available" ] || { [ -n "$source" ] && [ "$source" != "None" ]; } || [ "$multi_az" != "True" ]; then
+    echo "ERROR: prod must be an available standalone Multi-AZ database before traffic returns." >&2
+    exit 1
+  fi
+
+  read -r desired running <<<"$(aws ecs describe-services \
+    --region "$PROD_REGION" \
+    --cluster "$PROD_CLUSTER" \
+    --services "$PROD_SERVICE" \
+    --query 'services[0].[desiredCount,runningCount]' --output text)"
+  if [ "$desired" != "2" ] || [ "$running" != "2" ]; then
+    echo "ERROR: prod ECS is not stable at 2/2 tasks." >&2
+    exit 1
+  fi
+
+  alb_dns="$(aws elbv2 describe-load-balancers \
+    --region "$PROD_REGION" \
+    --names "sentinel-aws-dr-prod-alb" \
+    --query 'LoadBalancers[0].DNSName' --output text)"
+  encoded_target="$(jq -rn --arg value "$RPO_TARGET_URL" '$value | @uri')"
+  history="$(curl -fsS --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/history?target=${encoded_target}&limit=500")"
+  if ! jq -e --arg known "$known_row" 'any(.[]; .checked_at == $known)' >/dev/null <<<"$history"; then
+    echo "ERROR: promoted prod does not contain the known row written in DR at $known_row." >&2
+    exit 1
+  fi
+  log_event "failback_ready"
+  echo "Prod is Multi-AZ, healthy, and contains the known DR-written row. Run: CONFIRM_TRAFFIC_SWITCH=PRIMARY scripts/switch-traffic.sh primary"
+  ;;
+
+verify-reset)
+  require_current_event "failback_ready"
+  require_current_event "traffic_verified_primary"
+  read -r dr_status dr_source <<<"$(aws rds describe-db-instances \
+    --region "$DR_REGION" \
+    --db-instance-identifier "$DR_DB_ID" \
+    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+  if [ "$dr_status" != "available" ] || [[ "$dr_source" != *"$PROD_DB_ID"* ]]; then
+    echo "ERROR: DR is not an available replica of restored prod." >&2
+    exit 1
+  fi
+  read -r dr_desired dr_running <<<"$(aws ecs describe-services \
+    --region "$DR_REGION" \
+    --cluster "$DR_CLUSTER" \
+    --services "$DR_SERVICE" \
+    --query 'services[0].[desiredCount,runningCount]' --output text)"
+  if [ "$dr_desired" != "0" ] || [ "$dr_running" != "0" ]; then
+    echo "ERROR: DR ECS is not reset to pilot-light count 0." >&2
+    exit 1
+  fi
+  lag="$(latest_replica_lag "$DR_REGION" "$DR_DB_ID")"
+  if [ -z "$lag" ] || [ "$lag" = "None" ] || [ "$lag" = "-1" ]; then
+    echo "ERROR: restored DR replica lag is unavailable." >&2
+    exit 1
+  fi
+  record_event_at "topology_reset_replica_lag_seconds" "$lag"
+  log_event "topology_reset_verified"
+  echo "Primary-to-DR replica topology and pilot-light ECS count are restored."
+  ;;
+
+delete-snapshot)
+  snapshot_id="${2:-}"
+  [ "${CONFIRM_DELETE_SNAPSHOT:-}" = "YES" ] && [ -n "$snapshot_id" ] || {
+    echo "Usage: CONFIRM_DELETE_SNAPSHOT=YES $0 delete-snapshot <snapshot-id>" >&2
+    exit 1
+  }
+  aws rds delete-db-snapshot \
+    --region "$PROD_REGION" \
+    --db-snapshot-identifier "$snapshot_id" >/dev/null
+  record_event_at "prod_pre_failback_snapshot_deleted" "$snapshot_id"
+  echo "Snapshot deletion requested: $snapshot_id"
   ;;
 
 *)
-  echo "Usage: $0 {snapshot|verify}" >&2
+  echo "Usage: $0 {snapshot|verify-replica|ready|verify-reset|delete-snapshot <id>}" >&2
   exit 1
   ;;
 esac

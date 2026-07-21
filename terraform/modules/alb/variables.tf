@@ -17,3 +17,8 @@ variable "public_subnet_ids" {
   description = "IDs of the public subnets for the ALB."
   type        = list(string)
 }
+
+variable "certificate_arn" {
+  description = "ACM certificate ARN for the HTTPS listener in the ALB region."
+  type        = string
+}

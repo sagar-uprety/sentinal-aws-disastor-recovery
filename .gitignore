@@ -69,6 +69,11 @@ app/sentinel
 # Go vendor
 vendor/
 
+# Node dependencies used to build static Tailwind CSS
+app/node_modules/
+app/static/uPlot.iife.min.js
+app/static/uPlot.min.css
+
 # Local env secrets
 .env
 

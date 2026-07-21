@@ -1,7 +1,19 @@
 output "state_bucket" {
-  value = aws_s3_bucket.state.id
+  description = "Name of the S3 bucket that stores Terraform state."
+  value       = aws_s3_bucket.state.id
 }
 
 output "lock_table" {
-  value = aws_dynamodb_table.lock.name
+  description = "Name of the DynamoDB compatibility lock table."
+  value       = aws_dynamodb_table.lock.name
+}
+
+output "github_oidc_provider_arn" {
+  description = "ARN of the shared GitHub Actions OIDC provider."
+  value       = aws_iam_openid_connect_provider.github.arn
+}
+
+output "terraform_github_actions_role_arn" {
+  description = "ARN of the GitHub Actions role that provisions Sentinel infrastructure."
+  value       = aws_iam_role.terraform_github_actions.arn
 }

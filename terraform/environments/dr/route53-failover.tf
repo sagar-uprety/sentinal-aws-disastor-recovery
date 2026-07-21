@@ -6,7 +6,7 @@ module "route53_failover" {
   source = "../../modules/route53-failover"
 
   project_name    = local.project_name
-  route53_zone_id = aws_route53_zone.sentinel.zone_id
+  route53_zone_id = data.terraform_remote_state.prod.outputs.route53_zone_id
   record_name     = "status.sentinel.sagaruprety.com.np"
 
   primary_alb_dns_name = data.terraform_remote_state.prod.outputs.alb_dns_name

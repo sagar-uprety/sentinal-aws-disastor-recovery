@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"sentinel-aws-dr/app/internal/db"
+	"sentinel-aws-dr/app/internal/topology"
 )
 
 // reports readiness based on database connectivity.
@@ -43,7 +44,7 @@ func HandleTargets(database *sql.DB) http.HandlerFunc {
 		for i, t := range targets {
 			resp[i] = targetResp{ID: t.ID, URL: t.URL}
 		}
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, resp)
 	}
 }
 
@@ -59,7 +60,7 @@ func HandleStatus(database *sql.DB) http.HandlerFunc {
 		if statuses == nil {
 			statuses = []db.TargetStatus{}
 		}
-		writeJSON(w, http.StatusOK, statuses)
+		writeJSON(w, statuses)
 	}
 }
 
@@ -87,14 +88,21 @@ func HandleHistory(database *sql.DB) http.HandlerFunc {
 		if checks == nil {
 			checks = []db.CheckRow{}
 		}
-		writeJSON(w, http.StatusOK, checks)
+		writeJSON(w, checks)
+	}
+}
+
+// returns runtime ECS and RDS topology for the status-page resilience view.
+func HandleTopology(service *topology.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, service.Snapshot(r.Context()))
 	}
 }
 
 // writes a JSON response with the requested status code.
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("json encode failed", "error", err)
 	}

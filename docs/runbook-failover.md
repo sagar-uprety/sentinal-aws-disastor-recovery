@@ -1,52 +1,117 @@
 # Failover Runbook
 
-Measured against a real rehearsal executed 2026-07-17. Every number below is what was actually observed, not an estimate — where a step wasn't run twice, that's stated rather than implied.
+AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model: the eu-west-1 database replica, VPC, ALB, ECS service definition, ECR image, SSM parameter, monitoring, and ARC controls exist before the drill, while ECS desired count remains 0.
 
-## When to Use This
+The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measurements below remain evidence of that run. Current hardened scripts require live M6 execution before they can replace those measurements.
 
-A confirmed regional failure or severe degradation of prod (eu-central-1) that ALB/ECS/RDS self-healing (Multi-AZ failover, circuit-breaker rollback) cannot address, because the failure is regional rather than a single AZ or a single bad deployment. Do not use this for problems those existing mechanisms already handle — check them first.
+## Preconditions
 
-## Step-by-Step, With Measured Durations
+- Primary serves `https://status.sentinel.sagaruprety.com.np` with two healthy ECS targets.
+- DR RDS is an available read replica and DR ECS desired count is 0.
+- The immutable image digest exists in eu-west-1 ECR.
+- The eu-west-1 SSM SecureString metadata and version are current.
+- ARC controls are primary `On`, DR `Off`; safety rules require exactly one active control.
+- Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
 
-| # | Step | Command | Measured duration | Notes |
-|---|---|---|---|---|
-| 1 | Declare the disaster | `scripts/simulate-disaster.sh` (drill) / operator judgment (real incident) | — | Sets prod ECS `desired_count=0` in a drill; in a real regional outage this step is the confirmed outage itself, not scripted |
-| 2 | Confirm the outage is real | `curl -o /dev/null -w '%{http_code}' http://<prod-alb>/healthz` | ~30s (ALB `deregistration_delay`) | Got `200` briefly after scale-to-0 (draining), then `503` once targets fully drained — don't declare on the first check |
-| 3 | Invoke failover | `scripts/failover.sh` | 532s (8m52s) end-to-end, `failover_invoked`→`dr_write_verified` | Promotes replica, registers a DR task definition against the promoted endpoint, scales DR to 2, waits for stability, verifies healthy targets and a fresh write |
-| 3a | — replica promotion | `aws rds promote-read-replica` (inside the script) | included above; promotion + settle to `available` took the bulk of it | **Irreversible** — permanently ends replication from prod. See Failback below. |
-| 3b | — DR scale-up | `aws ecs update-service --desired-count 2` (inside the script) | included above | Circuit breaker enabled; would auto-rollback the task definition if it kept failing |
-| 4 | Verify DR is really ready | `aws elbv2 describe-target-health`, `curl .../status` | included above | Both targets `healthy`, `/status` showing check timestamps newer than the promotion |
-| 5 | Switch traffic (operator-gated, separate step) | `aws route53-recovery-cluster update-routing-control-states --update-routing-control-state-entries RoutingControlArn=<primary>,RoutingControlState=Off RoutingControlArn=<dr>,RoutingControlState=On` | ~60-90s for Route53's `HealthCheckStatus` to propagate after the API call returns | **Single atomic call for both controls** — never two sequential calls, which would pass through an invalid intermediate state and trip a safety rule |
-| 6 | Confirm traffic actually reached DR | `dig @<a-route53-nameserver> A status.sentinel.sagaruprety.com.np`, `curl http://status.sentinel.sagaruprety.com.np/healthz` | — | Query a Route53 nameserver directly, not a caching resolver |
-| 7 | Post-recovery: harden DR to Multi-AZ | `aws rds modify-db-instance --multi-az --apply-immediately` | see `docs/milestone-4-evidence.md` for the measured window | Reported separately from RTO — this is hardening after recovery, not part of it |
+## Drill Sequence
 
-**End-to-end RTO** (`disaster_declared` → `traffic_switched`): **736 seconds (12m16s)**, against the section 4.3 target of 30 minutes.
-**Operator-invocation automation duration** (`failover_invoked` → `dr_write_verified`, i.e. how much of that 736s the scripts actually automated): **532 seconds (8m52s)**.
-This was one rehearsal, not two — the M4 acceptance criterion requires one; running twice and reporting both is M5's job.
+1. Start and confirm the controlled outage:
 
-## RPO: Two Different Numbers for Two Different Failure Modes
+   ```bash
+   CONFIRM_DISASTER=YES DRILL_LOG=./drill-events.log scripts/simulate-disaster.sh
+   ```
 
-**Replica-promotion path** (target: 60s): the honest measurement is replica lag *right before* promotion, not a post-hoc data comparison. `measure.sh` checks the newest row DR is serving against the disaster-declared timestamp — but that check is structurally blind once DR resumes writing new checks, which happens within seconds of the service scaling up. In this rehearsal, `ReplicaLag` measured continuously through the session sat at 10-17s, including immediately before the promotion call — that's the real data-loss window for this path, well under the 60s target.
+   The script verifies pilot-light prerequisites, records the newest primary row for the canonical RPO target, scales primary ECS to 0, and records `outage_confirmed` only after the primary ALB returns 503 with zero healthy targets. It restores the original desired count if confirmation fails.
 
-**PITR corruption path** (no fixed target — section 4.3 says measure it, not assume it): **~12 minutes** observed, from a real drill (`docs/milestone-4-evidence.md`). This is a fundamentally different, much larger number than the replica-promotion RPO because it reflects the automated-backup replication mechanism's restore granularity, not continuous streaming replication. Use replica promotion for a live regional failure; reserve PITR restore for the scenario it actually targets — corrupted or deleted data, where promoting a replica would just promote the corruption.
+2. Independently review `drill-events.log`, primary target health, and user impact. Promotion is irreversible.
 
-## Post-Promotion Billing Cleanup
+3. Promote and activate DR:
 
-While DR is serving as primary: prod's original RDS instance is stopped receiving replication (but still running and billing), the ARC cluster continues billing at $2.50/cluster-hour, and DR is now running at full desired_count=2 rather than pilot-light 0. None of this is free-running infrastructure — the project owner controls teardown timing, but should not let a rehearsal or drill remain in "DR is primary" state indefinitely without being aware of the cost delta.
+   ```bash
+   CONFIRM_FAILOVER=YES DRILL_LOG=./drill-events.log scripts/failover.sh
+   ```
 
-## Failback: Why the Old Primary Can't Just Resume
+   Before promotion, the script requires the current outage marker, validates the replica, regional immutable image, regional SSM parameter, and fresh ReplicaLag evidence. It then promotes RDS, starts two ECS tasks across two AZs, requires two healthy ALB targets, verifies a fresh database write, and records the newest matching pre-outage row available in DR. It does not switch traffic.
 
-Once DR has accepted writes, prod's original database has diverged — it stopped replicating at the moment of promotion, while DR kept moving. "Failing back" is not restarting replication in reverse from where it left off.
+4. Switch the pre-created ARC controls as a separate operator gate:
 
-**Safe path (reverse-replicate, verify, then switch back):**
-1. `scripts/failback.sh snapshot` — snapshots the stale prod instance before touching it (a safety net, not a recovery mechanism).
-2. Edit Terraform: point `environments/prod`'s `rds` module at DR (now primary) as the replication source — the same pattern DR's module already uses against prod, in reverse.
-3. `terraform destroy -target=module.rds` in prod (removes the stale instance — the snapshot above is why this is safe), then `terraform apply` to create prod as a fresh replica of DR.
-4. `scripts/failback.sh verify` — checks replica lag and prints a reminder to confirm a known DR-written row is present in the rebuilt prod replica.
-5. Once caught up and verified: this is the point where a decision is made — either promote prod back and re-establish DR as its replica (full round-trip to the original topology), or continue running with DR as primary if that's now the intended steady state.
+   ```bash
+   CONFIRM_TRAFFIC_SWITCH=DR DRILL_LOG=./drill-events.log scripts/switch-traffic.sh dr
+   ```
 
-**Documented-but-not-required-here alternative (destructive, faster):** restore prod directly from the pre-failback snapshot instead of reverse-replicating. Faster, but discards every write made in DR after promotion. State the data-loss window and RTO explicitly if this path is ever used instead — it is not equivalent to the safe path and must never be presented as such.
+   The script discovers the ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies the resulting states. It records completion only after authoritative Route53 DNS and `/topology` prove eu-west-1 serves the canonical hostname.
 
-## Scripted Route53 Fallback (Documented, Not Used in This Rehearsal)
+5. Print measurements:
 
-If ARC itself is unavailable, a direct Route53 record update (`UPSERT` on the failover A-records) can move traffic without the data-plane API. This is explicitly a **less resilient control-plane operation** — it goes through Route53's regular API rather than ARC's purpose-built, highly-available data plane, and does not carry the same safety-rule guarantees against a bad state. Documented here as the emergency fallback; not exercised, and never to be presented as equivalent evidence to the ARC-gated switch actually measured above.
+   ```bash
+   DRILL_LOG=./drill-events.log scripts/measure.sh
+   ```
+
+   RTO runs from `outage_confirmed` through `traffic_verified`. The report also prints promotion, task startup, target health, write verification, and routing phases.
+
+6. Harden the promoted DR database after service recovery. This is not part of RTO:
+
+   ```bash
+   aws rds modify-db-instance \
+     --region eu-west-1 \
+     --db-instance-identifier sentinel-aws-dr-dr \
+     --multi-az \
+     --apply-immediately
+   aws rds wait db-instance-available \
+     --region eu-west-1 \
+     --db-instance-identifier sentinel-aws-dr-dr
+   ```
+
+## Measurement Semantics
+
+The replica-promotion RPO target is 60 seconds. `simulate-disaster.sh` records the canonical target's newest primary check before the outage. After promotion, `failover.sh` reads DR history and records the newest matching row at or before `outage_confirmed`. `measure.sh` reports their difference as row-based observed RPO.
+
+`failover.sh` also records the latest fresh CloudWatch `ReplicaLag` maximum before promotion. AWS documents `ReplicaLag=0` as synchronized and `-1` as inactive or unknown. The script refuses a drill promotion when evidence is missing, stale, or above 60 seconds unless the operator explicitly sets `ALLOW_RPO_TARGET_MISS=YES` to preserve and report a deliberate target miss.
+
+M4 historical result: `failover_invoked` through fresh DR write verification was 532 seconds. The former 736-second disaster-to-switch number ended at a manually recorded ARC request and is retained only as historical M4 evidence. It is not the M6 RTO definition.
+
+## Failback And Topology Reset
+
+Once DR accepts writes, old prod has diverged and cannot simply resume.
+
+1. Create a temporary safety snapshot:
+
+   ```bash
+   CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/failback.sh snapshot
+   ```
+
+2. Declare prod RDS as a replica of promoted DR in Terraform. Review the replacement plan, apply it, then verify source and lag:
+
+   ```bash
+   DRILL_LOG=./drill-events.log scripts/failback.sh verify-replica
+   ```
+
+3. Promote prod, convert it to Multi-AZ, and start two prod tasks while ARC still routes to DR. Verify prod contains the exact known row written in DR:
+
+   ```bash
+   CONFIRM_FAILBACK_READY=YES DRILL_LOG=./drill-events.log scripts/failback.sh ready
+   ```
+
+4. Atomically return traffic and verify public prod service:
+
+   ```bash
+   CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
+   ```
+
+5. Rebuild DR as a replica of restored prod, return DR ECS to desired count 0, then verify reset:
+
+   ```bash
+   DRILL_LOG=./drill-events.log scripts/failback.sh verify-reset
+   ```
+
+6. Delete the temporary snapshot after evidence capture using the exact command printed by `failback.sh snapshot`.
+
+Do not begin drill two until `topology_reset_verified` exists and Terraform plans show the intended primary-to-DR topology.
+
+## Corruption Alternative
+
+Replica promotion is wrong for logical corruption because replication carries corruption to DR. Use the cross-Region automated-backup PITR procedure instead, restore into an isolated database, validate known data, and record the restore point and duration. The real M4 isolated restore took 12m11s; this is historical evidence, not a promised duration.
+
+## Emergency Route53 Fallback
+
+If ARC data-plane endpoints are unavailable, a deliberate Route53 record update can move traffic after the same readiness checks. This uses the Route53 control plane, lacks ARC safety-rule protection, has not been exercised, and must not be presented as equivalent to the verified ARC path.

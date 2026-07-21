@@ -1,71 +1,95 @@
 #!/usr/bin/env bash
-# Reads the tab-separated event log written by simulate-disaster.sh and
-# failover.sh, then prints measured RTO (and the operator-invocation-only
-# portion of it) and an observed RPO derived from the newest pre-disaster
-# check row still present in DR after promotion.
+# Reports phase timing and row-based RPO for the current drill only.
 set -euo pipefail
 
-DR_REGION="eu-west-1"
-DRILL_LOG="${DRILL_LOG:-./drill-events.log}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/drill-lib.sh"
+
+if [ "${1:-}" = "record-traffic-switch" ]; then
+  echo "ERROR: manual traffic timestamps are disabled. Use switch-traffic.sh so ARC state, authoritative DNS, and DR traffic are verified." >&2
+  exit 1
+fi
 
 if [ ! -f "$DRILL_LOG" ]; then
-  echo "No drill log at ${DRILL_LOG}. Run simulate-disaster.sh and failover.sh first." >&2
+  echo "No drill log at $DRILL_LOG." >&2
   exit 1
 fi
+
+current_log="$(mktemp)"
+trap 'rm -f "$current_log"' EXIT
+awk -F'\t' '
+  $1 == "drill_started" { delete lines; count = 0 }
+  { lines[++count] = $0 }
+  END { for (i = 1; i <= count; i++) print lines[i] }
+' "$DRILL_LOG" >"$current_log"
 
 event_ts() {
-  # Last matching timestamp for the given event name, empty if absent.
-  awk -F'\t' -v e="$1" '$1 == e { ts = $2 } END { print ts }' "$DRILL_LOG"
+  awk -F'\t' -v event="$1" '$1 == event { value = $2 } END { print value }' "$current_log"
 }
 
-to_epoch() {
-  # Strip the trailing Z and any fractional seconds (e.g. from Postgres
-  # timestamptz JSON output) before parsing -- BSD date's -j -f requires an
-  # exact format match and silently fails otherwise, and the GNU fallback
-  # doesn't exist on macOS, so an untrimmed timestamp broke this on both
-  # branches at once.
-  local clean="${1%Z}"
-  clean="${clean%%.*}"
-  date -u -j -f "%Y-%m-%dT%H:%M:%S" "$clean" +%s 2>/dev/null || date -u -d "${clean}Z" +%s
+require_event() {
+  local timestamp
+  timestamp="$(event_ts "$1")"
+  if [ -z "$timestamp" ]; then
+    echo "ERROR: current drill is missing $1." >&2
+    exit 1
+  fi
 }
+
+duration() {
+  printf '%s' "$(( $(to_epoch "$2") - $(to_epoch "$1") ))"
+}
+
+for event in outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy dr_write_verified traffic_switch_requested traffic_verified_dr primary_last_check dr_pre_outage_last_check replica_lag_seconds; do
+  require_event "$event"
+done
 
 disaster_ts="$(event_ts disaster_declared)"
+outage_ts="$(event_ts outage_confirmed)"
 invoked_ts="$(event_ts failover_invoked)"
-verified_ts="$(event_ts dr_write_verified)"
-switched_ts="$(event_ts traffic_switched)"
+promoted_ts="$(event_ts replica_promoted)"
+stable_ts="$(event_ts dr_service_stable)"
+healthy_ts="$(event_ts dr_targets_healthy)"
+write_ts="$(event_ts dr_write_verified)"
+switch_requested_ts="$(event_ts traffic_switch_requested)"
+verified_ts="$(event_ts traffic_verified_dr)"
+primary_last_check="$(event_ts primary_last_check)"
+dr_last_check="$(event_ts dr_pre_outage_last_check)"
+replica_lag="$(event_ts replica_lag_seconds)"
 
-if [ -z "$disaster_ts" ] || [ -z "$verified_ts" ]; then
-  echo "Log is missing disaster_declared or dr_write_verified; drill is incomplete." >&2
+rto_seconds="$(duration "$outage_ts" "$verified_ts")"
+automation_seconds="$(duration "$invoked_ts" "$write_ts")"
+rpo_seconds="$(duration "$dr_last_check" "$primary_last_check")"
+if [ "$rpo_seconds" -lt 0 ]; then
+  echo "ERROR: row-based RPO is negative; target rows are not comparable." >&2
   exit 1
 fi
 
-rto_end_ts="${switched_ts:-$verified_ts}"
-rto_seconds=$(( $(to_epoch "$rto_end_ts") - $(to_epoch "$disaster_ts") ))
-automation_seconds=$(( $(to_epoch "$verified_ts") - $(to_epoch "$invoked_ts") ))
+cat <<EOF
+=== Recovery timeline ===
+Disaster declared:         ${disaster_ts:-not recorded}
+Outage confirmed:          $outage_ts
+Failover invoked:          $invoked_ts
+Replica promoted:          $promoted_ts
+DR service stable:         $stable_ts
+Two ALB targets healthy:   $healthy_ts
+Fresh DR write verified:   $write_ts
+ARC switch requested:      $switch_requested_ts
+Public DR traffic verified:$verified_ts
 
-echo "=== RTO ==="
-echo "Disaster declared:        ${disaster_ts}"
-[ -n "$switched_ts" ] && echo "Traffic switched:         ${switched_ts}"
-echo "DR write verified:        ${verified_ts}"
-echo "End-to-end RTO:           ${rto_seconds}s"
-echo "Operator-invocation automation duration (failover_invoked -> dr_write_verified): ${automation_seconds}s"
+Detection to invocation:   $(duration "$outage_ts" "$invoked_ts")s
+Replica promotion phase:   $(duration "$invoked_ts" "$promoted_ts")s
+Task startup phase:        $(duration "$promoted_ts" "$stable_ts")s
+Target health phase:       $(duration "$stable_ts" "$healthy_ts")s
+Write verification phase:  $(duration "$healthy_ts" "$write_ts")s
+Routing verification phase:$(duration "$switch_requested_ts" "$verified_ts")s
 
-echo
-echo "=== RPO ==="
-dr_alb_dns="$(aws elbv2 describe-load-balancers \
-  --region "$DR_REGION" \
-  --names "sentinel-aws-dr-dr-alb" \
-  --query 'LoadBalancers[0].DNSName' --output text)"
+End-to-end RTO:            ${rto_seconds}s
+Automation duration:       ${automation_seconds}s
 
-# Newest check row timestamp DR is currently serving. Right after promotion
-# and before the app resumes writing new checks, this is the newest
-# pre-disaster row that survived -- i.e. the data-loss window.
-newest_row_ts="$(curl -sS "http://${dr_alb_dns}/status" | jq -r '[.[].last_checked] | max')"
-echo "Newest row present in DR: ${newest_row_ts}"
-
-if [ "$(to_epoch "$newest_row_ts")" -le "$(to_epoch "$disaster_ts")" ]; then
-  rpo_seconds=$(( $(to_epoch "$disaster_ts") - $(to_epoch "$newest_row_ts") ))
-  echo "Observed RPO:              ${rpo_seconds}s"
-else
-  echo "Newest DR row is at or after disaster_declared: DR had fully caught up, RPO ~0s."
-fi
+=== Replica-promotion RPO ===
+Newest primary target row before outage: $primary_last_check
+Newest matching pre-outage row in DR:    $dr_last_check
+Row-based observed RPO:                  ${rpo_seconds}s
+Pre-promotion ReplicaLag maximum:        ${replica_lag}s
+EOF

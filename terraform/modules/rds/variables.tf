@@ -37,6 +37,8 @@ variable "password_wo" {
   description = "Master database password (write-only). Ignored when replicate_source_db_arn is set; replicas inherit the source instance's credentials."
   type        = string
   default     = ""
+  sensitive   = true
+  ephemeral   = true
 }
 
 variable "password_wo_version" {

@@ -10,19 +10,9 @@ Verified on 2026-07-17 against AWS account `926883320788`, region `eu-central-1`
 - Phase 2 (`deploy_service=true`): 2 resources, app service reached 2/2 running.
 - `multi_az=false` for this rebuild since Multi-AZ failover mechanics were already proven in M2; kept off here for cost.
 
-## Monitoring Module (OTel Collector, Prometheus, Grafana)
+## Superseded Telemetry Stack
 
-All three run as separate Fargate ECS services (256 CPU / 512 MB, ARM64, desired_count=1) in the app private subnets, connected over an AWS Cloud Map private DNS namespace (`sentinel-aws-dr-prod.internal`). No public entry point; Grafana is reached only via `aws ecs execute-command` (SSM), matching the plan's "SSM port-forward for the demo" option.
-
-**Bug found and fixed during verification:** the Grafana container tried to write `/var/lib/grafana/dashboards/sentinel.json` before that directory existed (only `/etc/grafana/provisioning/*` is pre-created in the image). Fixed with an explicit `mkdir -p` in the container's startup script; new task definition revision deployed cleanly.
-
-**Live verification** (via `aws ecs execute-command` into the Grafana task, querying over the internal namespace):
-- Prometheus query `sentinel_target_up` returned real data: `{target="https://github.com"} = 1`, `{target="https://www.google.com"} = 1`.
-- Grafana `/api/health`: `{"database":"ok"}`.
-- Grafana `/api/search?query=Sentinel`: the provisioned "Sentinel" dashboard (`uid=sentinel-status`) is present.
-- Grafana `/api/datasources`: Prometheus datasource provisioned, `isDefault=true`, pointed at `http://prometheus.sentinel-aws-dr-prod.internal:9090`.
-
-`session-manager-plugin` was installed locally without root (extracted the AWS-provided zip bundle's `bin/` directly into `~/.local/bin`) since the Homebrew cask installer required sudo that wasn't available in this session.
+This milestone originally deployed OTel Collector, Prometheus, and Grafana as three single-task Fargate services. They were verified during this historical session, then removed from the project during Milestone 5 review. The stack duplicated check data already stored in PostgreSQL, used task-ephemeral metric storage, and shared the workload failure domain. Current project monitoring is CloudWatch alarms, SNS, EventBridge, Route53 health checks, ARC routing-control state, and recorded drill evidence.
 
 ## Alerting (CloudWatch alarms, SNS, EventBridge)
 

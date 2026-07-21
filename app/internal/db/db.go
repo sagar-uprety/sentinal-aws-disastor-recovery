@@ -3,8 +3,11 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -75,16 +78,41 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// Inserts default and optional self-check targets once.
-func SeedTargets(ctx context.Context, db *sql.DB, selfURL string) error {
-	defaults := []string{
-		"https://www.google.com",
-		"https://github.com",
+// Loads target URLs from a version-controlled JSON file.
+func LoadTargets(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open targets file: %w", err)
 	}
-	if selfURL != "" {
-		defaults = append(defaults, selfURL)
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Error("close targets file failed", "error", closeErr)
+		}
+	}()
+
+	var config struct {
+		Targets []string `json:"targets"`
 	}
-	return SeedTargetsFromList(ctx, db, defaults)
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
+		return nil, fmt.Errorf("decode targets file: %w", err)
+	}
+	if len(config.Targets) == 0 {
+		return nil, fmt.Errorf("targets file must contain at least one target")
+	}
+	for _, target := range config.Targets {
+		parsed, err := url.ParseRequestURI(target)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return nil, fmt.Errorf("invalid target URL %q", target)
+		}
+	}
+	return config.Targets, nil
+}
+
+// Inserts configured targets once.
+func SeedTargets(ctx context.Context, db *sql.DB, targets []string) error {
+	return SeedTargetsFromList(ctx, db, targets)
 }
 
 // Inserts the given URLs as targets, ignoring duplicates.
@@ -140,6 +168,7 @@ func GetLatestPerTarget(ctx context.Context, db *sql.DB) ([]TargetStatus, error)
 			c.target_url, c.is_up, c.status_code, c.response_ms, c.checked_at,
 			COALESCE(u.uptime, 0) AS uptime_pct
 		FROM checks c
+		INNER JOIN targets t ON t.url = c.target_url
 		LEFT JOIN (
 			SELECT target_url,
 				ROUND(100.0 * SUM(CASE WHEN is_up THEN 1 ELSE 0 END) / COUNT(*), 1) AS uptime
