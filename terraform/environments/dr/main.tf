@@ -67,7 +67,7 @@ module "alb" {
   environment       = local.environment
   vpc_id            = module.vpc.vpc_id
   public_subnet_ids = module.vpc.public_subnet_ids
-  certificate_arn   = data.terraform_remote_state.prod.outputs.dr_certificate_arn
+  certificate_arn   = aws_acm_certificate_validation.dr.certificate_arn
 }
 
 module "ecs" {

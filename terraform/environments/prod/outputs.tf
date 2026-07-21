@@ -28,11 +28,6 @@ output "database_password_dr_ssm_arn" {
   value       = aws_ssm_parameter.database_password_dr.arn
 }
 
-output "dr_certificate_arn" {
-  description = "Validated ACM certificate ARN for the eu-west-1 DR ALB."
-  value       = aws_acm_certificate_validation.dr.certificate_arn
-}
-
 output "rds_engine_version" {
   description = "Resolved PostgreSQL engine version running in prod, read by the DR environment to validate the replica matches before creation."
   value       = data.aws_rds_engine_version.postgres.version
