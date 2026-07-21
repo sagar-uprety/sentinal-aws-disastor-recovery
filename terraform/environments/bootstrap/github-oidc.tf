@@ -26,6 +26,49 @@ resource "aws_iam_role" "terraform_github_actions" {
   })
 }
 
+# Pull requests need read-only AWS and state access for speculative plans without entering the production environment.
+resource "aws_iam_role" "terraform_github_plan" {
+  name = "${var.project_name}-terraform-github-plan"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:pull_request"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "terraform_plan_view_only" {
+  role       = aws_iam_role.terraform_github_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
+}
+
+resource "aws_iam_role_policy" "terraform_plan_state" {
+  name = "${var.project_name}-terraform-plan-state"
+  role = aws_iam_role.terraform_github_plan.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:ListBucket"]
+      Resource = [aws_s3_bucket.state.arn]
+      }, {
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = ["${aws_s3_bucket.state.arn}/*"]
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "terraform_state" {
   name = "${var.project_name}-terraform-state"
   role = aws_iam_role.terraform_github_actions.id

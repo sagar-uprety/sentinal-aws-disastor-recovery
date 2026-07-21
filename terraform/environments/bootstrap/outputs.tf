@@ -18,6 +18,11 @@ output "terraform_github_actions_role_arn" {
   value       = aws_iam_role.terraform_github_actions.arn
 }
 
+output "terraform_github_plan_role_arn" {
+  description = "ARN of the read-only GitHub Actions role used for pull-request Terraform plans."
+  value       = aws_iam_role.terraform_github_plan.arn
+}
+
 output "route53_zone_id" {
   description = "Persistent hosted zone ID for sentinel.sagaruprety.com.np."
   value       = aws_route53_zone.sentinel.zone_id

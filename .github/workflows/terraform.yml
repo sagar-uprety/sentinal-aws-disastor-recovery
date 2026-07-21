@@ -114,7 +114,6 @@ jobs:
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: terraform-production
     permissions:
       contents: read
       id-token: write
@@ -134,7 +133,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-to-assume: ${{ github.event_name == 'pull_request' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_ROLE_ARN }}
           role-session-name: terraform-plan-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
@@ -146,6 +145,9 @@ jobs:
         working-directory: ${{ env.TF_ROOT }}
         run: |
           plan_args=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            plan_args+=("-lock=false")
+          fi
           if [ "${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}" = "prod" ]; then
             plan_args+=("-var=deploy_service=false" "-var=multi_az=true")
           fi

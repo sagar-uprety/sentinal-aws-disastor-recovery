@@ -48,6 +48,7 @@ Before its first GitHub Actions run, repository settings must provide:
 
 - Environments `terraform-production` and `production`, both restricted to `main`. Required reviewers are unavailable on the repository's current GitHub billing plan, so manual workflow dispatch, typed confirmations, safety prechecks, saved plans, and separate plan/apply jobs are the available gates.
 - Bootstrap apply output `terraform_github_actions_role_arn`, set as repository variable `AWS_TERRAFORM_ROLE_ARN`. Bootstrap manages this reviewed, explicit-action Terraform role; the existing `AWS_ROLE_ARN` is app-deploy-only and must not be reused.
+- Bootstrap apply output `terraform_github_plan_role_arn`, set as repository variable `AWS_TERRAFORM_PLAN_ROLE_ARN`. This role trusts only the pull-request OIDC subject and has AWS `ViewOnlyAccess` plus read-only state access; speculative PR plans disable state locking because the role cannot write lock files, and the role cannot apply infrastructure.
 - Prod foundation output `github_actions_role_arn`, set as repository variable `AWS_ROLE_ARN` before using application deployment.
 
 The Terraform role uses a staged-permission model for its first complete deployment: AWS `PowerUserAccess` covers non-IAM service APIs, while inline IAM permissions are limited to project-prefixed roles, exact workload `iam:PassRole` targets, the repository OIDC provider, and required service-linked roles. This is intentionally broader than the final target. M6 must use CloudTrail-backed IAM Access Analyzer policy generation, review and test the result, then replace `PowerUserAccess`; generated policy output is a starting point, not automatically trusted.
@@ -56,7 +57,7 @@ The Terraform role and persistent hosted zone were created by the approved boots
 
 ## Final Session Procedure
 
-1. Bootstrap was applied on 2026-07-21 and `terraform_github_actions_role_arn` was set as `AWS_TERRAFORM_ROLE_ARN`. `terraform-production` is restricted to `main`; configure `production` before application deployment.
+1. Bootstrap was applied on 2026-07-21; deployment and read-only PR plan role outputs were set as `AWS_TERRAFORM_ROLE_ARN` and `AWS_TERRAFORM_PLAN_ROLE_ARN`. `terraform-production` is restricted to `main`; configure `production` before application deployment.
 2. Delegate bootstrap's Route53 nameservers in Cloudflare once, verify public NS resolution, then dispatch `terraform.yml` from `main` with `operation=deploy` to plan/apply prod foundation, publish and replicate the immutable image, plan/apply prod service, and plan/apply DR pilot light.
 3. Verify prod, DR, replication, ECR image digest, SSM metadata, and ARC initial state before beginning a drill.
 4. Run first drill. Use `recovery.yml` to complete and measure topology reset before second drill.
