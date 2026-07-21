@@ -17,17 +17,6 @@ resource "aws_acm_certificate" "primary" {
   }
 }
 
-resource "aws_acm_certificate" "dr" {
-  provider = aws.dr
-
-  domain_name       = local.app_hostname
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
 resource "aws_route53_record" "certificate_validation" {
   for_each = {
     for dvo in aws_acm_certificate.primary.domain_validation_options : dvo.domain_name => {
@@ -50,10 +39,18 @@ resource "aws_acm_certificate_validation" "primary" {
   validation_record_fqdns = [for record in aws_route53_record.certificate_validation : record.fqdn]
 }
 
-# ACM reuses the validation CNAME for the same FQDN in one AWS account, including across Regions.
-resource "aws_acm_certificate_validation" "dr" {
-  provider = aws.dr
+removed {
+  from = aws_acm_certificate.dr
 
-  certificate_arn         = aws_acm_certificate.dr.arn
-  validation_record_fqdns = [for record in aws_route53_record.certificate_validation : record.fqdn]
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_acm_certificate_validation.dr
+
+  lifecycle {
+    destroy = false
+  }
 }
