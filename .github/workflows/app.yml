@@ -274,6 +274,8 @@ jobs:
             --cluster "$DR_ECS_CLUSTER" \
             --services "$DR_ECS_SERVICE" \
             --query 'services[0].[desiredCount,taskDefinition]' --output text)"
+          # JMESPath backticks are literals, not shell substitutions.
+          # shellcheck disable=SC2016
           image="$(aws ecs describe-task-definition \
             --region "$DR_AWS_REGION" \
             --task-definition "$task_definition" \

@@ -291,6 +291,8 @@ jobs:
                 --cluster sentinel-aws-dr-prod \
                 --services sentinel-aws-dr-prod \
                 --query 'services[0].taskDefinition' --output text)"
+              # JMESPath backticks are literals, not shell substitutions.
+              # shellcheck disable=SC2016
               image="$(aws ecs describe-task-definition \
                 --task-definition "$task_definition" \
                 --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"

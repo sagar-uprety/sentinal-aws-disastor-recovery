@@ -136,6 +136,8 @@ jobs:
             --cluster sentinel-aws-dr-dr \
             --services sentinel-aws-dr-dr \
             --query 'services[0].taskDefinition' --output text)"
+          # JMESPath backticks are literals, not shell substitutions.
+          # shellcheck disable=SC2016
           image="$(aws ecs describe-task-definition \
             --region eu-west-1 \
             --task-definition "$task_definition" \
@@ -288,6 +290,8 @@ jobs:
             --cluster sentinel-aws-dr-prod \
             --services sentinel-aws-dr-prod \
             --query 'services[0].taskDefinition' --output text)"
+          # JMESPath backticks are literals, not shell substitutions.
+          # shellcheck disable=SC2016
           image="$(aws ecs describe-task-definition \
             --region eu-central-1 \
             --task-definition "$task_definition" \
