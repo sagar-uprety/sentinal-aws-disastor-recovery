@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type TargetRow struct {
@@ -110,18 +110,34 @@ func LoadTargets(path string) ([]string, error) {
 	return config.Targets, nil
 }
 
-// Inserts configured targets once.
+// Reconciles database targets with version-controlled configuration.
 func SeedTargets(ctx context.Context, db *sql.DB, targets []string) error {
 	return SeedTargetsFromList(ctx, db, targets)
 }
 
-// Inserts the given URLs as targets, ignoring duplicates.
+// Inserts configured URLs and removes obsolete targets while retaining check history.
 func SeedTargetsFromList(ctx context.Context, db *sql.DB, urls []string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin target reconciliation: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			slog.Error("rollback target reconciliation failed", "error", rollbackErr)
+		}
+	}()
+
 	for _, url := range urls {
-		_, err := db.ExecContext(ctx, `INSERT INTO targets (url) VALUES ($1) ON CONFLICT (url) DO NOTHING`, url)
+		_, err = tx.ExecContext(ctx, `INSERT INTO targets (url) VALUES ($1) ON CONFLICT (url) DO NOTHING`, url)
 		if err != nil {
 			return fmt.Errorf("seed target %s: %w", url, err)
 		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM targets WHERE NOT (url = ANY($1))`, pq.Array(urls)); err != nil {
+		return fmt.Errorf("remove obsolete targets: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit target reconciliation: %w", err)
 	}
 	return nil
 }

@@ -9,7 +9,7 @@ variable "route53_zone_id" {
 }
 
 variable "record_name" {
-  description = "Fully qualified record name the failover pair is published under (e.g. status.sentinel.sagaruprety.com.np)."
+  description = "Fully qualified record name where the failover pair publishes the application."
   type        = string
 }
 

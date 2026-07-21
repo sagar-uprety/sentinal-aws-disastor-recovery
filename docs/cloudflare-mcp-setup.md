@@ -49,7 +49,7 @@ through Route53 instead of Cloudflare:
 2. Via this MCP connection: add an `NS` record for `sentinel` in the
    `sagaruprety.com.np` Cloudflare zone, pointing at those 4 nameservers.
 3. Verify with `dig NS sentinel.sagaruprety.com.np` (expect the Route53
-   nameservers) and `dig A status.sentinel.sagaruprety.com.np` (expect it to
+   nameservers) and `dig A sentinel.sagaruprety.com.np` (expect it to
    resolve through Route53, not Cloudflare).
 
 ## Removing it later

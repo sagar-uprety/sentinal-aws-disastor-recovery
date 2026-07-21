@@ -10,7 +10,7 @@ DR_CLUSTER="sentinel-aws-dr-dr"
 DR_SERVICE="sentinel-aws-dr-dr"
 DR_DB_ID="sentinel-aws-dr-dr"
 DR_ECS_ALARM_NAME="sentinel-aws-dr-dr-ecs-running-tasks"
-STATUS_HOST="status.sentinel.sagaruprety.com.np"
+STATUS_HOST="sentinel.sagaruprety.com.np"
 RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
 RPO_TARGET_SECONDS="${RPO_TARGET_SECONDS:-60}"
 
