@@ -146,7 +146,7 @@ jobs:
         run: |
           plan_args=()
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            plan_args+=("-lock=false")
+            plan_args+=("-lock=false" "-refresh=false")
           fi
           if [ "${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}" = "prod" ]; then
             plan_args+=("-var=deploy_service=true" "-var=multi_az=true")
