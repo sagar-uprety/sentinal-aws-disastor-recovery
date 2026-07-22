@@ -118,20 +118,27 @@
       const computeDetails = [
         detail('Region', escapeHTML(compute.region)),
         detail('Tasks', `${Number(compute.running_count || 0)} / ${Number(compute.desired_count || 0)} running`),
-        detail('Availability zones', zones),
+        detail('Across AZs', zones),
         detail('Task IDs', taskIDs, true),
       ].join('');
+      const dbBadge = db.available ? (db.role === 'writer' ? (db.multi_az ? 'writer · Multi‑AZ' : 'writer · single') : 'read replica') : 'unavailable';
       const dbDetails = [
         detail('Region', escapeHTML(db.region)),
         detail('Writer zone', escapeHTML(db.availability_zone)),
-        detail('Managed standby', escapeHTML(db.secondary_availability_zone || 'Not reported')),
-        detail('Status', escapeHTML(db.status)),
-      ].join('');
+        detail('Standby zone', escapeHTML(db.secondary_availability_zone || (db.multi_az ? 'available (AZ hidden)' : 'none'))),
+      ];
+      if (db.read_replica_source) {
+        const src = db.read_replica_source.split(':').pop();
+        dbDetails.push(detail('Replicates from', escapeHTML(src), true));
+      }
+      dbDetails.push(detail('Status', escapeHTML(db.status)));
+      const dbDegraded = !db.available || db.role !== 'writer' || !db.multi_az;
       const computeReady = compute.available && compute.desired_count > 0 && compute.running_count === compute.desired_count && compute.multi_az;
       grid.innerHTML = node('AP', 'Serving task', escapeHTML(app.task_definition || 'Local development'), appDetails, escapeHTML(app.launch_type || 'local'), false)
         + node('ECS', 'Compute spread', escapeHTML(compute.name), computeDetails, computeReady ? 'HA ready' : 'Degraded', !computeReady)
-        + node('DB', 'Data authority', escapeHTML(db.identifier), dbDetails, escapeHTML(db.available ? db.role : 'unavailable'), !db.available);
-      updated.innerHTML = '<span class="size-1.5 rounded-full bg-emerald-500"></span>Live infrastructure data';
+        + node('DB', 'Data authority', escapeHTML(db.identifier), dbDetails.join(''), dbBadge, dbDegraded);
+      const overallOK = computeReady && !dbDegraded;
+      updated.innerHTML = `<span class="size-1.5 rounded-full ${overallOK ? 'bg-emerald-500' : 'bg-amber-500'}"></span>${overallOK ? 'All layers healthy' : 'Degraded — check DB and compute cards'}`;
     }
 
     function timeAgo(t) {
