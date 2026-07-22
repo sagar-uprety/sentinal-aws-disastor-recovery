@@ -30,7 +30,7 @@ Expected: only tasks currently placed in that AZ stop. This is controlled applic
 CONFIRM_HA=YES scripts/simulate-ha.sh db
 ```
 
-Expected: `/healthz` can become unavailable briefly during failover. The script verifies Multi-AZ, records writer and standby AZs, samples public health every five seconds, requires RDS and public health to recover, requires the writer AZ to change, and records recovery seconds plus interruption samples. The topology card shows the writer and managed standby zones exchanged.
+Expected: `/healthz` can become unavailable briefly during failover. The script verifies Multi-AZ, retains a known database row, records writer and standby AZs, samples public health every five seconds, requires RDS and public health to recover, requires the writer AZ to change, verifies the known row still exists, and records recovery seconds plus interruption samples. The topology card shows the writer and managed standby zones exchanged.
 
 ## Do Not Confuse With DR
 

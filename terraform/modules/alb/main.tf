@@ -160,6 +160,23 @@ resource "aws_lb_listener" "http" {
   }
 }
 
+# Route53 detection checks reach application health directly; all other HTTP requests redirect to HTTPS.
+resource "aws_lb_listener_rule" "http_health" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 1
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/healthz"]
+    }
+  }
+}
+
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
   port              = 443

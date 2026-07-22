@@ -11,6 +11,7 @@ SERVICE="sentinel-aws-dr-prod"
 DATABASE="sentinel-aws-dr-prod"
 TARGET_GROUP="sentinel-aws-dr-prod-tg"
 STATUS_HOST="sentinel.sagaruprety.com.np"
+RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
 
 if [ "${CONFIRM_HA:-}" != "YES" ]; then
   echo "Set CONFIRM_HA=YES to run a controlled HA drill." >&2
@@ -56,7 +57,7 @@ task_az_count() {
 }
 
 require_healthy_baseline() {
-  local desired running healthy az_count status
+  local desired running healthy az_count status topology
   local tasks=()
   read -r desired running <<<"$(aws ecs describe-services \
     --region "$REGION" \
@@ -67,7 +68,8 @@ require_healthy_baseline() {
   healthy="$(healthy_target_count)"
   az_count="$(task_az_count "${tasks[@]}")"
   status="$(public_health_status)"
-  if [ "$desired" != "2" ] || [ "$running" != "2" ] || [ "${#tasks[@]}" -ne 2 ] || [ "$healthy" != "2" ] || [ "$az_count" != "2" ] || [ "$status" != "200" ]; then
+  topology="$(curl -fsS "https://${STATUS_HOST}/topology" || true)"
+  if [ "$desired" != "2" ] || [ "$running" != "2" ] || [ "${#tasks[@]}" -ne 2 ] || [ "$healthy" != "2" ] || [ "$az_count" != "2" ] || [ "$status" != "200" ] || ! jq -e '.application.region == "eu-central-1" and .database.identifier == "sentinel-aws-dr-prod" and .database.available == true' >/dev/null <<<"$topology"; then
     echo "ERROR: HA baseline requires ECS 2/2, two task AZs, two healthy targets, and public HTTP 200." >&2
     echo "Observed desired=$desired running=$running tasks=${#tasks[@]} azs=$az_count healthy=$healthy http=$status." >&2
     exit 1
@@ -161,6 +163,14 @@ az)
   ;;
 
 db)
+  encoded_target="$(jq -rn --arg value "$RPO_TARGET_URL" '$value | @uri')"
+  history_before="$(curl -fsS "https://${STATUS_HOST}/history?target=${encoded_target}&limit=1")"
+  known_row="$(jq -r '.[0].checked_at // empty' <<<"$history_before")"
+  if [ -z "$known_row" ]; then
+    echo "ERROR: no database row is available for the Multi-AZ continuity check." >&2
+    exit 1
+  fi
+  record_event_at "ha_db_known_row_before" "$known_row"
   read -r multi_az writer_az standby_az <<<"$(aws rds describe-db-instances \
     --region "$REGION" \
     --db-instance-identifier "$DATABASE" \
@@ -198,6 +208,12 @@ db)
     echo "ERROR: database writer and public health did not recover after forced failover." >&2
     exit 1
   fi
+  history_after="$(curl -fsS "https://${STATUS_HOST}/history?target=${encoded_target}&limit=500")"
+  if ! jq -e --arg known "$known_row" 'any(.[]; .checked_at == $known)' >/dev/null <<<"$history_after"; then
+    echo "ERROR: known pre-failover database row is missing after Multi-AZ recovery." >&2
+    exit 1
+  fi
+  record_event_at "ha_db_known_row_after" "$known_row"
   elapsed=$(( $(date -u +%s) - started ))
   record_event_at "ha_db_recovery_seconds" "$elapsed"
   record_event_at "ha_db_health_interruption_samples" "$health_interruptions"

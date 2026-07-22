@@ -40,7 +40,7 @@ duration() {
   printf '%s' "$(( $(to_epoch "$2") - $(to_epoch "$1") ))"
 }
 
-for event in outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy dr_write_verified traffic_switch_requested traffic_verified_dr primary_last_check dr_pre_outage_last_check replica_lag_seconds; do
+for event in outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy dr_write_verified traffic_switch_requested traffic_verified_dr primary_last_check dr_pre_outage_last_check replica_lag_seconds replica_lag_timestamp; do
   require_event "$event"
 done
 
@@ -56,6 +56,7 @@ verified_ts="$(event_ts traffic_verified_dr)"
 primary_last_check="$(event_ts primary_last_check)"
 dr_last_check="$(event_ts dr_pre_outage_last_check)"
 replica_lag="$(event_ts replica_lag_seconds)"
+replica_lag_timestamp="$(event_ts replica_lag_timestamp)"
 
 rto_seconds="$(duration "$outage_ts" "$verified_ts")"
 automation_seconds="$(duration "$invoked_ts" "$write_ts")"
@@ -88,8 +89,9 @@ End-to-end RTO:            ${rto_seconds}s
 Automation duration:       ${automation_seconds}s
 
 === Replica-promotion RPO ===
-Newest primary target row before outage: $primary_last_check
+Newest primary target row observed during drain: $primary_last_check
 Newest matching pre-outage row in DR:    $dr_last_check
-Row-based observed RPO:                  ${rpo_seconds}s
+Row-based observed RPO (non-transactional boundary): ${rpo_seconds}s
 Pre-promotion ReplicaLag maximum:        ${replica_lag}s
+ReplicaLag datapoint timestamp:          $replica_lag_timestamp
 EOF

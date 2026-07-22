@@ -11,6 +11,7 @@ The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measure
 - The immutable image digest exists in eu-west-1 ECR.
 - The eu-west-1 SSM SecureString metadata and version are current.
 - ARC controls are primary `On`, DR `Off`; safety rules require exactly one active control.
+- Before injecting failure, run `CONFIRM_TRAFFIC_SWITCH=INITIALIZE DRILL_LOG=./drill-events.log scripts/switch-traffic.sh initialize` and verify primary `On`, DR `Off`.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
 - Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, and ARC operations. This project does not provision a separate local recovery role.
 
@@ -40,7 +41,7 @@ The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measure
    CONFIRM_TRAFFIC_SWITCH=DR DRILL_LOG=./drill-events.log scripts/switch-traffic.sh dr
    ```
 
-   The script discovers the ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies the resulting states. It records completion only after authoritative Route53 DNS and `/topology` prove eu-west-1 serves the canonical hostname.
+   The script discovers the ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies the resulting states. It records completion only after authoritative Route53 DNS and `/topology` prove eu-west-1 serves the canonical hostname. This demo discovers identifiers through AWS control-plane APIs immediately before switching; a production runbook should retain the five data-plane endpoints and control ARNs out of band.
 
 5. Print measurements:
 
@@ -75,13 +76,13 @@ M4 historical result: `failover_invoked` through fresh DR write verification was
 
 Once DR accepts writes, old prod has diverged and cannot simply resume.
 
-1. Create a temporary safety snapshot:
+1. Snapshot the active DR writer while it still serves traffic. This protects all post-failover writes before former prod is replaced:
 
    ```bash
    CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/failback.sh snapshot
    ```
 
-2. Dispatch the protected workflow that validates the snapshot, discovers the promoted DR ARN, saves the logged replacement plan, and applies that exact plan in its dependent job:
+2. Dispatch the guarded recovery workflow. It validates the active-DR snapshot and writer, saves the reverse-replication plan, and applies that exact plan in a dependent job:
 
    ```bash
    gh workflow run recovery.yml --ref main \
@@ -96,9 +97,10 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    DRILL_LOG=./drill-events.log scripts/failback.sh verify-replica
    ```
 
-3. Promote prod, convert it to Multi-AZ, and start two prod tasks while ARC still routes to DR. Then verify prod contains the exact known row written in DR:
+3. Verify prod is a fresh reverse replica. Then begin a planned failback interruption by scaling DR compute to zero and retaining the last observed DR row. Only after writes are frozen does the script recheck fresh lag evidence, promote prod, convert it to Multi-AZ, and start prod tasks. DR and prod are never independent active writers:
 
    ```bash
+   CONFIRM_FAILBACK_FREEZE=YES DRILL_LOG=./drill-events.log scripts/failback.sh freeze-writes
    CONFIRM_PRIMARY_PROMOTION=YES DRILL_LOG=./drill-events.log scripts/failback.sh promote-primary
    CONFIRM_FAILBACK_READY=YES DRILL_LOG=./drill-events.log scripts/failback.sh ready
    ```
@@ -109,7 +111,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
    ```
 
-5. Dispatch the protected workflow that saves both logged plans, reconciles promoted prod as standalone, rebuilds DR as prod's replica, and returns DR ECS to desired count 0:
+5. Dispatch the guarded reset workflow. Its exact saved plans reconcile prod as standalone, rebuild DR as prod's replica, and retain DR ECS at desired count zero:
 
    ```bash
    gh workflow run recovery.yml --ref main \
@@ -123,9 +125,9 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    DRILL_LOG=./drill-events.log scripts/failback.sh verify-reset
    ```
 
-6. Delete the temporary snapshot after evidence capture using the exact command printed by `failback.sh snapshot`.
+6. Delete the active-DR safety snapshot after reset evidence is retained, using the exact command printed by `failback.sh snapshot`.
 
-Do not begin drill two until `topology_reset_verified` exists and Terraform plans show the intended primary-to-DR topology.
+Do not declare reset complete until `topology_reset_verified` exists and Terraform plans show the intended primary-to-DR topology. Any optional second drill must wait for that gate.
 
 ## Corruption Alternative
 

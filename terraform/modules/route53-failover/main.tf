@@ -88,7 +88,8 @@ resource "aws_route53_health_check" "dr" {
   }
 }
 
-# Detection-only: plain HTTP health checks against each ALB's /healthz, for
+# Detection-only: HTTP health checks reach an explicit /healthz forwarding rule;
+# every other HTTP path redirects to HTTPS. These checks are for
 # evidence and alarming. Not attached to any record and not part of the
 # traffic-switch path -- only the RECOVERY_CONTROL health checks above gate
 # DNS. failure_threshold=3 (consecutive failures, ~90s at the default

@@ -115,15 +115,31 @@ jobs:
         working-directory: terraform/environments/prod
         run: terraform init -input=false
 
+      - name: Detect existing prod service
+        id: prod-service
+        run: |
+          service_arn="$(aws ecs describe-services \
+            --cluster sentinel-aws-dr-prod \
+            --services sentinel-aws-dr-prod \
+            --query 'services[?status!=`INACTIVE`].serviceArn | [0]' --output text 2>/dev/null || true)"
+          if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Plan prod foundation
+        if: steps.prod-service.outputs.exists != 'true'
         working-directory: terraform/environments/prod
         run: terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan -var=multi_az=true -var=deploy_service=false
 
       - name: Show prod foundation plan
+        if: steps.prod-service.outputs.exists != 'true'
         working-directory: terraform/environments/prod
         run: terraform show -no-color foundation.tfplan
 
       - name: Apply prod foundation plan
+        if: steps.prod-service.outputs.exists != 'true'
         working-directory: terraform/environments/prod
         run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
 
