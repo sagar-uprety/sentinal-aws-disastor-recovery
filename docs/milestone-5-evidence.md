@@ -73,3 +73,4 @@ The Terraform role and persistent hosted zone were created by the approved boots
 - Mandatory drill RTO/RPO and topology-reset duration. A second drill is optional after M6.
 - DR outage-window query/export, final Cost Explorer amount, and teardown output. Video evidence is not required.
 - ECS task/AZ and RDS writer/standby topology panel observed during the final HA and pilot-light drills.
+- Website Recovery topology retained before and after every visible transition: ECS task replacement, AZ-capacity injection/recovery, RDS writer/standby exchange, DR traffic activation, and prod traffic restoration. Standby-only DR reset state is retained from AWS/Terraform checks instead of inferred from the active website.

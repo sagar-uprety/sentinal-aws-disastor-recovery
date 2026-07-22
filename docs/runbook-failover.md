@@ -43,6 +43,8 @@ The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measure
 
    The script discovers the ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies the resulting states. It records completion only after authoritative Route53 DNS and `/topology` prove eu-west-1 serves the canonical hostname. This demo discovers identifiers through AWS control-plane APIs immediately before switching; a production runbook should retain the five data-plane endpoints and control ARNs out of band.
 
+   Retain the refreshed website Recovery topology after the switch. It must show eu-west-1 for the serving task, compute, and database; two running tasks across two AZs with `HA ready`; and the promoted DR database as available writer. During the injected outage, the canonical website being unavailable is expected evidence rather than a topology-rendering failure.
+
 5. Print measurements:
 
    ```bash
@@ -111,6 +113,8 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
    ```
 
+   Retain the refreshed website Recovery topology showing eu-central-1 for the serving task, compute, and database; two running tasks across two AZs with `HA ready`; and the prod database as available Multi-AZ writer.
+
 5. Dispatch the guarded reset workflow. Its exact saved plans reconcile prod as standalone, rebuild DR as prod's replica, and retain DR ECS at desired count zero:
 
    ```bash
@@ -126,6 +130,8 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    ```
 
 6. Delete the active-DR safety snapshot after reset evidence is retained, using the exact command printed by `failback.sh snapshot`.
+
+The active prod website cannot display DR desired count zero or primary-to-DR replica direction after reset. Verify those standby-only properties through the workflow output, AWS APIs, and `failback.sh verify-reset`; do not infer them from the website.
 
 Do not declare reset complete until `topology_reset_verified` exists and Terraform plans show the intended primary-to-DR topology. Any optional second drill must wait for that gate.
 
