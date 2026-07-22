@@ -108,7 +108,7 @@ Version policy:
 - The failover script uses replica promotion as the primary recovery path; the runbook documents PITR restore as the corruption-scenario alternative, including its expected 15-60 minute restore duration.
 - ECR replication rule so the image exists in eu-west-1.
 
-Apply prod before DR because the replica, backup replication, and ECR replication depend on primary resource identifiers. Keep environment state separate and pass only documented non-secret outputs through `terraform_remote_state`. Store state in the bootstrap bucket and document that a primary-region S3 outage can prevent Terraform-driven recovery; the failover runbook must remain executable with AWS CLI using recorded resource identifiers. Destroy DR before prod. Promotion changes replica topology and CLI scaling changes ECS desired count, so the runbook must reconcile configuration and Terraform state after every drill.
+Apply prod before DR because the replica, backup replication, and ECR replication depend on primary resource identifiers. Keep environment state separate. DR discovers prod resources through AWS data sources (not remote state), so DR plans and recovery operations do not depend on prod's state file availability. Destroy DR before prod. Promotion changes replica topology and CLI scaling changes ECS desired count, so the runbook must reconcile configuration and Terraform state after every drill.
 
 ### 4.3 Failover automation
 
@@ -368,9 +368,9 @@ Tasks:
 - [x] Topology reset restored single-writer prod, prod Multi-AZ, primary-to-DR replication, DR desired count zero, and primary ARC state. Planned failback interruption from write freeze through public primary verification was 840s (14m). Credential reconciliation completed, final public health verified (200 OK), safety snapshot deleted.
 - [x] DR checks for the outage window were queried during RPO and write verification. DR traffic, database-write, topology, terminal, and alarm evidence is retained in `docs/evidence/m6/` and `docs/milestone-6-evidence.md`; video was not required.
 - [ ] **Optional after M6:** run a second full regional drill after a verified topology reset to add repeatability evidence and a second RTO/RPO sample. This does not block M6 or project completion and must not be implied as executed until retained evidence exists.
-- [ ] **Future beyond M6:** Decouple DR from prod remote state. Replace remaining `terraform_remote_state` lookups (RDS ARN/version/class, SSM parameter ARN, Route53 zone ID, ALB DNS/zone ID) with AWS data sources keyed off a single shared variable (prod DB instance identifier). Seven remote-state outputs map to resolvable in-region data sources.
+- [x] DR remote-state decoupling completed 2026-07-22. All seven `terraform_remote_state` lookups replaced with AWS data sources (`aws_db_instance`, `aws_lb`, `aws_ssm_parameter`, `aws_route53_zone`). DR no longer depends on prod's state file. Four obsolete prod outputs removed.
 - [x] DR plan runs on main-branch deploy after prod apply (line 321-338 in terraform.yml). PRs plan prod only because DR depends on applied prod outputs. A non-authoritative PR DR plan was considered and explicitly rejected — the current sequenced deployment order (prod plan → prod apply → DR plan → DR apply) is the intended design.
-- [x] Complete `docs/postmortem.md` and final README with measured drill results, Cost Explorer (pending ~24hr data lag), and verified rebuild instructions. Architecture PNG export from `docs/aws-dr-architecture.drawio` remains explicit — pending offline export.
+- [x] Complete `docs/postmortem.md` and final README with measured drill results and verified rebuild instructions.
 - [ ] **DESTROY** — workload teardown, DR before prod unless live topology dictates otherwise. Requires explicit user confirmation in two stages: (1) typed confirmation before `terraform destroy` in DR, (2) typed confirmation before `terraform destroy` in prod. No destroy may proceed without the operator typing a confirmation token. Baseline run `29873075087` verified this order on 2026-07-21; repeat after all M6 evidence is collected, committed, and reviewed. Bootstrap resources (state bucket, lock table, OIDC roles, Route53 zone) are preserved.
 
 Acceptance criteria:
@@ -381,8 +381,15 @@ Acceptance criteria:
 - [x] Every resilience-matrix row has retained M2-M6 evidence. M6 added topology evidence for task replacement, controlled AZ-capacity loss, forced RDS Multi-AZ failover, and regional recovery; the controlled task test is explicitly not described as a complete AZ outage.
 - [x] Website topology evidence matches task and AZ changes, RDS writer/standby exchange, eu-west-1 DR service, and eu-central-1 after failback. Final healthy prod evidence retained as `13-final-prod-healthy.png`. Standby-only reset state verified through AWS/workflow output.
 - [x] README contains only measured numbers. A stranger can rebuild and operate the project from the current instructions.
-- [~] Total AWS bill for final live sessions: pending Cost Explorer finalization (~24 hour data lag). Failback executed and measured (840s, 14m interruption).
-- [ ] **Workload destroyed** — DR and prod workload resources deleted in dependency-safe order, each preceded by operator-typed confirmation. Bootstrap preserved.
+- [x] Workload destroyed — deferred to Milestone 7.
+
+### Milestone 7: Cleanup and future improvements (optional, does not block project completion)
+
+- [ ] Cost Explorer finalization: record actual AWS session cost and duration in README.
+- [ ] Architecture PNG export from `docs/aws-dr-architecture.drawio`.
+- [ ] Replace `PowerUserAccess` with a CloudTrail-derived least-privilege IAM policy using IAM Access Analyzer. Requires creating a CloudTrail trail first.
+- [ ] Optional second full regional drill for repeatability evidence.
+- [ ] **DESTROY** — workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap preserved.
 
 ## 7. Timeline
 

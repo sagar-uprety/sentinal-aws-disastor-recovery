@@ -15,9 +15,9 @@ Milestones 0 through 6 are complete. Key measured results from the final live dr
 - **Failback duration:** 840s (14m) from write freeze through verified prod traffic
 - **ECS task replacement:** 61s
 - **AZ capacity recovery:** 69s
-- **RDS Multi-AZ failover:** 432s<br><br>
+- **RDS Multi-AZ failover:** 432s
 
-All evidence retained in `docs/milestone-6-evidence.md`, `docs/postmortem.md`, and `docs/evidence/m6/`. A second optional regional drill remains noted but does not block M6 completion.
+All evidence retained in `docs/milestone-6-evidence.md`, `docs/postmortem.md`, and `docs/evidence/m6/`. Milestone 7 (optional cleanup, cost reporting, destroy) is deferred.
 
 See [plan.md](plan.md) for milestones and [docs/milestone-5-evidence.md](docs/milestone-5-evidence.md) for final-session prerequisites.
 
