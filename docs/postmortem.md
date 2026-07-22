@@ -15,7 +15,8 @@ M6 live drill recorded on 2026-07-22. All measured values are actual, not planne
 - Scenario: controlled primary workload outage, cross-Region replica promotion, DR compute activation, atomic ARC traffic switch, reverse replication, planned failback, and pilot-light reset.
 - User impact: canonical site returned 503 from 12:54:58 UTC until DR traffic verification at 13:03:56 UTC. Planned failback write freeze lasted 14 minutes through verified primary traffic.
 - End-to-end RTO target and measured result: 30 minutes target; 538s (8m58s) measured, target met.
-- Promotion-time RPO target and measured result: 60s target; row-based observed RPO 0s with fresh pre-promotion `ReplicaLag` 12s, target met.
+- Promotion-time RPO target and measured result: 60s target; row-based observed RPO 0s (the newest application row present in both prod and DR) with fresh pre-promotion `ReplicaLag` 12s, target met.
+- **RPO realism note:** PostgreSQL cross-region replication is asynchronous. The 0s row-based RPO means the sampled application row had already replicated; it does not prove every final source commit at the boundary survived. The 12s CloudWatch `ReplicaLag` is the worst lag in the measurement window. Estimated realistic RPO for this architecture under demo load: <15 seconds.
 - Topology-reset duration: infrastructure reset completed, credential reconciled, safety snapshot deleted, final public health verified (200 OK, 2/2 prod tasks, DR 0/0 replica). Planned failback interruption: 840s (14m) from write freeze through verified prod traffic.
 - Final AWS session cost: pending Cost Explorer finalization (data lags ~24 hours).
 

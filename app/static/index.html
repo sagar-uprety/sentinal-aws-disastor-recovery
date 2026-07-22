@@ -174,8 +174,9 @@
           <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
             <span><strong class="font-medium text-foreground">${status.response_ms}ms</strong> response</span>
             <span><strong class="font-medium text-foreground">${status.uptime_pct_24h}%</strong> uptime, 24h</span>
-            <div class="ml-auto" id="bars-${CSS.escape(host)}"></div>
+            <span class="text-[10px] text-muted-foreground/60">each bar = 1 check (30s)</span>
           </div>
+          <div class="mt-1.5" id="bars-${CSS.escape(host)}"></div>
           <div class="chart-container mt-4" id="chart-${CSS.escape(host)}"></div>
         </article>`;
       }).join('');
