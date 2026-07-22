@@ -333,7 +333,11 @@ jobs:
 
       - name: Plan DR pilot-light restoration
         working-directory: terraform/environments/dr
-        run: terraform plan -input=false -lock-timeout=5m -out=failback-dr.tfplan -var='desired_count=0' -var='multi_az=false'
+        run: |
+          terraform plan -input=false -lock-timeout=5m -out=failback-dr.tfplan \
+            -replace='module.rds.aws_db_instance.main[0]' \
+            -var='desired_count=0' \
+            -var='multi_az=false'
 
       - name: Show DR restoration plan
         working-directory: terraform/environments/dr

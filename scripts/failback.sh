@@ -201,36 +201,84 @@ promote-primary)
     --region "$PROD_REGION" \
     --db-instance-identifier "$PROD_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-  if [ "$status" != "available" ] || [[ "$source" != *"$DR_DB_ID"* ]]; then
+  resume_promoted=false
+  if [ -z "$source" ] || [ "$source" = "None" ]; then
+    require_current_event "primary_promoted"
+    require_current_event "failback_cutover_lag_seconds"
+    if [ -n "$(current_event_ts primary_service_stable)" ]; then
+      echo "ERROR: current drill already recorded primary_service_stable; refusing an ambiguous retry." >&2
+      exit 1
+    fi
+    resume_promoted=true
+  elif [ "$status" != "available" ] || [[ "$source" != *"$DR_DB_ID"* ]]; then
     echo "ERROR: prod is not an available replica of $DR_DB_ID." >&2
     exit 1
   fi
 
   require_dr_writes_frozen
 
-  if ! lag_evidence="$(wait_for_replica_lag "$PROD_REGION" "$PROD_DB_ID")"; then
-    echo "ERROR: no fresh acceptable prod replica lag evidence after DR writes were frozen." >&2
+  if [ "$resume_promoted" = false ]; then
+    if ! lag_evidence="$(wait_for_replica_lag "$PROD_REGION" "$PROD_DB_ID")"; then
+      echo "ERROR: no fresh acceptable prod replica lag evidence after DR writes were frozen." >&2
+      exit 1
+    fi
+    IFS=$'\t' read -r lag lag_timestamp <<<"$lag_evidence"
+    record_event_at "failback_cutover_lag_seconds" "$lag"
+    record_event_at "failback_cutover_lag_timestamp" "$lag_timestamp"
+    require_dr_writes_frozen
+
+    aws rds promote-read-replica \
+      --region "$PROD_REGION" \
+      --db-instance-identifier "$PROD_DB_ID" >/dev/null
+  else
+    echo "Resuming current failback after verified prod promotion..."
+  fi
+
+  for _ in {1..120}; do
+    read -r status source <<<"$(aws rds describe-db-instances \
+      --region "$PROD_REGION" \
+      --db-instance-identifier "$PROD_DB_ID" \
+      --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+    if [ "$status" = "available" ] && { [ -z "$source" ] || [ "$source" = "None" ]; }; then
+      break
+    fi
+    sleep 10
+  done
+  if [ "$status" != "available" ] || { [ -n "$source" ] && [ "$source" != "None" ]; }; then
+    echo "ERROR: prod promotion did not produce an available standalone database." >&2
     exit 1
   fi
-  IFS=$'\t' read -r lag lag_timestamp <<<"$lag_evidence"
-  record_event_at "failback_cutover_lag_seconds" "$lag"
-  record_event_at "failback_cutover_lag_timestamp" "$lag_timestamp"
-  require_dr_writes_frozen
-
-  aws rds promote-read-replica \
-    --region "$PROD_REGION" \
-    --db-instance-identifier "$PROD_DB_ID" >/dev/null
-  aws rds wait db-instance-available --region "$PROD_REGION" --db-instance-identifier "$PROD_DB_ID"
-  log_event "primary_promoted"
+  if [ "$resume_promoted" = false ]; then
+    log_event "primary_promoted"
+  fi
 
   require_dr_writes_frozen
 
-  aws rds modify-db-instance \
+  read -r status multi_az <<<"$(aws rds describe-db-instances \
     --region "$PROD_REGION" \
     --db-instance-identifier "$PROD_DB_ID" \
-    --multi-az \
-    --apply-immediately >/dev/null
-  aws rds wait db-instance-available --region "$PROD_REGION" --db-instance-identifier "$PROD_DB_ID"
+    --query 'DBInstances[0].[DBInstanceStatus,MultiAZ]' --output text)"
+  if [ "$multi_az" != "True" ]; then
+    aws rds modify-db-instance \
+      --region "$PROD_REGION" \
+      --db-instance-identifier "$PROD_DB_ID" \
+      --multi-az \
+      --apply-immediately >/dev/null
+  fi
+  for _ in {1..180}; do
+    read -r status multi_az <<<"$(aws rds describe-db-instances \
+      --region "$PROD_REGION" \
+      --db-instance-identifier "$PROD_DB_ID" \
+      --query 'DBInstances[0].[DBInstanceStatus,MultiAZ]' --output text)"
+    if [ "$status" = "available" ] && [ "$multi_az" = "True" ]; then
+      break
+    fi
+    sleep 10
+  done
+  if [ "$status" != "available" ] || [ "$multi_az" != "True" ]; then
+    echo "ERROR: prod did not become an available Multi-AZ database." >&2
+    exit 1
+  fi
 
   aws ecs update-service \
     --region "$PROD_REGION" \
