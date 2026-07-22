@@ -21,15 +21,24 @@ if [ "${CONFIRM_FAILOVER:-}" != "YES" ]; then
 fi
 require_current_event "outage_confirmed"
 outage_ts="$(current_event_ts outage_confirmed)"
-log_event "failover_invoked"
 
 read -r db_status replica_source <<<"$(aws rds describe-db-instances \
   --region "$DR_REGION" \
   --db-instance-identifier "$DR_DB_ID" \
   --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-if [ "$db_status" != "available" ] || [ -z "$replica_source" ] || [ "$replica_source" = "None" ]; then
+resume_promoted=false
+if [ -z "$replica_source" ] || [ "$replica_source" = "None" ]; then
+  require_current_event "failover_invoked"
+  if [ -n "$(current_event_ts replica_promoted)" ]; then
+    echo "ERROR: current drill already recorded replica_promoted; refusing an ambiguous retry." >&2
+    exit 1
+  fi
+  resume_promoted=true
+elif [ "$db_status" != "available" ]; then
   echo "ERROR: $DR_DB_ID is not an available read replica; refusing irreversible promotion." >&2
   exit 1
+else
+  log_event "failover_invoked"
 fi
 
 read -r desired_count running_count <<<"$(aws ecs describe-services \
@@ -75,40 +84,56 @@ aws ssm get-parameter \
   --with-decryption \
   --query 'Parameter.Version' --output text >/dev/null
 
-five_minutes_ago="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
-lag_data="$(aws cloudwatch get-metric-statistics \
-  --region "$DR_REGION" \
-  --namespace AWS/RDS \
-  --metric-name ReplicaLag \
-  --dimensions Name=DBInstanceIdentifier,Value="$DR_DB_ID" \
-  --start-time "$five_minutes_ago" \
-  --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --period 60 --statistics Maximum \
-  --query 'sort_by(Datapoints, &Timestamp)[-1]' --output json)"
-replica_lag="$(jq -r '.Maximum // empty' <<<"$lag_data")"
-lag_timestamp="$(jq -r '.Timestamp // empty' <<<"$lag_data")"
-if [ -z "$replica_lag" ] || [ "$replica_lag" = "-1" ] || [ -z "$lag_timestamp" ]; then
-  echo "ERROR: current ReplicaLag evidence is unavailable; refusing drill promotion." >&2
-  exit 1
-fi
-lag_age=$(( $(date -u +%s) - $(to_epoch "$lag_timestamp") ))
-if [ "$lag_age" -gt 180 ]; then
-  echo "ERROR: latest ReplicaLag datapoint is ${lag_age}s old." >&2
-  exit 1
-fi
-record_event_at "replica_lag_seconds" "$replica_lag"
-record_event_at "replica_lag_timestamp" "$lag_timestamp"
-if ! awk -v lag="$replica_lag" -v target="$RPO_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
-  if [ "${ALLOW_RPO_TARGET_MISS:-}" != "YES" ]; then
-    echo "ERROR: ReplicaLag ${replica_lag}s exceeds ${RPO_TARGET_SECONDS}s. Set ALLOW_RPO_TARGET_MISS=YES only to record an intentional target miss." >&2
+if [ "$resume_promoted" = false ]; then
+  five_minutes_ago="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+  lag_data="$(aws cloudwatch get-metric-statistics \
+    --region "$DR_REGION" \
+    --namespace AWS/RDS \
+    --metric-name ReplicaLag \
+    --dimensions Name=DBInstanceIdentifier,Value="$DR_DB_ID" \
+    --start-time "$five_minutes_ago" \
+    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --period 60 --statistics Maximum \
+    --query 'sort_by(Datapoints, &Timestamp)[-1]' --output json)"
+  replica_lag="$(jq -r '.Maximum // empty' <<<"$lag_data")"
+  lag_timestamp="$(jq -r '.Timestamp // empty' <<<"$lag_data")"
+  if [ -z "$replica_lag" ] || [ "$replica_lag" = "-1" ] || [ -z "$lag_timestamp" ]; then
+    echo "ERROR: current ReplicaLag evidence is unavailable; refusing drill promotion." >&2
     exit 1
   fi
-  log_event "rpo_target_miss_accepted"
+  lag_age=$(( $(date -u +%s) - $(to_epoch "$lag_timestamp") ))
+  if [ "$lag_age" -gt 180 ]; then
+    echo "ERROR: latest ReplicaLag datapoint is ${lag_age}s old." >&2
+    exit 1
+  fi
+  record_event_at "replica_lag_seconds" "$replica_lag"
+  record_event_at "replica_lag_timestamp" "$lag_timestamp"
+  if ! awk -v lag="$replica_lag" -v target="$RPO_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
+    if [ "${ALLOW_RPO_TARGET_MISS:-}" != "YES" ]; then
+      echo "ERROR: ReplicaLag ${replica_lag}s exceeds ${RPO_TARGET_SECONDS}s. Set ALLOW_RPO_TARGET_MISS=YES only to record an intentional target miss." >&2
+      exit 1
+    fi
+    log_event "rpo_target_miss_accepted"
+  fi
+
+  echo "Promoting replica $DR_DB_ID in $DR_REGION..."
+  aws rds promote-read-replica --region "$DR_REGION" --db-instance-identifier "$DR_DB_ID" >/dev/null
+else
+  echo "Resuming current drill after verified replica promotion..."
 fi
 
-echo "Promoting replica $DR_DB_ID in $DR_REGION..."
-aws rds promote-read-replica --region "$DR_REGION" --db-instance-identifier "$DR_DB_ID" >/dev/null
-aws rds wait db-instance-available --region "$DR_REGION" --db-instance-identifier "$DR_DB_ID"
+promoted_status=""
+promoted_source=""
+for _ in {1..120}; do
+  read -r promoted_status promoted_source <<<"$(aws rds describe-db-instances \
+    --region "$DR_REGION" \
+    --db-instance-identifier "$DR_DB_ID" \
+    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+  if [ "$promoted_status" = "available" ] && { [ -z "$promoted_source" ] || [ "$promoted_source" = "None" ]; }; then
+    break
+  fi
+  sleep 10
+done
 
 read -r promoted_status promoted_source db_endpoint db_port <<<"$(aws rds describe-db-instances \
   --region "$DR_REGION" \

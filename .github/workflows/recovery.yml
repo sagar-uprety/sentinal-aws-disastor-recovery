@@ -151,6 +151,7 @@ jobs:
         working-directory: terraform/environments/prod
         run: |
           terraform plan -input=false -lock-timeout=5m -out=failback-prepare.tfplan \
+            -replace='module.rds.aws_db_instance.main[0]' \
             -var='deploy_service=true' \
             -var='desired_count=0' \
             -var='multi_az=false' \
