@@ -2,7 +2,7 @@
 
 AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model: the eu-west-1 database replica, VPC, ALB, ECS service definition, ECR image, SSM parameter, monitoring, and ARC controls exist before the drill, while ECS desired count remains 0.
 
-The M4 rehearsal on 2026-07-17 used earlier script revisions. Historical measurements below remain evidence of that run. Current hardened scripts require live M6 execution before they can replace those measurements.
+The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 measurements remain in `docs/milestone-4-evidence.md`; current operational measurements below come from M6.
 
 ## Preconditions
 
@@ -72,7 +72,7 @@ The replica-promotion RPO target is 60 seconds. `simulate-disaster.sh` records t
 
 `failover.sh` also records the latest fresh CloudWatch `ReplicaLag` maximum before promotion. AWS documents `ReplicaLag=0` as synchronized and `-1` as inactive or unknown. The script refuses a drill promotion when evidence is missing, stale, or above 60 seconds unless the operator explicitly sets `ALLOW_RPO_TARGET_MISS=YES` to preserve and report a deliberate target miss.
 
-M4 historical result: `failover_invoked` through fresh DR write verification was 532 seconds. The former 736-second disaster-to-switch number ended at a manually recorded ARC request and is retained only as historical M4 evidence. It is not the M6 RTO definition.
+M6 result: user-visible outage confirmation through authoritative DNS and public DR `/topology` verification was 538 seconds. `failover_invoked` through fresh DR write verification was 457 seconds; invocation through public verification was 516 seconds. Row-based observed RPO was 0 seconds, with fresh pre-promotion `ReplicaLag` of 12 seconds. These replace M4 rehearsal values for current scripts.
 
 ## Failback And Topology Reset
 
@@ -130,6 +130,16 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    ```
 
 6. Delete the active-DR safety snapshot after reset evidence is retained, using the exact command printed by `failback.sh snapshot`.
+
+Normal promotion preserves the password inherited by the replica. Terraform therefore ignores later changes to the standalone RDS resource's write-only password fields; do not increment a credential-version variable during ordinary failback. If an older reset has already produced an RDS and SSM mismatch, use the guarded break-glass workflow after verifying reset topology:
+
+   ```bash
+   gh workflow run recovery.yml --ref main \
+     -f operation=credential-repair \
+     -f confirm_failback=RECONCILE_CREDENTIAL
+   ```
+
+The repair reads the existing SecureString only inside the protected runner, resets the prod RDS password to that value, forces an ECS deployment, and requires healthy public `/topology`. It is recovery for an observed mismatch, not a routine failback phase or password-rotation mechanism.
 
 The active prod website cannot display DR desired count zero or primary-to-DR replica direction after reset. Verify those standby-only properties through the workflow output, AWS APIs, and `failback.sh verify-reset`; do not infer them from the website.
 

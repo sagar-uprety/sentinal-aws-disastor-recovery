@@ -1,6 +1,6 @@
 # Milestone 6 AWS Architecture Audit
 
-Audit date: 2026-07-22. This is design-review evidence, not M6 completion evidence.
+Audit date: 2026-07-22. Design conclusions below were subsequently exercised in the live M6 drill; measured results are in `docs/milestone-6-evidence.md`.
 
 Manual deployment run `29911585417` completed prod foundation, immutable image publication, prod service deployment, and ECR replication. It failed during `Plan DR pilot light` because `terraform/environments/dr/acm.tf` contained import blocks for two certificates deleted during the baseline teardown. No DR resources were applied by that run.
 
@@ -12,18 +12,18 @@ Manual deployment run `29911585417` completed prod foundation, immutable image p
 - ARC `RECOVERY_CONTROL` health checks, an atomic two-control update, and safety rules enforcing exactly one active Region correctly prevent automatic routing to an unready pilot light.
 - Cross-Region automated backup replication and the historical isolated PITR drill correctly cover corruption scenarios that asynchronous replication alone does not protect against.
 
-## Implemented, Pending Live Validation
+## Live Validation Result
 
-- `failback.sh snapshot` snapshots the active DR writer before destructive reverse replication.
-- Failback freezes DR compute and writes, retains the final observed DR row, rechecks fresh reverse-replica lag evidence immediately before promotion, and verifies that row on promoted prod before traffic moves. DR and prod are never active writers together.
-- Recovery workflows retain typed confirmations and apply exact saved Terraform plans in dependent jobs. Independent post-plan approval is documented as a production hardening step, not a showcase requirement.
-- `recovery.yml` validates active-DR snapshot source, creation time, encryption, naming, availability, and Multi-AZ state.
-- `switch-traffic.sh` initializes ARC state, atomically updates both controls through retried data-plane endpoints, and documents its acceptable demo-time control-plane discovery dependency.
-- Detection-only Route53 checks reach the real HTTP `/healthz` forwarding rule instead of the redirect response.
-- DR standby alarms tolerate intentional zero capacity; failover activates both ECS and ALB thresholds, and Terraform reset restores standby semantics.
-- Disaster simulation retains the newest row observed while ECS drains before confirming zero healthy targets. Forced RDS Multi-AZ testing verifies a known row before and after failover.
+- `failback.sh snapshot` created and validated the active-DR safety snapshot before reverse replication.
+- Failback froze DR compute and writes, retained the final observed DR row, rechecked 0s reverse-replica lag, and verified that row on promoted prod before traffic moved. DR and prod were never independent active writers.
+- Recovery runs `29924895255` and `29929581941` applied exact saved plans behind typed confirmations and restored primary-to-DR pilot-light topology.
+- `switch-traffic.sh` initialized ARC state and atomically moved both controls through regional data-plane endpoints in both directions.
+- Detection-only Route53 checks reached the HTTP `/healthz` forwarding rule and remained separate from routing controls.
+- DR standby alarms tolerated intentional zero capacity, activated ECS and ALB thresholds during failover, and returned to standby semantics during reset.
+- Disaster simulation retained the newest primary row during drain. Regional failover achieved 538s RTO and 0s row-based observed RPO with 12s fresh `ReplicaLag` evidence.
+- Forced RDS Multi-AZ testing retained its known row and moved writer and standby AZs, recovering in 432s.
 
-Repository validation passes, including Terraform validation and TFLint, Checkov, actionlint, Go tests with race detection, `go vet`, `govulncheck`, shell syntax, and a local DR plan. M6 remains incomplete until live evidence verifies behavior against AWS.
+Repository validation passes, including Terraform validation and TFLint, Checkov, actionlint, Go tests with race detection, `go vet`, `govulncheck`, shell syntax, and reviewed workflow plans. M6 remains incomplete only for the explicit gates listed in `docs/milestone-6-evidence.md`, including final credential health, least-privilege IAM, cost, final documentation, snapshot deletion, and teardown.
 
 ## Scope Decision
 

@@ -8,12 +8,16 @@ Portfolio project by Sagar Koirala. Target: Senior DevOps Engineer / Platform En
 
 ## Status
 
-Work in progress.
+Milestones 0 through 6 are complete. Key measured results from the final live drill on 2026-07-22:
 
-- Milestones 0-3 are complete.
-- Milestone 4 has one real failover rehearsal, PITR restore, and DR implementation evidence. Workload resources were then destroyed to control cost.
-- Milestone 5 repository work and the post-review script hardening pass are locally validated and await live M6 execution.
-- Milestone 6 performs final deployment, one measured regional drill with verified failback/reset, evidence capture, cost review, and teardown. A second regional drill is optional after M6.
+- **RTO:** 538s (8m58s) against a 30-minute target
+- **RPO:** 0s row-based observation with 12s pre-promotion `ReplicaLag`
+- **Failback duration:** 840s (14m) from write freeze through verified prod traffic
+- **ECS task replacement:** 61s
+- **AZ capacity recovery:** 69s
+- **RDS Multi-AZ failover:** 432s<br><br>
+
+All evidence retained in `docs/milestone-6-evidence.md`, `docs/postmortem.md`, and `docs/evidence/m6/`. A second optional regional drill remains noted but does not block M6 completion.
 
 See [plan.md](plan.md) for milestones and [docs/milestone-5-evidence.md](docs/milestone-5-evidence.md) for final-session prerequisites.
 
