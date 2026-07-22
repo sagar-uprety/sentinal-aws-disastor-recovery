@@ -175,7 +175,7 @@
 
     /* ── Availability timeline (SVG) ── */
     function renderTimeline(host, checks) {
-      const container = document.getElementById('timeline-' + CSS.escape(host));
+      const container = document.getElementById('timeline-' + esc(host));
       if (!container || !checks || !checks.length) return;
       const slice = checks.slice(0, BAR_COUNT).reverse();
       const barW = 14, barH = 36, gap = 3, rx = 3;
