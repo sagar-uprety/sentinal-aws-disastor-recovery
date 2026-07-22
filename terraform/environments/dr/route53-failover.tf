@@ -9,6 +9,37 @@ data "aws_route53_zone" "sentinel" {
   private_zone = false
 }
 
+# Detection-only HTTP health checks for evidence and alarming. Not wired to
+# any DNS record and not part of the traffic-switch path — only ARC's
+# RECOVERY_CONTROL health checks gate DNS. failure_threshold=3 (consecutive
+# failures, ~90s at the default 30s interval) avoids reacting to one
+# transient failure, per section 4.5. Always active, regardless of ARC state.
+resource "aws_route53_health_check" "primary_detection" {
+  type              = "HTTP"
+  fqdn              = data.aws_lb.prod.dns_name
+  port              = 80
+  resource_path     = "/healthz"
+  failure_threshold = 3
+  request_interval  = 30
+
+  tags = {
+    Name = "${local.project_name}-primary-detection"
+  }
+}
+
+resource "aws_route53_health_check" "dr_detection" {
+  type              = "HTTP"
+  fqdn              = module.alb.alb_dns_name
+  port              = 80
+  resource_path     = "/healthz"
+  failure_threshold = 3
+  request_interval  = 30
+
+  tags = {
+    Name = "${local.project_name}-dr-detection"
+  }
+}
+
 module "route53_failover" {
   source = "../../modules/route53-failover"
   count  = var.create_arc ? 1 : 0
