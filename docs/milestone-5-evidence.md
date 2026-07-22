@@ -10,7 +10,7 @@ All commands below completed successfully without AWS credentials or a Terraform
 - `terraform init -backend=false -input=false` and `terraform validate` for bootstrap, prod, and DR, each with a temporary `TF_DATA_DIR` to prevent prior backend metadata from accessing remote state.
 - `tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=terraform`
 - `go test -race ./...` from `app`, with a temporary local `postgres:18-alpine` container at the test suite's documented connection URL
-- `bash -n scripts/failover.sh scripts/failback.sh scripts/measure.sh scripts/simulate-disaster.sh`
+- `bash -n scripts/*.sh`, including ARC preparation, HA, disaster, failover, traffic-switch, measurement, and failback paths.
 - `pre-commit run actionlint --all-files`
 - `pre-commit run checkov --all-files`
 - `pre-commit run --all-files`, including Terraform docs, Go lint/vet/race/vulnerability checks, actionlint, Checkov, and Infracost scan.
@@ -38,7 +38,7 @@ Focused Go unit checks, `go vet`, Terraform validation, Checkov, actionlint, she
 - Manual `plan`, `foundation`, `deploy`, and guarded `destroy` operations plus automatic saved-plan deployment for matching pushes to `main`. Bootstrap owns the persistent Route53 zone and emits nameservers for one-time Cloudflare delegation. Foundation creates prod dependencies without an ECS service; deploy requires the immutable digest reported by application `publish-only` mode when the service does not yet exist, then applies prod before DR. Destroy applies saved destroy plans in DR then prod without deleting the shared zone.
 - `terraform-production` environment gating, exact OIDC environment-subject trust, main-branch-only mutations, lock timeouts, and the shared `terraform-operations` concurrency group.
 
-`.github/workflows/recovery.yml` separately provides guarded `failback-prepare` and `failback-reset` operations. Each requires explicit typed confirmation, produces saved binary plans, and applies those exact plans in dependent jobs. It shares the `terraform-operations` concurrency group with manual Terraform lifecycle operations so recovery and deployment cannot mutate state concurrently.
+`.github/workflows/recovery.yml` provides guarded `failback-prepare` and `failback-reset` operations. Each requires an explicit typed confirmation, produces saved binary plans, and applies those exact plans in dependent jobs. It shares the `terraform-operations` concurrency group with manual Terraform lifecycle operations so recovery and deployment cannot mutate state concurrently. This showcase relies on typed confirmation and visible saved-plan logs; production should add an independent post-plan approval gate.
 
 `.github/workflows/app.yml` provides pull-request Go race/vet, frontend reproducibility, and ARM64 container-build checks. `publish-only` mode seeds ECR during first deployment. Normal main-branch push or dispatch builds once, deploys the immutable digest to prod, verifies public `/healthz`, waits for ECR replication, then updates and verifies the zero-count DR service with the same digest.
 
@@ -60,15 +60,17 @@ The Terraform role and persistent hosted zone were created by the approved boots
 1. Bootstrap was applied on 2026-07-21; deployment and read-only PR plan role outputs were set as `AWS_TERRAFORM_ROLE_ARN` and `AWS_TERRAFORM_PLAN_ROLE_ARN`. Both protected environments and Cloudflare delegation are configured.
 2. From zero workload state, dispatch `terraform.yml` with `operation=foundation`, set its prod `github_actions_role_arn` output as `AWS_ROLE_ARN`, dispatch `app.yml` with `mode=publish-only`, then dispatch `terraform.yml` with `operation=deploy` and the reported digest. Normal application releases thereafter promote one digest to both regional ECS services.
 3. Verify the dashboard at `https://sentinel.sagaruprety.com.np`, `/healthz`, prod, DR, ECR replication, database-password SSM metadata, and ARC initial state before beginning a drill.
-4. Run first drill. Use `recovery.yml` to complete and measure topology reset before second drill.
-5. Run second drill. Capture terminal, CloudWatch/SNS, status-page, database, DNS, and Cost Explorer evidence.
-6. Dispatch `terraform.yml` from `main` with `operation=destroy` and `confirm_destroy=DESTROY` after evidence collection, unless current RDS topology requires a different dependency-safe destroy order.
+4. Run the mandatory final drill. Use the hardened `recovery.yml` and failback scripts to complete and measure a single-writer topology reset.
+5. Optionally run a second drill after M6 completion. It adds repeatability evidence but does not block project acceptance.
+6. Capture terminal, CloudWatch/SNS, status-page, database, DNS, and Cost Explorer evidence for the mandatory drill.
+7. Dispatch `terraform.yml` from `main` with `operation=destroy` and `confirm_destroy=DESTROY` after evidence collection, unless current RDS topology requires a different dependency-safe destroy order.
 
 ## Pending Live Evidence
 
 - GitHub Actions PR plan comment and retained local Infracost output.
 - CloudTrail/IAM Access Analyzer evidence and replacement of temporary `PowerUserAccess` after the full deployment and teardown paths have run.
 - Approval-gated deployment and destroy workflow runs.
-- Second drill RTO/RPO and topology-reset duration.
-- DR outage-window query/export, recording, final Cost Explorer amount, and teardown output.
+- Mandatory drill RTO/RPO and topology-reset duration. A second drill is optional after M6.
+- DR outage-window query/export, final Cost Explorer amount, and teardown output. Video evidence is not required.
 - ECS task/AZ and RDS writer/standby topology panel observed during the final HA and pilot-light drills.
+- Website Recovery topology retained before and after every visible transition: ECS task replacement, AZ-capacity injection/recovery, RDS writer/standby exchange, DR traffic activation, and prod traffic restoration. Standby-only DR reset state is retained from AWS/Terraform checks instead of inferred from the active website.

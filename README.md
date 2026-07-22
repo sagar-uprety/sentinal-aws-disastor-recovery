@@ -12,8 +12,8 @@ Work in progress.
 
 - Milestones 0-3 are complete.
 - Milestone 4 has one real failover rehearsal, PITR restore, and DR implementation evidence. Workload resources were then destroyed to control cost.
-- Milestone 5 repository work is locally validated but remains uncommitted. A post-review script hardening pass is syntax-checked and awaits live M6 execution.
-- Milestone 6 performs final deployment, two measured drills, recording, cost review, and teardown in one dedicated live-environment session.
+- Milestone 5 repository work and the post-review script hardening pass are locally validated and await live M6 execution.
+- Milestone 6 performs final deployment, one measured regional drill with verified failback/reset, evidence capture, cost review, and teardown. A second regional drill is optional after M6.
 
 See [plan.md](plan.md) for milestones and [docs/milestone-5-evidence.md](docs/milestone-5-evidence.md) for final-session prerequisites.
 

@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       failback_snapshot_id:
-        description: Available prod safety snapshot required by failback-prepare.
+        description: Fresh encrypted DR-writer snapshot required by failback-prepare operations.
         required: false
         type: string
 
@@ -101,26 +101,27 @@ jobs:
           role-session-name: terraform-failback-prepare-plan-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify safety snapshot and promoted DR writer
+      - name: Verify active-DR safety snapshot and promoted DR writer
         env:
           SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
         run: |
-          snapshot_status="$(aws rds describe-db-snapshots \
-            --region eu-central-1 \
+          read -r snapshot_status snapshot_source snapshot_encrypted snapshot_created <<<"$(aws rds describe-db-snapshots \
+            --region eu-west-1 \
             --db-snapshot-identifier "$SNAPSHOT_ID" \
-            --query 'DBSnapshots[0].Status' --output text)"
-          test "$snapshot_status" = "available" || {
-            echo "Safety snapshot $SNAPSHOT_ID is not available." >&2
+            --query 'DBSnapshots[0].[Status,DBInstanceIdentifier,Encrypted,SnapshotCreateTime]' --output text)"
+          snapshot_age=$(( $(date -u +%s) - $(date -u -d "$snapshot_created" +%s) ))
+          if [ "$snapshot_status" != "available" ] || [ "$snapshot_source" != "sentinel-aws-dr-dr" ] || [ "$snapshot_encrypted" != "True" ] || [ "$snapshot_age" -gt 21600 ] || [[ "$SNAPSHOT_ID" != sentinel-aws-dr-dr-pre-failback-* ]]; then
+            echo "Safety snapshot must be a fresh encrypted snapshot of the active DR writer." >&2
             exit 1
-          }
+          fi
 
-          read -r dr_status dr_source dr_arn <<<"$(aws rds describe-db-instances \
+          read -r dr_status dr_source dr_arn dr_multi_az <<<"$(aws rds describe-db-instances \
             --region eu-west-1 \
             --db-instance-identifier sentinel-aws-dr-dr \
-            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,DBInstanceArn]' \
+            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,DBInstanceArn,MultiAZ]' \
             --output text)"
-          if [ "$dr_status" != "available" ] || { [ -n "$dr_source" ] && [ "$dr_source" != "None" ]; }; then
-            echo "DR must be an available standalone writer before reverse replication." >&2
+          if [ "$dr_status" != "available" ] || { [ -n "$dr_source" ] && [ "$dr_source" != "None" ]; } || [ "$dr_multi_az" != "True" ]; then
+            echo "DR must be an available standalone Multi-AZ writer before reverse replication." >&2
             exit 1
           fi
           echo "DR_SOURCE_ARN=$dr_arn" >> "$GITHUB_ENV"
@@ -199,11 +200,23 @@ jobs:
         env:
           SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
         run: |
-          snapshot_status="$(aws rds describe-db-snapshots \
-            --region eu-central-1 \
+          read -r snapshot_status snapshot_source snapshot_encrypted snapshot_created <<<"$(aws rds describe-db-snapshots \
+            --region eu-west-1 \
             --db-snapshot-identifier "$SNAPSHOT_ID" \
-            --query 'DBSnapshots[0].Status' --output text)"
+            --query 'DBSnapshots[0].[Status,DBInstanceIdentifier,Encrypted,SnapshotCreateTime]' --output text)"
+          snapshot_age=$(( $(date -u +%s) - $(date -u -d "$snapshot_created" +%s) ))
           test "$snapshot_status" = "available"
+          test "$snapshot_source" = "sentinel-aws-dr-dr"
+          test "$snapshot_encrypted" = "True"
+          test "$snapshot_age" -le 21600
+          [[ "$SNAPSHOT_ID" == sentinel-aws-dr-dr-pre-failback-* ]]
+          read -r dr_status dr_source dr_multi_az <<<"$(aws rds describe-db-instances \
+            --region eu-west-1 \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
+          test "$dr_status" = "available"
+          { [ -z "$dr_source" ] || [ "$dr_source" = "None" ]; }
+          test "$dr_multi_az" = "True"
 
       - name: Initialize primary state
         working-directory: terraform/environments/prod
@@ -371,6 +384,12 @@ jobs:
         run: |
           topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
           jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
+          read -r status source <<<"$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+          test "$status" = "available"
+          { [ -z "$source" ] || [ "$source" = "None" ]; }
 
       - name: Initialize primary state
         working-directory: terraform/environments/prod

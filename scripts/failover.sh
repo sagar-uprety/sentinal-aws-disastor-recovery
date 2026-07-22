@@ -10,6 +10,7 @@ DR_CLUSTER="sentinel-aws-dr-dr"
 DR_SERVICE="sentinel-aws-dr-dr"
 DR_DB_ID="sentinel-aws-dr-dr"
 DR_ECS_ALARM_NAME="sentinel-aws-dr-dr-ecs-running-tasks"
+DR_ALB_ALARM_NAME="sentinel-aws-dr-dr-alb-healthy-hosts"
 STATUS_HOST="sentinel.sagaruprety.com.np"
 RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
 RPO_TARGET_SECONDS="${RPO_TARGET_SECONDS:-60}"
@@ -96,6 +97,7 @@ if [ "$lag_age" -gt 180 ]; then
   exit 1
 fi
 record_event_at "replica_lag_seconds" "$replica_lag"
+record_event_at "replica_lag_timestamp" "$lag_timestamp"
 if ! awk -v lag="$replica_lag" -v target="$RPO_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
   if [ "${ALLOW_RPO_TARGET_MISS:-}" != "YES" ]; then
     echo "ERROR: ReplicaLag ${replica_lag}s exceeds ${RPO_TARGET_SECONDS}s. Set ALLOW_RPO_TARGET_MISS=YES only to record an intentional target miss." >&2
@@ -195,10 +197,35 @@ aws cloudwatch put-metric-alarm \
   --ok-actions "$alert_topic_arn"
 log_event "dr_task_alarm_activated"
 
+load_balancer_arn="$(aws elbv2 describe-load-balancers \
+  --region "$DR_REGION" \
+  --names "sentinel-aws-dr-dr-alb" \
+  --query 'LoadBalancers[0].LoadBalancerArn' --output text)"
 target_group_arn="$(aws elbv2 describe-target-groups \
   --region "$DR_REGION" \
   --names "sentinel-aws-dr-dr-tg" \
   --query 'TargetGroups[0].TargetGroupArn' --output text)"
+load_balancer_suffix="${load_balancer_arn#*:loadbalancer/}"
+target_group_suffix="${target_group_arn##*:}"
+
+aws cloudwatch put-metric-alarm \
+  --region "$DR_REGION" \
+  --alarm-name "$DR_ALB_ALARM_NAME" \
+  --alarm-description "DR ALB has fewer than one healthy target while active." \
+  --namespace AWS/ApplicationELB \
+  --metric-name HealthyHostCount \
+  --statistic Minimum \
+  --period 60 \
+  --evaluation-periods 2 \
+  --threshold 1 \
+  --comparison-operator LessThanThreshold \
+  --treat-missing-data breaching \
+  --dimensions "Name=LoadBalancer,Value=$load_balancer_suffix" \
+    "Name=TargetGroup,Value=$target_group_suffix" \
+  --alarm-actions "$alert_topic_arn" \
+  --ok-actions "$alert_topic_arn"
+log_event "dr_alb_alarm_activated"
+
 healthy_count=0
 for _ in {1..60}; do
   healthy_count="$(aws elbv2 describe-target-health \

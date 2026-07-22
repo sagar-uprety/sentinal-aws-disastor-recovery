@@ -418,3 +418,8 @@ jobs:
       - name: Apply primary destruction plan
         working-directory: terraform/environments/prod
         run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
+
+      - name: Remove AWS-managed workload artifacts
+        env:
+          CONFIRM_CLEANUP: "YES"
+        run: bash scripts/cleanup-workload-artifacts.sh

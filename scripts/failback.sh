@@ -16,9 +16,9 @@ DR_CLUSTER="sentinel-aws-dr-dr"
 DR_SERVICE="sentinel-aws-dr-dr"
 STATUS_HOST="sentinel.sagaruprety.com.np"
 RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
-FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-30}"
+FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-300}"
 
-latest_replica_lag() {
+latest_replica_lag_json() {
   local region="$1" database="$2" start
   start="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
   aws cloudwatch get-metric-statistics \
@@ -29,7 +29,46 @@ latest_replica_lag() {
     --start-time "$start" \
     --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --period 60 --statistics Maximum \
-    --query 'sort_by(Datapoints, &Timestamp)[-1].Maximum' --output text
+    --query 'sort_by(Datapoints, &Timestamp)[-1]' --output json
+}
+
+wait_for_replica_lag() {
+  local region="$1" database="$2" data lag timestamp age
+  for _ in {1..20}; do
+    data="$(latest_replica_lag_json "$region" "$database")"
+    lag="$(jq -r '.Maximum // empty' <<<"$data")"
+    timestamp="$(jq -r '.Timestamp // empty' <<<"$data")"
+    if [ -n "$lag" ] && [ "$lag" != "-1" ] && [ -n "$timestamp" ]; then
+      age=$(( $(date -u +%s) - $(to_epoch "$timestamp") ))
+      if [ "$age" -le 180 ] && awk -v lag="$lag" -v target="$FAILBACK_LAG_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
+        printf '%s\t%s\n' "$lag" "$timestamp"
+        return 0
+      fi
+    fi
+    sleep 30
+  done
+  return 1
+}
+
+require_dr_writes_frozen() {
+  local desired running target_group_arn healthy
+  read -r desired running <<<"$(aws ecs describe-services \
+    --region "$DR_REGION" \
+    --cluster "$DR_CLUSTER" \
+    --services "$DR_SERVICE" \
+    --query 'services[0].[desiredCount,runningCount]' --output text)"
+  target_group_arn="$(aws elbv2 describe-target-groups \
+    --region "$DR_REGION" \
+    --names "sentinel-aws-dr-dr-tg" \
+    --query 'TargetGroups[0].TargetGroupArn' --output text)"
+  healthy="$(aws elbv2 describe-target-health \
+    --region "$DR_REGION" \
+    --target-group-arn "$target_group_arn" \
+    --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
+  if [ "$desired" != "0" ] || [ "$running" != "0" ] || [ "$healthy" != "0" ]; then
+    echo "ERROR: DR writes are not frozen (desired=$desired running=$running healthy=$healthy)." >&2
+    return 1
+  fi
 }
 
 case "${1:-}" in
@@ -38,21 +77,30 @@ snapshot)
     echo "Set CONFIRM_FAILBACK_SNAPSHOT=YES to create the temporary safety snapshot." >&2
     exit 1
   }
-  snapshot_id="${PROD_DB_ID}-pre-failback-$(date -u +%Y%m%d%H%M%S)"
+  require_current_event "traffic_verified_dr"
+  read -r dr_status dr_source dr_multi_az <<<"$(aws rds describe-db-instances \
+    --region "$DR_REGION" \
+    --db-instance-identifier "$DR_DB_ID" \
+    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
+  if [ "$dr_status" != "available" ] || { [ -n "$dr_source" ] && [ "$dr_source" != "None" ]; } || [ "$dr_multi_az" != "True" ]; then
+    echo "ERROR: active DR writer must be available, standalone, and Multi-AZ before its safety snapshot." >&2
+    exit 1
+  fi
+  snapshot_id="${DR_DB_ID}-pre-failback-$(date -u +%Y%m%d%H%M%S)"
   aws rds create-db-snapshot \
-    --region "$PROD_REGION" \
-    --db-instance-identifier "$PROD_DB_ID" \
+    --region "$DR_REGION" \
+    --db-instance-identifier "$DR_DB_ID" \
     --db-snapshot-identifier "$snapshot_id" >/dev/null
-  aws rds wait db-snapshot-available --region "$PROD_REGION" --db-snapshot-identifier "$snapshot_id"
-  record_event_at "prod_pre_failback_snapshot" "$snapshot_id"
+  aws rds wait db-snapshot-available --region "$DR_REGION" --db-snapshot-identifier "$snapshot_id"
+  record_event_at "dr_pre_failback_snapshot" "$snapshot_id"
   cat <<EOF
 Snapshot $snapshot_id is available.
 
 Next protected Terraform phase:
-  1. Dispatch the protected failback-prepare workflow:
+  1. Dispatch the failback-prepare plan:
      gh workflow run recovery.yml --ref main -f operation=failback-prepare -f confirm_failback=REBUILD_PROD -f failback_snapshot_id=$snapshot_id
-  2. Follow the plan and apply job logs; the apply job consumes the saved plan.
-  3. Wait for the workflow and run: scripts/failback.sh verify-replica
+  2. Review the saved plan in the plan job; the dependent apply job consumes that exact plan.
+  3. Wait for apply and run: scripts/failback.sh verify-replica
 
 Delete the snapshot after topology reset evidence is complete:
   CONFIRM_DELETE_SNAPSHOT=YES scripts/failback.sh delete-snapshot $snapshot_id
@@ -68,25 +116,77 @@ verify-replica)
     echo "ERROR: prod is not an available replica of $DR_DB_ID." >&2
     exit 1
   fi
-  lag="$(latest_replica_lag "$PROD_REGION" "$PROD_DB_ID")"
-  if [ -z "$lag" ] || [ "$lag" = "None" ] || [ "$lag" = "-1" ]; then
-    echo "ERROR: prod replica lag is unavailable." >&2
+  if ! lag_evidence="$(wait_for_replica_lag "$PROD_REGION" "$PROD_DB_ID")"; then
+    echo "ERROR: prod replica has no fresh lag evidence within target." >&2
     exit 1
   fi
-  if ! awk -v lag="$lag" -v target="$FAILBACK_LAG_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
-    echo "ERROR: prod replica lag ${lag}s exceeds ${FAILBACK_LAG_TARGET_SECONDS}s." >&2
-    exit 1
-  fi
+  IFS=$'\t' read -r lag lag_timestamp <<<"$lag_evidence"
   record_event_at "failback_replica_lag_seconds" "$lag"
+  record_event_at "failback_replica_lag_timestamp" "$lag_timestamp"
   log_event "failback_replica_verified"
   cat <<EOF
 Prod is an available replica of DR with ReplicaLag ${lag}s.
 
 Next manual phase:
-  1. Stop or freeze application writes briefly if this were a real incident.
+  1. Run: CONFIRM_FAILBACK_FREEZE=YES scripts/failback.sh freeze-writes
   2. Run: CONFIRM_PRIMARY_PROMOTION=YES scripts/failback.sh promote-primary
   3. Run: CONFIRM_FAILBACK_READY=YES scripts/failback.sh ready
 EOF
+  ;;
+
+freeze-writes)
+  [ "${CONFIRM_FAILBACK_FREEZE:-}" = "YES" ] || {
+    echo "Set CONFIRM_FAILBACK_FREEZE=YES to stop DR application writes for planned failback." >&2
+    exit 1
+  }
+  require_current_event "traffic_verified_dr"
+  require_current_event "failback_replica_verified"
+
+  dr_alb_dns="$(aws elbv2 describe-load-balancers \
+    --region "$DR_REGION" \
+    --names "sentinel-aws-dr-dr-alb" \
+    --query 'LoadBalancers[0].DNSName' --output text)"
+  target_group_arn="$(aws elbv2 describe-target-groups \
+    --region "$DR_REGION" \
+    --names "sentinel-aws-dr-dr-tg" \
+    --query 'TargetGroups[0].TargetGroupArn' --output text)"
+  final_row=""
+  aws ecs update-service \
+    --region "$DR_REGION" \
+    --cluster "$DR_CLUSTER" \
+    --service "$DR_SERVICE" \
+    --desired-count 0 >/dev/null
+
+  frozen=false
+  for _ in {1..90}; do
+    status_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${dr_alb_dns}:443" "https://${STATUS_HOST}/status" || true)"
+    observed_row="$(jq -r --arg target "$RPO_TARGET_URL" '[.[] | select(.url == $target) | .last_checked] | max // empty' <<<"$status_body" 2>/dev/null || true)"
+    if [ -n "$observed_row" ] && { [ -z "$final_row" ] || [[ "$observed_row" > "$final_row" ]]; }; then
+      final_row="$observed_row"
+    fi
+    read -r desired running <<<"$(aws ecs describe-services \
+      --region "$DR_REGION" \
+      --cluster "$DR_CLUSTER" \
+      --services "$DR_SERVICE" \
+      --query 'services[0].[desiredCount,runningCount]' --output text)"
+    healthy="$(aws elbv2 describe-target-health \
+      --region "$DR_REGION" \
+      --target-group-arn "$target_group_arn" \
+      --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
+    if [ "$desired" = "0" ] && [ "$running" = "0" ] && [ "$healthy" = "0" ]; then
+      frozen=true
+      break
+    fi
+    sleep 2
+  done
+  if [ "$frozen" != true ] || [ -z "$final_row" ]; then
+    echo "ERROR: could not prove DR writes stopped with a final observed row; restoring DR service." >&2
+    aws ecs update-service --region "$DR_REGION" --cluster "$DR_CLUSTER" --service "$DR_SERVICE" --desired-count 2 >/dev/null
+    exit 1
+  fi
+  record_event_at "failback_dr_final_row" "$final_row"
+  log_event "failback_writes_frozen"
+  echo "DR writes are frozen at observed row $final_row. Canonical traffic is unavailable until prod is ready."
   ;;
 
 promote-primary)
@@ -95,6 +195,7 @@ promote-primary)
     exit 1
   }
   require_current_event "failback_replica_verified"
+  require_current_event "failback_writes_frozen"
 
   read -r status source <<<"$(aws rds describe-db-instances \
     --region "$PROD_REGION" \
@@ -105,11 +206,24 @@ promote-primary)
     exit 1
   fi
 
+  require_dr_writes_frozen
+
+  if ! lag_evidence="$(wait_for_replica_lag "$PROD_REGION" "$PROD_DB_ID")"; then
+    echo "ERROR: no fresh acceptable prod replica lag evidence after DR writes were frozen." >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r lag lag_timestamp <<<"$lag_evidence"
+  record_event_at "failback_cutover_lag_seconds" "$lag"
+  record_event_at "failback_cutover_lag_timestamp" "$lag_timestamp"
+  require_dr_writes_frozen
+
   aws rds promote-read-replica \
     --region "$PROD_REGION" \
     --db-instance-identifier "$PROD_DB_ID" >/dev/null
   aws rds wait db-instance-available --region "$PROD_REGION" --db-instance-identifier "$PROD_DB_ID"
   log_event "primary_promoted"
+
+  require_dr_writes_frozen
 
   aws rds modify-db-instance \
     --region "$PROD_REGION" \
@@ -144,8 +258,9 @@ ready)
     exit 1
   }
   require_current_event "failback_replica_verified"
-  require_current_event "dr_known_row"
-  known_row="$(current_event_ts dr_known_row)"
+  require_current_event "failback_writes_frozen"
+  require_current_event "failback_dr_final_row"
+  known_row="$(current_event_ts failback_dr_final_row)"
 
   read -r db_status source multi_az <<<"$(aws rds describe-db-instances \
     --region "$PROD_REGION" \
@@ -200,12 +315,13 @@ verify-reset)
     echo "ERROR: DR ECS is not reset to pilot-light count 0." >&2
     exit 1
   fi
-  lag="$(latest_replica_lag "$DR_REGION" "$DR_DB_ID")"
-  if [ -z "$lag" ] || [ "$lag" = "None" ] || [ "$lag" = "-1" ]; then
-    echo "ERROR: restored DR replica lag is unavailable." >&2
+  if ! lag_evidence="$(wait_for_replica_lag "$DR_REGION" "$DR_DB_ID")"; then
+    echo "ERROR: restored DR replica has no fresh lag evidence within target." >&2
     exit 1
   fi
+  IFS=$'\t' read -r lag lag_timestamp <<<"$lag_evidence"
   record_event_at "topology_reset_replica_lag_seconds" "$lag"
+  record_event_at "topology_reset_replica_lag_timestamp" "$lag_timestamp"
   log_event "topology_reset_verified"
   echo "Primary-to-DR replica topology and pilot-light ECS count are restored."
   ;;
@@ -217,14 +333,14 @@ delete-snapshot)
     exit 1
   }
   aws rds delete-db-snapshot \
-    --region "$PROD_REGION" \
+    --region "$DR_REGION" \
     --db-snapshot-identifier "$snapshot_id" >/dev/null
-  record_event_at "prod_pre_failback_snapshot_deleted" "$snapshot_id"
+  record_event_at "dr_pre_failback_snapshot_deleted" "$snapshot_id"
   echo "Snapshot deletion requested: $snapshot_id"
   ;;
 
 *)
-  echo "Usage: $0 {snapshot|verify-replica|promote-primary|ready|verify-reset|delete-snapshot <id>}" >&2
+  echo "Usage: $0 {snapshot|verify-replica|freeze-writes|promote-primary|ready|verify-reset|delete-snapshot <id>}" >&2
   exit 1
   ;;
 esac

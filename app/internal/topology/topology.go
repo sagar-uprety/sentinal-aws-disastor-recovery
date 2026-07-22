@@ -239,12 +239,12 @@ func (s *Service) database(ctx context.Context) Database {
 
 	instance := output.DBInstances[0]
 	db.AvailabilityZone = aws.ToString(instance.AvailabilityZone)
-	db.Available = true
 	db.Identifier = aws.ToString(instance.DBInstanceIdentifier)
 	db.MultiAZ = aws.ToBool(instance.MultiAZ)
 	db.ReadReplicaSource = aws.ToString(instance.ReadReplicaSourceDBInstanceIdentifier)
 	db.SecondaryAvailabilityZone = aws.ToString(instance.SecondaryAvailabilityZone)
 	db.Status = aws.ToString(instance.DBInstanceStatus)
+	db.Available = db.Status == "available"
 	db.Role = "writer"
 	if db.ReadReplicaSource != "" {
 		db.Role = "read replica"
