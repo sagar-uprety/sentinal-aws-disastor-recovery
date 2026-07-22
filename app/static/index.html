@@ -145,15 +145,15 @@
 
     function renderBars(checks) {
       const slice = checks.slice(0, BAR_COUNT).reverse();
-      const width = 6, gap = 1, height = 30;
-      const total = slice.length * (width + gap) - gap;
+      const blockW = 10, gapW = 2, blockH = 24;
+      const total = slice.length * (blockW + gapW) - gapW;
       const bars = slice.map((check, index) => {
-        const x = index * (width + gap);
+        const x = index * (blockW + gapW);
         const color = check.is_up ? '#10b981' : '#ef4444';
-        const label = check.is_up ? `Up ${check.response_ms}ms` : 'Down';
-        return `<rect x="${x}" y="0" width="${width}" height="${height}" rx="2" fill="${color}" opacity="${check.is_up ? '0.85' : '1'}"><title>${label}</title></rect>`;
+        const label = check.is_up ? `Up ${check.response_ms}ms` : `Down`;
+        return `<rect x="${x}" y="0" width="${blockW}" height="${blockH}" rx="2" fill="${color}" opacity="${check.is_up ? '0.8' : '1'}"><title>${label}</title></rect>`;
       }).join('');
-      return `<svg width="${total}" height="${height}" viewBox="0 0 ${total} ${height}" aria-label="Recent availability" class="mt-1"><rect x="0" y="0" width="${total}" height="${height}" rx="3" fill="none" stroke="#e2e8f0" stroke-width="0.5" stroke-dasharray="2 2"/>${bars}</svg>`;
+      return `<div class="mt-2"><svg width="${total}" height="${blockH + 14}" viewBox="0 0 ${total} ${blockH + 14}" aria-label="Availability timeline" class="block"><text x="0" y="10" class="text-[9px]" fill="#94a3b8">−25m</text><text x="${Math.max(0, total - 24)}" y="10" class="text-[9px]" fill="#94a3b8">now</text>${bars}<rect x="0" y="14" width="${total}" height="${blockH}" rx="3" fill="none" stroke="#e2e8f0" stroke-width="0.5"/></svg><div class="mt-1 flex gap-3 text-[10px] text-muted-foreground/70"><span>█ green = up</span><span>█ red = down</span><span>gap = no check</span></div></div>`;
     }
 
     function renderCards(statuses) {
@@ -174,9 +174,8 @@
           <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
             <span><strong class="font-medium text-foreground">${status.response_ms}ms</strong> response</span>
             <span><strong class="font-medium text-foreground">${status.uptime_pct_24h}%</strong> uptime, 24h</span>
-            <span class="text-[10px] text-muted-foreground/60">each bar = 1 check (30s)</span>
           </div>
-          <div class="mt-1.5" id="bars-${CSS.escape(host)}"></div>
+          <div id="bars-${CSS.escape(host)}"></div>
           <div class="chart-container mt-4" id="chart-${CSS.escape(host)}"></div>
         </article>`;
       }).join('');
