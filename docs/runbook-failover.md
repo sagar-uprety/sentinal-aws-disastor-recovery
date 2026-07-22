@@ -1,6 +1,6 @@
 # Failover Runbook
 
-AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model: the eu-west-1 database replica, VPC, ALB, ECS service definition, ECR image, SSM parameter, monitoring, and ARC controls exist before the drill, while ECS desired count remains 0.
+AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model: the eu-west-1 database replica, VPC, ALB, ECS service definition, ECR image, SSM parameter, and monitoring exist before the drill, while ECS desired count remains 0. ARC routing controls are provisioned on-demand via `create_arc=true` to avoid $2.50/hr idle cost.
 
 The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 measurements remain in drill evidence; current operational measurements below come from M6.
 
@@ -10,10 +10,18 @@ The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 meas
 - DR RDS is an available read replica and DR ECS desired count is 0.
 - The immutable image digest exists in eu-west-1 ECR.
 - The eu-west-1 SSM SecureString metadata and version are current.
-- ARC controls are primary `On`, DR `Off`; safety rules require exactly one active control.
-- Before injecting failure, run `CONFIRM_TRAFFIC_SWITCH=INITIALIZE DRILL_LOG=./drill-events.log scripts/switch-traffic.sh initialize` and verify primary `On`, DR `Off`.
+- **Before a drill, provision ARC:** set `create_arc = true` in the DR Terraform configuration and deploy:
+  ```bash
+  gh workflow run terraform.yml --ref main -f operation=deploy -f target=dr
+  ```
+  Then initialize controls:
+  ```bash
+  CONFIRM_TRAFFIC_SWITCH=INITIALIZE DRILL_LOG=./drill-events.log scripts/switch-traffic.sh initialize
+  ```
+  ARC controls must be primary `On`, DR `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
 - Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, and ARC operations. This project does not provision a separate local recovery role.
+- **After drill, tear down ARC** to save cost: set `create_arc = false` and deploy again.
 
 ## Drill Sequence
 

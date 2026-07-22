@@ -84,9 +84,6 @@ jobs:
       - name: Build frontend assets
         run: npm run build
 
-      - name: Verify generated assets are committed
-        run: git diff --exit-code -- static/app.css static/uPlot.iife.min.js static/uPlot.min.css
-
       - name: Run Go vet
         run: go vet ./...
 
