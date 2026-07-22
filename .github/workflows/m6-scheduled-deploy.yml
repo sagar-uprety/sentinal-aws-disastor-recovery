@@ -118,6 +118,8 @@ jobs:
       - name: Detect existing prod service
         id: prod-service
         run: |
+          # JMESPath backticks are literals, not shell substitutions.
+          # shellcheck disable=SC2016
           service_arn="$(aws ecs describe-services \
             --cluster sentinel-aws-dr-prod \
             --services sentinel-aws-dr-prod \
