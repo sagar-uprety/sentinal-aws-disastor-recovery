@@ -13,6 +13,15 @@ HOSTED_ZONE_NAME="sentinel.sagaruprety.com.np."
 TARGET="${1:-}"
 
 case "$TARGET" in
+initialize)
+  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "INITIALIZE" ] || {
+    echo "Set CONFIRM_TRAFFIC_SWITCH=INITIALIZE before preparing the ARC controls." >&2
+    exit 1
+  }
+  initialize=true
+  new_primary="On"
+  new_dr="Off"
+  ;;
 dr)
   [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "DR" ] || {
     echo "Set CONFIRM_TRAFFIC_SWITCH=DR to route traffic to DR." >&2
@@ -27,6 +36,7 @@ dr)
   new_dr="On"
   target_region="eu-west-1"
   target_alb="sentinel-aws-dr-dr-alb"
+  initialize=false
   ;;
 primary)
   [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "PRIMARY" ] || {
@@ -40,9 +50,10 @@ primary)
   new_dr="Off"
   target_region="eu-central-1"
   target_alb="sentinel-aws-dr-prod-alb"
+  initialize=false
   ;;
 *)
-  echo "Usage: $0 {dr|primary}" >&2
+  echo "Usage: $0 {initialize|dr|primary}" >&2
   exit 1
   ;;
 esac
@@ -85,7 +96,7 @@ if [ "${#arc_endpoints[@]}" -eq 0 ]; then
 fi
 
 arc_get_state() {
-  local control_arn="$1" endpoint region state
+  local control_arn="$1" endpoint region state entry
   for entry in "${arc_endpoints[@]}"; do
     IFS=$'\t' read -r endpoint region <<<"$entry"
     if state="$(aws route53-recovery-cluster \
@@ -103,7 +114,7 @@ arc_get_state() {
 
 primary_state="$(arc_get_state "$primary_control_arn")"
 dr_state="$(arc_get_state "$dr_control_arn")"
-if [ "$primary_state" != "$expected_primary" ] || [ "$dr_state" != "$expected_dr" ]; then
+if [ "$initialize" != true ] && { [ "$primary_state" != "$expected_primary" ] || [ "$dr_state" != "$expected_dr" ]; }; then
   echo "ERROR: unexpected ARC state primary=$primary_state dr=$dr_state; expected primary=$expected_primary dr=$expected_dr." >&2
   exit 1
 fi
@@ -136,6 +147,12 @@ if [ "$primary_state" != "$new_primary" ] || [ "$dr_state" != "$new_dr" ]; then
   exit 1
 fi
 log_event "traffic_switched"
+
+if [ "$initialize" = true ]; then
+  log_event "arc_initialized"
+  echo "ARC initialized: primary=On dr=Off."
+  exit 0
+fi
 
 zone_id="$(aws route53 list-hosted-zones-by-name \
   --dns-name "$HOSTED_ZONE_NAME" \

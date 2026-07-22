@@ -182,7 +182,7 @@ jobs:
           {
             echo '## Terraform speculative plan (prod)'
             echo
-            echo '> This pull-request plan covers prod. DR depends on applied prod remote-state outputs and is planned during the approved deployment sequence.'
+            echo '> This pull-request plan covers prod. DR is planned during the approved deployment sequence after prod is applied.'
             echo
             echo '<details><summary>Show plan</summary>'
             echo
@@ -263,7 +263,7 @@ jobs:
             exit 1
           fi
 
-      - name: Plan primary foundation
+      - name: Plan primary
         working-directory: terraform/environments/prod
         env:
           IMAGE_DIGEST: ${{ inputs.image_digest }}
@@ -307,15 +307,15 @@ jobs:
             fi
             plan_args+=("-var=image_digest=$IMAGE_DIGEST")
           fi
-          terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan "${plan_args[@]}"
+          terraform plan -input=false -lock-timeout=5m -out=prod.tfplan "${plan_args[@]}"
 
-      - name: Show primary foundation plan
+      - name: Show primary plan
         working-directory: terraform/environments/prod
-        run: terraform show -no-color foundation.tfplan
+        run: terraform show -no-color prod.tfplan
 
-      - name: Apply primary foundation plan
+      - name: Apply primary plan
         working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
+        run: terraform apply -input=false -lock-timeout=5m prod.tfplan
 
       - name: Initialize DR state
         if: github.event_name == 'push' || inputs.operation == 'deploy'
@@ -418,3 +418,8 @@ jobs:
       - name: Apply primary destruction plan
         working-directory: terraform/environments/prod
         run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
+
+      - name: Remove AWS-managed workload artifacts
+        env:
+          CONFIRM_CLEANUP: "YES"
+        run: bash scripts/cleanup-workload-artifacts.sh

@@ -86,15 +86,15 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
 
 resource "aws_cloudwatch_metric_alarm" "alb_healthy_hosts" {
   alarm_name          = "${var.project_name}-${var.environment}-alb-healthy-hosts"
-  alarm_description   = "ALB has fewer than 1 healthy target."
+  alarm_description   = var.ecs_desired_count == 0 ? "DR ALB standby expects zero healthy targets." : "ALB has fewer than 1 healthy target."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "HealthyHostCount"
   statistic           = "Minimum"
   period              = 60
   evaluation_periods  = 2
-  threshold           = 1
+  threshold           = var.ecs_desired_count == 0 ? 0 : 1
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "breaching"
+  treat_missing_data  = var.ecs_desired_count == 0 ? "notBreaching" : "breaching"
 
   dimensions = {
     LoadBalancer = var.alb_arn_suffix
@@ -115,7 +115,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks" {
   evaluation_periods  = 2
   threshold           = var.ecs_desired_count
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "breaching"
+  treat_missing_data  = var.ecs_desired_count == 0 ? "notBreaching" : "breaching"
 
   dimensions = {
     ClusterName = var.ecs_cluster_name

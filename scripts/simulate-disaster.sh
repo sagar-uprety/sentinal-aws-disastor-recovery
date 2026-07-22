@@ -70,7 +70,6 @@ if [ -z "$primary_last_check" ]; then
 fi
 
 log_event "drill_started"
-record_event_at "primary_last_check" "$primary_last_check"
 
 aws ecs update-service \
   --region "$PROD_REGION" \
@@ -82,6 +81,11 @@ log_event "disaster_declared"
 
 echo "Primary desired count set to 0. Waiting for a confirmed user-visible outage..."
 for _ in {1..24}; do
+  status_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/status" || true)"
+  observed_last_check="$(jq -r --arg target "$RPO_TARGET_URL" '[.[] | select(.url == $target) | .last_checked] | max // empty' <<<"$status_body" 2>/dev/null || true)"
+  if [ -n "$observed_last_check" ] && [[ "$observed_last_check" > "$primary_last_check" ]]; then
+    primary_last_check="$observed_last_check"
+  fi
   status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/healthz" || true)"
   healthy_count="$(aws elbv2 describe-target-health \
     --region "$PROD_REGION" \
@@ -89,6 +93,7 @@ for _ in {1..24}; do
     --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
 
   if [ "$status" = "503" ] && [ "$healthy_count" = "0" ]; then
+    record_event_at "primary_last_check" "$primary_last_check"
     log_event "outage_confirmed"
     echo "Primary outage confirmed. Run CONFIRM_FAILOVER=YES scripts/failover.sh."
     exit 0

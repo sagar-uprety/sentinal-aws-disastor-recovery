@@ -5,6 +5,8 @@
 # Route53 failover policy driven by ALB health checks is deliberately not
 # used here: it would auto-route to DR the moment prod's health check fails,
 # including while DR is still at desired_count=0.
+# Detection-only HTTP health checks for evidence/alarming live in the DR
+# environment root so they remain active even when ARC is toggled off.
 
 resource "aws_route53recoverycontrolconfig_cluster" "main" {
   name = "${var.project_name}-arc"
@@ -85,38 +87,6 @@ resource "aws_route53_health_check" "dr" {
 
   tags = {
     Name = "${var.project_name}-dr-routing-control"
-  }
-}
-
-# Detection-only: plain HTTP health checks against each ALB's /healthz, for
-# evidence and alarming. Not attached to any record and not part of the
-# traffic-switch path -- only the RECOVERY_CONTROL health checks above gate
-# DNS. failure_threshold=3 (consecutive failures, ~90s at the default
-# 30s interval) is the deliberate threshold that avoids reacting to one
-# transient failure, per section 4.5.
-resource "aws_route53_health_check" "primary_detection" {
-  type              = "HTTP"
-  fqdn              = var.primary_alb_dns_name
-  port              = 80
-  resource_path     = "/healthz"
-  failure_threshold = 3
-  request_interval  = 30
-
-  tags = {
-    Name = "${var.project_name}-primary-detection"
-  }
-}
-
-resource "aws_route53_health_check" "dr_detection" {
-  type              = "HTTP"
-  fqdn              = var.dr_alb_dns_name
-  port              = 80
-  resource_path     = "/healthz"
-  failure_threshold = 3
-  request_interval  = 30
-
-  tags = {
-    Name = "${var.project_name}-dr-detection"
   }
 }
 

@@ -8,7 +8,7 @@ Two Route53 failover records at the same name, each health-gated by a `RECOVERY_
 
 ## Cost
 
-The ARC cluster is billed per cluster-hour while it exists (published rate $2.50/cluster-hour at last check; verify current pricing before apply). Provision only for the drill and destroy after recording, per the project owner's teardown decision. The two `aws_route53_health_check` resources and Route53 records are billed at Route53's normal per-health-check / per-hosted-zone rates, not part of the ARC hourly charge.
+The ARC cluster is billed per cluster-hour while it exists (published rate $2.50/cluster-hour at last check; verify current pricing before apply). Provision only for the drill and destroy after evidence capture, per the project owner's teardown decision. The two `aws_route53_health_check` resources and Route53 records are billed at Route53's normal per-health-check / per-hosted-zone rates, not part of the ARC hourly charge.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -33,9 +33,7 @@ No modules.
 | Name | Type |
 | ---- | ---- |
 | [aws_route53_health_check.dr](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_health_check) | resource |
-| [aws_route53_health_check.dr_detection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_health_check) | resource |
 | [aws_route53_health_check.primary](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_health_check) | resource |
-| [aws_route53_health_check.primary_detection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_health_check) | resource |
 | [aws_route53_record.dr](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_route53_record.primary](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_route53recoverycontrolconfig_cluster.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53recoverycontrolconfig_cluster) | resource |
