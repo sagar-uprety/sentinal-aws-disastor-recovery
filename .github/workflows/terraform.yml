@@ -182,7 +182,7 @@ jobs:
           {
             echo '## Terraform speculative plan (prod)'
             echo
-            echo '> This pull-request plan covers prod. DR depends on applied prod remote-state outputs and is planned during the approved deployment sequence.'
+            echo '> This pull-request plan covers prod. DR is planned during the approved deployment sequence after prod is applied.'
             echo
             echo '<details><summary>Show plan</summary>'
             echo
@@ -199,8 +199,8 @@ jobs:
           header: terraform-plan-prod
           path: plan-comment.md
 
-  deploy:
-    name: Provision primary and DR infrastructure
+  deploy-plan:
+    name: Plan primary and DR deployment
     needs: quality
     if: >-
       always() &&
@@ -210,10 +210,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.operation == 'foundation' || inputs.operation == 'deploy'))
     runs-on: ubuntu-latest
-    timeout-minutes: 150
-    environment:
-      name: terraform-production
-      url: https://sentinel.sagaruprety.com.np
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
@@ -231,7 +228,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-deploy-${{ github.run_id }}
+          role-session-name: terraform-deploy-plan-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Initialize primary state
@@ -263,7 +260,7 @@ jobs:
             exit 1
           fi
 
-      - name: Plan primary foundation
+      - name: Plan primary
         working-directory: terraform/environments/prod
         env:
           IMAGE_DIGEST: ${{ inputs.image_digest }}
@@ -307,15 +304,18 @@ jobs:
             fi
             plan_args+=("-var=image_digest=$IMAGE_DIGEST")
           fi
-          terraform plan -input=false -lock-timeout=5m -out=foundation.tfplan "${plan_args[@]}"
+          terraform plan -input=false -lock-timeout=5m -out=prod.tfplan "${plan_args[@]}"
 
-      - name: Show primary foundation plan
+      - name: Show primary plan
         working-directory: terraform/environments/prod
-        run: terraform show -no-color foundation.tfplan
+        run: terraform show -no-color prod.tfplan
 
-      - name: Apply primary foundation plan
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m foundation.tfplan
+      - name: Upload primary plan
+        uses: actions/upload-artifact@v6
+        with:
+          name: deploy-plan-prod-${{ github.run_id }}
+          path: terraform/environments/prod/prod.tfplan
+          retention-days: 1
 
       - name: Initialize DR state
         if: github.event_name == 'push' || inputs.operation == 'deploy'
@@ -332,13 +332,95 @@ jobs:
         working-directory: terraform/environments/dr
         run: terraform show -no-color dr.tfplan
 
-      - name: Apply DR pilot-light plan
+      - name: Upload DR plan
         if: github.event_name == 'push' || inputs.operation == 'deploy'
+        uses: actions/upload-artifact@v6
+        with:
+          name: deploy-plan-dr-${{ github.run_id }}
+          path: terraform/environments/dr/dr.tfplan
+          retention-days: 1
+
+  deploy-apply:
+    name: Apply approved deployment plans
+    needs: deploy-plan
+    if: >-
+      always() &&
+      needs.deploy-plan.result == 'success' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: terraform-production
+      url: https://sentinel.sagaruprety.com.np
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-deploy-apply-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download primary plan
+        uses: actions/download-artifact@v7
+        with:
+          name: deploy-plan-prod-${{ github.run_id }}
+          path: terraform/environments/prod
+
+      - name: Download DR plan
+        uses: actions/download-artifact@v7
+        with:
+          name: deploy-plan-dr-${{ github.run_id }}
+          path: terraform/environments/dr
+
+      - name: Recheck failback topology
+        run: |
+          prod_source="$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          dr_source="$(aws rds describe-db-instances \
+            --region eu-west-1 \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
+            echo "Database topology changed during approval. Deployment aborted." >&2
+            exit 1
+          fi
+
+      - name: Initialize primary state
+        working-directory: terraform/environments/prod
+        run: terraform init -input=false
+
+      - name: Show and apply primary plan
+        working-directory: terraform/environments/prod
+        run: |
+          terraform show -no-color prod.tfplan
+          terraform apply -input=false -lock-timeout=5m prod.tfplan
+
+      - name: Initialize DR state
         working-directory: terraform/environments/dr
-        run: terraform apply -input=false -lock-timeout=5m dr.tfplan
+        run: terraform init -input=false
+
+      - name: Show and apply DR pilot-light plan
+        working-directory: terraform/environments/dr
+        run: |
+          terraform show -no-color dr.tfplan
+          terraform apply -input=false -lock-timeout=5m dr.tfplan
 
       - name: Verify DR pilot-light state
-        if: github.event_name == 'push' || inputs.operation == 'deploy'
         run: |
           desired="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
           source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"

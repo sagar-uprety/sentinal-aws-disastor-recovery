@@ -1,15 +1,7 @@
 # DR environment composes the same modules as prod, at pilot-light scale
 # (ECS desired_count 0, single-AZ replica) until an operator promotes it.
-
-data "terraform_remote_state" "prod" {
-  backend = "s3"
-
-  config = {
-    bucket = "sagar-demos-terraform-state"
-    key    = "sentinel/prod/terraform.tfstate"
-    region = "eu-central-1"
-  }
-}
+# Prod dependencies are resolved through AWS data sources (not remote state)
+# so DR plans and applies do not require prod's state file.
 
 data "aws_caller_identity" "current" {}
 
@@ -38,13 +30,28 @@ data "aws_kms_key" "rds" {
   key_id = "alias/aws/rds"
 }
 
+# Prod resources discovered from AWS APIs — no remote-state dependency.
+data "aws_db_instance" "prod" {
+  provider               = aws.prod
+  db_instance_identifier = "${local.project_name}-prod"
+}
+
+data "aws_lb" "prod" {
+  provider = aws.prod
+  name     = "${local.project_name}-prod-alb"
+}
+
+data "aws_ssm_parameter" "database_password_dr" {
+  name = "/${local.project_name}/prod/database/password"
+}
+
 # Guards against creating a replica on a minor version that has drifted from
 # prod; M4 requires the two regions resolve to the same PostgreSQL 18 minor
 # before replica creation, not just "some" PostgreSQL 18.
 check "engine_version_matches_prod" {
   assert {
-    condition     = data.aws_rds_engine_version.postgres.version == data.terraform_remote_state.prod.outputs.rds_engine_version
-    error_message = "eu-west-1's latest PostgreSQL 18 minor (${data.aws_rds_engine_version.postgres.version}) does not match prod's running version (${data.terraform_remote_state.prod.outputs.rds_engine_version}); resolve before creating the replica."
+    condition     = data.aws_rds_engine_version.postgres.version == data.aws_db_instance.prod.engine_version
+    error_message = "eu-west-1's latest PostgreSQL 18 minor (${data.aws_rds_engine_version.postgres.version}) does not match prod's running version (${data.aws_db_instance.prod.engine_version}); resolve before creating the replica."
   }
 }
 
@@ -87,7 +94,7 @@ module "ecs" {
   db_name                = "sentinel"
   db_user                = "sentinel"
   db_instance_identifier = "${local.project_name}-${local.environment}"
-  db_password_ssm_arn    = data.terraform_remote_state.prod.outputs.database_password_dr_ssm_arn
+  db_password_ssm_arn    = data.aws_ssm_parameter.database_password_dr.arn
 
   deploy_service = true
   desired_count  = var.desired_count
@@ -115,10 +122,10 @@ module "rds" {
   ecs_security_group_id = module.ecs.security_group_id
 
   engine_version = data.aws_rds_engine_version.postgres.version
-  instance_class = data.terraform_remote_state.prod.outputs.rds_instance_class
+  instance_class = data.aws_db_instance.prod.db_instance_class
   multi_az       = var.multi_az
 
-  replicate_source_db_arn = data.terraform_remote_state.prod.outputs.rds_instance_arn
+  replicate_source_db_arn = data.aws_db_instance.prod.db_instance_arn
   kms_key_id              = data.aws_kms_key.rds.arn
 
   db_name  = "sentinel"

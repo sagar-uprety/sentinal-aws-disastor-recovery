@@ -7,7 +7,7 @@
 
 - YOU MUST LOAD ALL MCP available to you at the start of the session and use the relevent one when needed. PREFER MCP over context7 when the MCP covers the official info of the tool.
 
-- AWS MCP : READ ONLY ALLOWED , NO MODIFICATION IN AWS AT ALL. ONLY READ TOOLS and COMMANDS
+- AWS MCP is read-only. AWS mutations are allowed only through reviewed repository Terraform GitHub Actions workflows or guarded scripts with explicit user approval. One explicit approval may cover a documented multi-step drill such as M6; stop and ask again only when observed state is unsafe, unexpected, or materially differs from the runbook.
 
 
 - always work on feature branch and use conventional commits, commit message should be short and to the point human readable.

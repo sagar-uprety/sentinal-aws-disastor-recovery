@@ -15,3 +15,9 @@ variable "multi_az" {
   type        = bool
   default     = false
 }
+
+variable "create_arc" {
+  description = "Provision the Route53 ARC routing-control cluster and failover records. Only needed during a drill ($2.50/cluster-hour). Off by default to save cost."
+  type        = bool
+  default     = false
+}
