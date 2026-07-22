@@ -55,7 +55,10 @@ module "route53_failover" {
   dr_alb_zone_id  = module.alb.alb_zone_id
 }
 
-# Simple A alias to prod when ARC is not provisioned.
+# Simple A alias to prod when ARC is not provisioned. Must wait for the
+# ARC module (and its failover records) to be destroyed first — Route53
+# rejects a simple A record when set-identifier failover records exist
+# with the same name and type.
 resource "aws_route53_record" "apex" {
   count   = var.create_arc ? 0 : 1
   zone_id = data.aws_route53_zone.sentinel.zone_id
@@ -67,4 +70,6 @@ resource "aws_route53_record" "apex" {
     zone_id                = data.aws_lb.prod.zone_id
     evaluate_target_health = true
   }
+
+  depends_on = [module.route53_failover]
 }
