@@ -112,6 +112,11 @@ resource "aws_db_instance" "main" {
 
   monitoring_interval = 60
   monitoring_role_arn = aws_iam_role.rds_monitoring.arn
+
+  # Replicas inherit credentials. Promotion must not rotate them when write-only version state is absent.
+  lifecycle {
+    ignore_changes = [password_wo, password_wo_version]
+  }
 }
 
 check "replica_encryption_key" {

@@ -10,8 +10,9 @@ on:
         options:
           - failback-prepare
           - failback-reset
+          - credential-repair
       confirm_failback:
-        description: Type REBUILD_PROD for failback-prepare or RESET_DR for failback-reset.
+        description: Type REBUILD_PROD, RESET_DR, or RECONCILE_CREDENTIAL for the selected operation.
         required: true
         type: string
       failback_snapshot_id:
@@ -52,8 +53,11 @@ jobs:
               echo "failback-prepare requires failback_snapshot_id." >&2
               exit 1
             }
-          elif [ "$CONFIRM_FAILBACK" != "RESET_DR" ]; then
+          elif [ "$OPERATION" = "failback-reset" ] && [ "$CONFIRM_FAILBACK" != "RESET_DR" ]; then
             echo "failback-reset requires confirm_failback=RESET_DR." >&2
+            exit 1
+          elif [ "$OPERATION" = "credential-repair" ] && [ "$CONFIRM_FAILBACK" != "RECONCILE_CREDENTIAL" ]; then
+            echo "credential-repair requires confirm_failback=RECONCILE_CREDENTIAL." >&2
             exit 1
           fi
 
@@ -442,3 +446,88 @@ jobs:
             --query 'services[0].desiredCount' --output text)"
           [[ "$source" == *"sentinel-aws-dr-prod"* ]]
           test "$desired" = "0"
+
+  credential-repair:
+    name: Reconcile promoted-primary credential
+    needs: preflight
+    if: inputs.operation == 'credential-repair' && inputs.confirm_failback == 'RECONCILE_CREDENTIAL' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: terraform-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: credential-repair-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify reset topology before credential repair
+        run: |
+          read -r prod_status prod_source prod_multi_az <<<"$(aws rds describe-db-instances \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
+          dr_source="$(aws rds describe-db-instances \
+            --region eu-west-1 \
+            --db-instance-identifier sentinel-aws-dr-dr \
+            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          read -r dr_desired dr_running <<<"$(aws ecs describe-services \
+            --region eu-west-1 \
+            --cluster sentinel-aws-dr-dr \
+            --services sentinel-aws-dr-dr \
+            --query 'services[0].[desiredCount,runningCount]' --output text)"
+          test "$prod_status" = "available"
+          { [ -z "$prod_source" ] || [ "$prod_source" = "None" ]; }
+          test "$prod_multi_az" = "True"
+          [[ "$dr_source" == *"sentinel-aws-dr-prod"* ]]
+          test "$dr_desired" = "0"
+          test "$dr_running" = "0"
+
+      - name: Reconcile RDS password from SecureString
+        run: |
+          db_password="$(aws ssm get-parameter \
+            --region eu-central-1 \
+            --name /sentinel-aws-dr/prod/database/password \
+            --with-decryption \
+            --query 'Parameter.Value' --output text)"
+          trap 'unset db_password' EXIT
+          aws rds modify-db-instance \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod \
+            --master-user-password "$db_password" \
+            --apply-immediately >/dev/null
+          unset db_password
+          aws rds wait db-instance-available \
+            --region eu-central-1 \
+            --db-instance-identifier sentinel-aws-dr-prod
+
+      - name: Restart prod tasks with reconciled credential
+        run: |
+          aws ecs update-service \
+            --region eu-central-1 \
+            --cluster sentinel-aws-dr-prod \
+            --service sentinel-aws-dr-prod \
+            --force-new-deployment >/dev/null
+          aws ecs wait services-stable \
+            --region eu-central-1 \
+            --cluster sentinel-aws-dr-prod \
+            --services sentinel-aws-dr-prod
+
+      - name: Verify restored public health
+        run: |
+          for _ in {1..60}; do
+            topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology || true)"
+            if jq -e '.application.region == "eu-central-1" and .compute.desired_count == 2 and .compute.running_count == 2 and .compute.multi_az == true and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Primary application did not recover after credential reconciliation." >&2
+          exit 1
