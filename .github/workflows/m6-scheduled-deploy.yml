@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - ".github/workflows/m6-scheduled-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: Type DEPLOY to authorize immediate deployment.
+        required: true
+        type: string
   schedule:
     # 10:00 Europe/Berlin (CEST) on 2026-07-23.
     - cron: "0 8 23 7 *"
@@ -42,7 +48,10 @@ jobs:
 
   deploy:
     name: Deploy prod and DR from zero
-    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' && inputs.confirm_deploy == 'DEPLOY')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment:
@@ -56,6 +65,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Enforce one-time deployment date
+        if: github.event_name == 'schedule'
         run: |
           actual_date="$(TZ=Europe/Berlin date +%F)"
           if [ "$actual_date" != "$SCHEDULED_DEPLOY_DATE" ]; then
