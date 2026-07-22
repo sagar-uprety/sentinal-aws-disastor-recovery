@@ -145,14 +145,15 @@
 
     function renderBars(checks) {
       const slice = checks.slice(0, BAR_COUNT).reverse();
-      const width = 5, gap = 2, height = 28;
+      const width = 6, gap = 1, height = 30;
       const total = slice.length * (width + gap) - gap;
       const bars = slice.map((check, index) => {
-        const barHeight = Math.max(1, Math.min(height, (check.response_ms || 0) / 5000 * height));
+        const x = index * (width + gap);
         const color = check.is_up ? '#10b981' : '#ef4444';
-        return `<rect x="${index * (width + gap)}" y="${height - barHeight}" width="${width}" height="${barHeight}" rx="1" fill="${color}"><title>${check.response_ms}ms ${check.is_up ? 'up' : 'down'}</title></rect>`;
+        const label = check.is_up ? `Up ${check.response_ms}ms` : 'Down';
+        return `<rect x="${x}" y="0" width="${width}" height="${height}" rx="2" fill="${color}" opacity="${check.is_up ? '0.85' : '1'}"><title>${label}</title></rect>`;
       }).join('');
-      return `<svg width="${total}" height="${height}" viewBox="0 0 ${total} ${height}" aria-label="Recent response times">${bars}</svg>`;
+      return `<svg width="${total}" height="${height}" viewBox="0 0 ${total} ${height}" aria-label="Recent availability" class="mt-1"><rect x="0" y="0" width="${total}" height="${height}" rx="3" fill="none" stroke="#e2e8f0" stroke-width="0.5" stroke-dasharray="2 2"/>${bars}</svg>`;
     }
 
     function renderCards(statuses) {
@@ -189,16 +190,35 @@
       const container = document.getElementById('chart-' + CSS.escape(host));
       if (!container) return;
       const values = checks.slice().reverse();
+      const times = values.map(check => new Date(check.checked_at).getTime() / 1000);
       const dark = document.documentElement.classList.contains('dark');
-      new uPlot({
+      const downBands = [];
+      let bandStart = null;
+      for (let i = 0; i < values.length; i++) {
+        if (!values[i].is_up && bandStart === null) bandStart = times[i];
+        if ((values[i].is_up || i === values.length - 1) && bandStart !== null) {
+          downBands.push([bandStart, times[i]]);
+          bandStart = null;
+        }
+      }
+      const bands = downBands.map(b => {
+        return { series: 2, fill: dark ? 'rgba(239,68,68,.22)' : 'rgba(239,68,68,.15)' };
+      });
+      const opts = {
         width: container.clientWidth || 600,
         height: 84,
         cursor: { show: false },
         select: { show: false },
         legend: { show: false },
         axes: [{ show: false }, { show: false }],
-        series: [{}, { stroke: '#10b981', width: 1.5, fill: dark ? 'rgba(16,185,129,.12)' : 'rgba(16,185,129,.08)', points: { show: false } }],
-      }, [values.map(check => new Date(check.checked_at).getTime() / 1000), values.map(check => check.response_ms || 0)], container);
+        series: [
+          {},
+          { stroke: '#10b981', width: 1.5, fill: dark ? 'rgba(16,185,129,.12)' : 'rgba(16,185,129,.08)', points: { show: false }, label: 'Response ms' },
+          { stroke: 'transparent', fill: 'transparent', points: { show: false }, label: 'Status' },
+        ],
+        bands: bands,
+      };
+      new uPlot(opts, [times, values.map(check => check.response_ms || 0), values.map(check => check.is_up ? 1 : 0)], container);
     }
 
     async function fetchChecks() {
