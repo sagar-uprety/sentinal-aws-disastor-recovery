@@ -128,9 +128,10 @@ module "service" {
 resource "aws_route53_record" "monitor" {
   count = var.deploy_service ? 1 : 0
 
-  zone_id = data.aws_route53_zone.sentinel.zone_id
-  name    = local.app_hostname
-  type    = "A"
+  allow_overwrite = true
+  zone_id         = data.aws_route53_zone.sentinel.zone_id
+  name            = local.app_hostname
+  type            = "A"
 
   alias {
     name                   = module.alb.alb_dns_name
