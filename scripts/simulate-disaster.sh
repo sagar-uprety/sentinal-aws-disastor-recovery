@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
 PROD_REGION="eu-central-1"
@@ -14,13 +15,15 @@ DR_SERVICE="sentinel-aws-dr-dr"
 DR_DB_ID="sentinel-aws-dr-dr"
 TARGET_GROUP="sentinel-aws-dr-prod-tg"
 LOAD_BALANCER="sentinel-aws-dr-prod-alb"
-STATUS_HOST="sentinel.sagaruprety.com.np"
-RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
+WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
+MONITOR_HOST="sentinel.sagaruprety.com.np"
 
 if [ "${CONFIRM_DISASTER:-}" != "YES" ]; then
   echo "Set CONFIRM_DISASTER=YES to start the controlled outage." >&2
   exit 1
 fi
+
+curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
 
 prod_service="$(aws ecs describe-services \
   --region "$PROD_REGION" \
@@ -62,14 +65,13 @@ alb_dns="$(aws elbv2 describe-load-balancers \
   --names "$LOAD_BALANCER" \
   --query 'LoadBalancers[0].DNSName' --output text)"
 
-status_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/status")"
-primary_last_check="$(jq -r --arg target "$RPO_TARGET_URL" '[.[] | select(.url == $target) | .last_checked] | max // empty' <<<"$status_body")"
-if [ -z "$primary_last_check" ]; then
-  echo "ERROR: no primary check exists for RPO target $RPO_TARGET_URL." >&2
-  exit 1
-fi
-
 log_event "drill_started"
+
+pre_outage_slug="pre-drill-$(date -u +%Y%m%d%H%M%S)"
+pre_outage_link="$(create_short_link_direct "$PROD_REGION" "$WORKLOAD_HOST" "$alb_dns" "$pre_outage_slug" "https://${MONITOR_HOST}")"
+primary_link_created_at="$(jq -r '.created_at' <<<"$pre_outage_link")"
+record_event_at "pre_outage_link_slug" "$pre_outage_slug"
+record_event_at "primary_link_created_at" "$primary_link_created_at"
 
 aws ecs update-service \
   --region "$PROD_REGION" \
@@ -81,19 +83,15 @@ log_event "disaster_declared"
 
 echo "Primary desired count set to 0. Waiting for a confirmed user-visible outage..."
 for _ in {1..24}; do
-  status_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/status" || true)"
-  observed_last_check="$(jq -r --arg target "$RPO_TARGET_URL" '[.[] | select(.url == $target) | .last_checked] | max // empty' <<<"$status_body" 2>/dev/null || true)"
-  if [ -n "$observed_last_check" ] && [[ "$observed_last_check" > "$primary_last_check" ]]; then
-    primary_last_check="$observed_last_check"
-  fi
-  status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/healthz" || true)"
+  status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-to "${WORKLOAD_HOST}:443:${alb_dns}:443" "https://${WORKLOAD_HOST}/healthz" || true)"
   healthy_count="$(aws elbv2 describe-target-health \
     --region "$PROD_REGION" \
     --target-group-arn "$target_group_arn" \
     --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
 
   if [ "$status" = "503" ] && [ "$healthy_count" = "0" ]; then
-    record_event_at "primary_last_check" "$primary_last_check"
+    curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
+    log_event "monitor_available_during_outage"
     log_event "outage_confirmed"
     echo "Primary outage confirmed. Run CONFIRM_FAILOVER=YES scripts/failover.sh."
     exit 0

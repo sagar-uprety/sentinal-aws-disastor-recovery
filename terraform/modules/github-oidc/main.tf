@@ -17,7 +17,7 @@ resource "aws_iam_role" "github_actions" {
   })
 }
 
-resource "aws_iam_role_policy" "app_deploy" {
+resource "aws_iam_role_policy" "workload_deploy" {
   #checkov:skip=CKV_AWS_290,CKV_AWS_355:ecr:GetAuthorizationToken and ecs:RegisterTaskDefinition do not support resource-level scoping, per Hard Rule 7
   name = "${var.project_name}-${var.environment}-github-actions-deploy"
   role = aws_iam_role.github_actions.id
@@ -92,4 +92,9 @@ resource "aws_iam_role_policy" "app_deploy" {
       },
     ]
   })
+}
+
+moved {
+  from = aws_iam_role_policy.app_deploy
+  to   = aws_iam_role_policy.workload_deploy
 }

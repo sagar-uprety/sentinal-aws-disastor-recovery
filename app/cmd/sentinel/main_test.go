@@ -5,67 +5,71 @@ import (
 	"testing"
 )
 
-// isolates database configuration test cases.
-func clearDatabaseEnv(t *testing.T) {
+func clearEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
+	for _, name := range []string{
+		"MONITORED_URL", "DYNAMODB_TABLE", "AWS_REGION", "PORT", "CHECK_INTERVAL_SECONDS",
+		"PROD_AWS_REGION", "PROD_ECS_CLUSTER", "PROD_ECS_SERVICE", "PROD_DB_IDENTIFIER",
+		"DR_AWS_REGION", "DR_ECS_CLUSTER", "DR_ECS_SERVICE", "DR_DB_IDENTIFIER",
+	} {
 		t.Setenv(name, "")
 	}
 }
 
-// verifies local DATABASE_URL configuration.
-func TestLoadConfigWithDatabaseURL(t *testing.T) {
-	clearDatabaseEnv(t)
-	want := "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable"
-	t.Setenv("DATABASE_URL", want)
-
+func TestLoadConfigLocalDefaults(t *testing.T) {
+	clearEnvironment(t)
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.databaseURL != want {
-		t.Fatalf("database URL = %q, want %q", cfg.databaseURL, want)
+	if cfg.monitoredURL != "http://localhost:8081/healthz" || cfg.dynamoTable != "" || len(cfg.regions) != 0 {
+		t.Fatalf("unexpected local config: %#v", cfg)
 	}
 }
 
-// verifies ECS-style split database configuration.
-func TestLoadConfigWithDatabaseVariables(t *testing.T) {
-	clearDatabaseEnv(t)
-	t.Setenv("DB_HOST", "db")
-	t.Setenv("DB_PORT", "5432")
-	t.Setenv("DB_NAME", "sentinel")
-	t.Setenv("DB_USER", "sentinel")
-	t.Setenv("DB_PASSWORD", "p@ss/word")
-
+func TestLoadConfigProduction(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("MONITORED_URL", "https://workload.example.com/healthz")
+	t.Setenv("DYNAMODB_TABLE", "checks")
+	t.Setenv("AWS_REGION", "eu-west-1")
+	for key, value := range map[string]string{
+		"PROD_AWS_REGION": "eu-west-1", "PROD_ECS_CLUSTER": "prod", "PROD_ECS_SERVICE": "workload", "PROD_DB_IDENTIFIER": "prod-db",
+		"DR_AWS_REGION": "eu-central-1", "DR_ECS_CLUSTER": "dr", "DR_ECS_SERVICE": "workload", "DR_DB_IDENTIFIER": "dr-db",
+	} {
+		t.Setenv(key, value)
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	want := "postgres://sentinel:p%40ss%2Fword@db:5432/sentinel?sslmode=require"
-	if cfg.databaseURL != want {
-		t.Fatalf("database URL = %q, want %q", cfg.databaseURL, want)
+	if cfg.dynamoTable != "checks" || cfg.awsRegion != "eu-west-1" || len(cfg.regions) != 2 {
+		t.Fatalf("unexpected production config: %#v", cfg)
 	}
 }
 
-// verifies configuration paths cannot be combined.
-func TestLoadConfigRejectsMixedDatabaseConfiguration(t *testing.T) {
-	clearDatabaseEnv(t)
-	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("DB_HOST", "db")
-
+func TestLoadConfigRejectsInvalidTarget(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("MONITORED_URL", "ftp://example.com/healthz")
 	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("error = %v, want mutual exclusion error", err)
+	if err == nil || !strings.Contains(err.Error(), "MONITORED_URL") {
+		t.Fatalf("error = %v, want monitored URL error", err)
 	}
 }
 
-// verifies every split database value is required.
-func TestLoadConfigRejectsIncompleteDatabaseVariables(t *testing.T) {
-	clearDatabaseEnv(t)
-	t.Setenv("DB_HOST", "db")
-
+func TestLoadConfigRequiresDynamoRegion(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("DYNAMODB_TABLE", "checks")
 	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "database configuration missing") {
-		t.Fatalf("error = %v, want missing configuration error", err)
+	if err == nil || !strings.Contains(err.Error(), "AWS_REGION") {
+		t.Fatalf("error = %v, want AWS region error", err)
+	}
+}
+
+func TestLoadConfigRejectsPartialTopology(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("PROD_AWS_REGION", "eu-west-1")
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "PROD topology") {
+		t.Fatalf("error = %v, want topology error", err)
 	}
 }

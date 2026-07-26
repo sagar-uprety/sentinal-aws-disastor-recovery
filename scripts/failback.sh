@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
 PROD_REGION="eu-central-1"
@@ -14,8 +15,8 @@ PROD_CLUSTER="sentinel-aws-dr-prod"
 PROD_SERVICE="sentinel-aws-dr-prod"
 DR_CLUSTER="sentinel-aws-dr-dr"
 DR_SERVICE="sentinel-aws-dr-dr"
-STATUS_HOST="sentinel.sagaruprety.com.np"
-RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
+WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
+MONITOR_HOST="sentinel.sagaruprety.com.np"
 FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-300}"
 
 latest_replica_lag_json() {
@@ -150,7 +151,12 @@ freeze-writes)
     --region "$DR_REGION" \
     --names "sentinel-aws-dr-dr-tg" \
     --query 'TargetGroups[0].TargetGroupArn' --output text)"
-  final_row=""
+  require_current_event "dr_link_slug"
+  final_link_slug="$(current_event_ts dr_link_slug)"
+  if ! require_short_link_direct "$WORKLOAD_HOST" "$dr_alb_dns" "$final_link_slug"; then
+    echo "ERROR: active DR does not contain expected link $final_link_slug." >&2
+    exit 1
+  fi
   aws ecs update-service \
     --region "$DR_REGION" \
     --cluster "$DR_CLUSTER" \
@@ -159,11 +165,6 @@ freeze-writes)
 
   frozen=false
   for _ in {1..90}; do
-    status_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${dr_alb_dns}:443" "https://${STATUS_HOST}/status" || true)"
-    observed_row="$(jq -r --arg target "$RPO_TARGET_URL" '[.[] | select(.url == $target) | .last_checked] | max // empty' <<<"$status_body" 2>/dev/null || true)"
-    if [ -n "$observed_row" ] && { [ -z "$final_row" ] || [[ "$observed_row" > "$final_row" ]]; }; then
-      final_row="$observed_row"
-    fi
     read -r desired running <<<"$(aws ecs describe-services \
       --region "$DR_REGION" \
       --cluster "$DR_CLUSTER" \
@@ -179,14 +180,15 @@ freeze-writes)
     fi
     sleep 2
   done
-  if [ "$frozen" != true ] || [ -z "$final_row" ]; then
-    echo "ERROR: could not prove DR writes stopped with a final observed row; restoring DR service." >&2
+  if [ "$frozen" != true ]; then
+    echo "ERROR: could not prove DR writes stopped; restoring DR service." >&2
     aws ecs update-service --region "$DR_REGION" --cluster "$DR_CLUSTER" --service "$DR_SERVICE" --desired-count 2 >/dev/null
     exit 1
   fi
-  record_event_at "failback_dr_final_row" "$final_row"
+  record_event_at "failback_dr_final_link_slug" "$final_link_slug"
   log_event "failback_writes_frozen"
-  echo "DR writes are frozen at observed row $final_row. Canonical traffic is unavailable until prod is ready."
+  curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
+  echo "DR writes are frozen after link $final_link_slug. Canonical workload traffic is unavailable until prod is ready; monitor remains healthy."
   ;;
 
 promote-primary)
@@ -307,8 +309,8 @@ ready)
   }
   require_current_event "failback_replica_verified"
   require_current_event "failback_writes_frozen"
-  require_current_event "failback_dr_final_row"
-  known_row="$(current_event_ts failback_dr_final_row)"
+  require_current_event "failback_dr_final_link_slug"
+  known_link_slug="$(current_event_ts failback_dr_final_link_slug)"
 
   read -r db_status source multi_az <<<"$(aws rds describe-db-instances \
     --region "$PROD_REGION" \
@@ -333,14 +335,12 @@ ready)
     --region "$PROD_REGION" \
     --names "sentinel-aws-dr-prod-alb" \
     --query 'LoadBalancers[0].DNSName' --output text)"
-  encoded_target="$(jq -rn --arg value "$RPO_TARGET_URL" '$value | @uri')"
-  history="$(curl -fsS --connect-to "${STATUS_HOST}:443:${alb_dns}:443" "https://${STATUS_HOST}/history?target=${encoded_target}&limit=500")"
-  if ! jq -e --arg known "$known_row" 'any(.[]; .checked_at == $known)' >/dev/null <<<"$history"; then
-    echo "ERROR: promoted prod does not contain the known row written in DR at $known_row." >&2
+  if ! require_short_link_direct "$WORKLOAD_HOST" "$alb_dns" "$known_link_slug"; then
+    echo "ERROR: promoted prod does not contain DR-created link $known_link_slug." >&2
     exit 1
   fi
   log_event "failback_ready"
-  echo "Prod is Multi-AZ, healthy, and contains the known DR-written row. Run: CONFIRM_TRAFFIC_SWITCH=PRIMARY scripts/switch-traffic.sh primary"
+  echo "Prod is Multi-AZ, healthy, and contains DR-created link $known_link_slug. Run: CONFIRM_TRAFFIC_SWITCH=PRIMARY scripts/switch-traffic.sh primary"
   ;;
 
 verify-reset)

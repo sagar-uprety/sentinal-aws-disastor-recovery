@@ -19,6 +19,6 @@ output "task_execution_role_arn" {
 }
 
 output "task_role_arn" {
-  description = "ARN of the application task role used for runtime topology reads."
+  description = "ARN of the workload task role."
   value       = aws_iam_role.task.arn
 }

@@ -5,7 +5,7 @@
 # When ARC is off, a simple A alias routes the apex to prod ALB directly.
 
 data "aws_route53_zone" "sentinel" {
-  name         = "${local.app_hostname}."
+  name         = "sentinel.sagaruprety.com.np."
   private_zone = false
 }
 
@@ -59,7 +59,20 @@ module "route53_failover" {
 # ARC module (and its failover records) to be destroyed first — Route53
 # rejects a simple A record when set-identifier failover records exist
 # with the same name and type.
-resource "aws_route53_record" "apex" {
+moved {
+  from = aws_route53_record.apex
+  to   = aws_route53_record.legacy_monitor
+}
+
+removed {
+  from = aws_route53_record.legacy_monitor
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "aws_route53_record" "workload" {
   count   = var.create_arc ? 0 : 1
   zone_id = data.aws_route53_zone.sentinel.zone_id
   name    = local.app_hostname

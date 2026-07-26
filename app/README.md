@@ -1,44 +1,53 @@
-# Sentinel App
+# Sentinel Monitor
 
-HTTP uptime checker and status page. Checks targets on a 30s interval, stores results in PostgreSQL, exposes a status API and a clean browser-based status page. Built with Go and a scratch-based Docker image (4.82 MB).
+Repository implementation for isolated HTTP uptime monitor and status page; not yet deployed for M7. Sentinel checks one canonical workload health URL, stores deployed history in DynamoDB, and exposes workload topology across production and disaster-recovery regions.
 
-## Quick start
+## Local start
 
 ```bash
-docker compose up
+go run ./cmd/sentinel
 ```
 
-Open http://localhost:8080.
+Open http://localhost:8080. Local mode monitors `http://localhost:8081/healthz` and stores checks in memory.
 
 ## Endpoints
 
 | Path | Description |
 |------|-------------|
-| GET /healthz | DB health check, returns {"status":"ok"} |
-| GET /targets | List of monitored targets |
-| GET /status | Latest check result per target with 24h uptime % |
-| GET /history?target={URL} | Last 100 checks for an exact target URL |
-| GET / | Status page UI |
+| `GET /healthz` | Store health |
+| `GET /targets` | Configured target list containing exactly one URL |
+| `GET /status` | Latest result and rolling 24-hour uptime |
+| `GET /history?target={URL}&limit={1-500}` | Recent results for exact target URL |
+| `GET /events?limit={1-100}` | Recent drill lifecycle events |
+| `GET /topology` | Explicit production and DR ECS/RDS resource state |
+| `GET /` | Static status UI |
 
 ## Configuration
 
-Set database configuration using exactly one of these paths:
+| Variable | Required | Default |
+|----------|----------|---------|
+| `MONITORED_URL` | No | `http://localhost:8081/healthz` |
+| `DYNAMODB_TABLE` | Production | Empty, enabling memory store |
+| `AWS_REGION` | When `DYNAMODB_TABLE` is set | None |
+| `CHECK_INTERVAL_SECONDS` | No | `30` |
+| `PORT` | No | `8080` |
 
-- Local convenience: `DATABASE_URL`
-- ECS-style configuration: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`
+Topology uses explicit workload identifiers and never monitor ECS task metadata. Configure each region as a complete group or leave it unset:
 
-Other variables: `CHECK_INTERVAL_SECONDS` (default 30) and `PORT` (default 8080).
+- `PROD_AWS_REGION`, `PROD_ECS_CLUSTER`, `PROD_ECS_SERVICE`, `PROD_DB_IDENTIFIER`
+- `DR_AWS_REGION`, `DR_ECS_CLUSTER`, `DR_ECS_SERVICE`, `DR_DB_IDENTIFIER`
 
-## Targets
+## DynamoDB data model
 
-`targets.json` is the version-controlled target list built into the container image. It must contain a non-empty `targets` array of HTTP(S) URLs, including the canonical public status URL.
+Table keys are strings named `pk` and `sk`.
 
-In ECS, `AWS_REGION` and `DB_INSTANCE_IDENTIFIER` enable `GET /topology`. The endpoint reads current task/AZ metadata from ECS task metadata v4 and caches the RDS control-plane view for 30 seconds. Local development returns an unavailable AWS topology rather than requiring credentials.
+- `pk`: `TARGET#<canonical URL>`
+- `sk`: `CHECK#<UTC RFC3339Nano timestamp>`
+- `expires_at`: Unix epoch seconds, 30 days after check time; configure this as table TTL attribute
 
-## Design intent
+Drill lifecycle events share the table and use:
 
-Single-purpose app: monitor external URLs, expose the data via JSON and a static HTML UI. The app stays trivial by design so the surrounding infrastructure (multi-AZ, DR, CI/CD) is the interesting part.
+- `pk`: `EVENTS`
+- `sk`: `EVENT#<UTC RFC3339Nano timestamp>#<event-name>`
 
-## Deliberate omissions
-
-`checks.target_url` has no foreign key to `targets`. At this scale, orphan rows are harmless, and denormalizing the URL keeps history readable even if a target is removed.
+History, 24-hour uptime, and drill events use DynamoDB `Query` against dedicated partitions and time-sortable keys. Sentinel never scans table.

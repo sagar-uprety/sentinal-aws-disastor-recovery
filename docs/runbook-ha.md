@@ -4,8 +4,9 @@ This runbook tests primary-region high availability. It is separate from pilot-l
 
 ## Preconditions
 
-- Prod deployed with `multi_az=true` and two healthy Sentinel tasks.
-- Open the status page and record the Recovery topology before each drill. The ECS card must show `2 / 2 running`, two Availability Zones, and `HA ready`.
+- Isolated monitor is healthy at `https://sentinel.sagaruprety.com.np` and deployed from separate monitoring state.
+- Workload is healthy at `https://app.sentinel.sagaruprety.com.np`, with prod `multi_az=true` and two healthy ECS tasks.
+- Open monitor and record workload topology before each drill. ECS card must show `2 / 2 running`, two Availability Zones, and `HA ready`.
 - Use `CONFIRM_HA=YES` only during an approved drill.
 
 ## Task Replacement
@@ -14,7 +15,7 @@ This runbook tests primary-region high availability. It is separate from pilot-l
 CONFIRM_HA=YES scripts/simulate-ha.sh task
 ```
 
-Expected: ALB continues serving through another task. Keep the website open during the injection and retain the Recovery topology before and after the script. Verify the stopped task ID disappears, a replacement task ID appears, compute returns to `2 / 2 running` across two AZs, and `HA ready` returns. The serving-task card identifies the task and AZ that answered each sampled page request. The script continuously probes public `/healthz`, requires ECS to recover to two healthy targets across two AZs, verifies the stopped task ARN is absent, records recovery seconds, and records `ha_task_replacement_verified`.
+Expected: workload ALB continues serving through another task while monitor remains healthy. Retain monitor topology before and after script. Verify stopped workload task ID disappears, replacement task ID appears, compute returns to `2 / 2 running` across two AZs, and `HA ready` returns. Script continuously probes workload `/healthz`, requires ECS to recover to two healthy targets across two AZs, verifies stopped task ARN is absent, and records recovery evidence.
 
 ## AZ Application Capacity
 
@@ -22,7 +23,7 @@ Expected: ALB continues serving through another task. Keep the website open duri
 CONFIRM_HA=YES scripts/simulate-ha.sh az eu-central-1a
 ```
 
-Expected: only tasks currently placed in that AZ stop. Keep the website open and retain Recovery topology during the reduced-capacity interval when observable, showing requests served by a surviving task outside the injected AZ. After recovery, verify new task IDs, `2 / 2 running`, two-AZ spread, and `HA ready`. Because ALB may serve either healthy task after recovery, use task IDs and compute spread rather than requiring every later page refresh to come from one AZ. This is controlled application-capacity loss, not a complete AWS AZ outage. The script refuses the injection unless a task exists in another AZ, continuously probes public `/healthz`, and requires final two-target, two-AZ placement before recording recovery seconds and `ha_az_recovery_verified`.
+Expected: only workload tasks currently placed in that AZ stop. Keep monitor open during reduced-capacity interval. After recovery, verify new workload task IDs, `2 / 2 running`, two-AZ spread, and `HA ready`. This is controlled application-capacity loss, not a complete AWS AZ outage. Script refuses injection unless a task exists in another AZ, continuously probes workload `/healthz`, requires monitor health, and requires final two-target, two-AZ placement before recording recovery evidence.
 
 ## RDS Multi-AZ Failover
 
@@ -30,7 +31,7 @@ Expected: only tasks currently placed in that AZ stop. Keep the website open and
 CONFIRM_HA=YES scripts/simulate-ha.sh db
 ```
 
-Expected: `/healthz` can become unavailable briefly during failover. Retain Recovery topology before and after the script, showing the database writer and managed-standby AZs exchanged, status `available`, and the application still in eu-central-1. The script verifies Multi-AZ, retains a known database row, records writer and standby AZs, samples public health every five seconds, requires RDS and public health to recover, requires the writer AZ to change, verifies the known row still exists, and records recovery seconds plus interruption samples.
+Expected: workload `/healthz` can become unavailable briefly during failover while monitor `/healthz` remains available. Retain monitor topology before and after script, showing workload database writer and managed-standby AZs exchanged, status `available`, and workload still in eu-central-1. Script creates a known short link, samples workload health every five seconds, requires RDS and workload health to recover, requires writer AZ to change, and verifies link still exists.
 
 ## Do Not Confuse With DR
 

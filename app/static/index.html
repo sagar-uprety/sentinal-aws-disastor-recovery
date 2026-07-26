@@ -42,8 +42,19 @@
       <p id="topology-updated" class="mb-3 inline-flex items-center gap-2 rounded-full border bg-muted/40 px-3 py-1 text-xs text-muted-foreground">
         <span class="size-1.5 rounded-full bg-muted-foreground"></span>Loading runtime metadata
       </p>
-      <div id="topology-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
-      <p class="mt-3 text-xs leading-5 text-muted-foreground">Live ECS task, compute, and RDS state. Monitored services below are external HTTP health checks.</p>
+      <div id="topology-grid" class="grid gap-3 sm:grid-cols-2"></div>
+      <p class="mt-3 text-xs leading-5 text-muted-foreground">Live workload ECS and RDS state from explicit production and DR resources.</p>
+    </section>
+
+    <!-- Drill timeline -->
+    <section class="mb-10" aria-labelledby="events-heading">
+      <div class="mb-3 flex items-end justify-between gap-4">
+        <h2 id="events-heading" class="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Drill timeline</h2>
+        <span class="text-xs text-muted-foreground">Latest lifecycle events</span>
+      </div>
+      <div id="events" class="rounded-xl border bg-card shadow-sm">
+        <p class="px-5 py-8 text-center text-sm text-muted-foreground">Loading drill events&hellip;</p>
+      </div>
     </section>
 
     <!-- Monitored services -->
@@ -82,54 +93,44 @@
     function renderTopology(top) {
       const grid = document.getElementById('topology-grid');
       const badge = document.getElementById('topology-updated');
-      if (!top) {
-        grid.innerHTML = topoCard({ label: 'Application', marker: 'AP', name: 'Unavailable', badge: 'Offline', badgeColor: 'red', details: [] });
+      if (!top || !Array.isArray(top.regions)) {
+        grid.innerHTML = topoCard({ label: 'Topology', marker: 'AWS', name: 'Unavailable', badge: 'Offline', badgeColor: 'red', details: [] });
         badge.innerHTML = '<span class="size-1.5 rounded-full bg-red-500"></span>Retrying next refresh';
         return;
       }
-      const a = top.application || {};
-      const c = top.compute || {};
-      const d = top.database || {};
-
-      const appDetails = [
-        ['Region', a.region],
-        ['AZ', a.availability_zone],
-        ['Task definition', a.task_definition],
-        ['Revision', a.revision],
-      ];
-      const computeReady = c.available && c.desired_count > 0 && c.running_count >= c.desired_count && c.multi_az;
-      const zones = Array.isArray(c.availability_zones) ? c.availability_zones.join(', ') : '—';
-      const taskCount = c.running_count + ' / ' + c.desired_count;
-      const computeDetails = [
-        ['Region', c.region],
-        ['Running tasks', taskCount],
-        ['Availability zones', zones],
-      ];
-
-      const dbOK = d.available && d.role === 'writer' && d.multi_az;
-      const dbBadge = d.available
-        ? (d.role === 'writer' ? (d.multi_az ? 'Writer · Multi-AZ' : 'Writer · single-AZ') : 'Read replica')
-        : 'Unavailable';
-      const dbBadgeColor = dbOK ? 'green' : (d.available ? 'amber' : 'red');
-      const standby = d.secondary_availability_zone || (d.multi_az ? 'Hidden (AZ not disclosed)' : 'None');
-      const dbDetails = [
-        ['Region', d.region],
-        ['Writer AZ', d.availability_zone],
-        ['Standby AZ', standby],
-      ];
-      if (d.read_replica_source) {
-        dbDetails.push(['Replicates from', d.read_replica_source.split(':').pop()]);
+      if (top.regions.length === 0) {
+        grid.innerHTML = topoCard({ label: 'Local mode', marker: 'DEV', name: 'AWS topology not configured', badge: 'Local', badgeColor: 'amber', details: [] });
+        badge.innerHTML = '<span class="size-1.5 rounded-full bg-amber-500"></span>Local topology disabled';
+        return;
       }
-      dbDetails.push(['Status', d.status]);
-
-      grid.innerHTML =
-        topoCard({ label: 'Application', marker: 'AP', name: a.task_definition || 'Local dev', badge: a.launch_type || 'local', badgeColor: 'green', details: appDetails }) +
-        topoCard({ label: 'Compute', marker: 'ECS', name: c.name || '—', badge: computeReady ? 'Healthy' : 'Degraded', badgeColor: computeReady ? 'green' : 'red', details: computeDetails }) +
-        topoCard({ label: 'Database', marker: 'DB', name: d.identifier || '—', badge: dbBadge, badgeColor: dbBadgeColor, details: dbDetails });
-
-      const allOK = computeReady && dbOK;
+      let allOK = true;
+      grid.innerHTML = top.regions.map((entry, index) => {
+        const c = entry.compute || {};
+        const d = entry.database || {};
+        const computeReady = c.available && c.desired > 0 && c.running >= c.desired;
+        const dbReady = d.available;
+        const healthy = computeReady && dbReady;
+        allOK = allOK && healthy;
+        const role = index === 0 ? 'Production' : 'Disaster recovery';
+        const tasks = Array.isArray(c.tasks) ? c.tasks.join(', ') : '—';
+        const zones = Array.isArray(c.availability_zones) ? c.availability_zones.join(', ') : '—';
+        const details = [
+          ['Region', entry.region],
+          ['ECS service', c.name],
+          ['Tasks', (c.running || 0) + ' / ' + (c.desired || 0)],
+          ['Task IDs', tasks],
+          ['Compute AZs', zones],
+          ['Database', d.identifier],
+          ['DB role', d.role],
+          ['DB status', d.status],
+          ['DB AZ', d.availability_zone],
+          ['Multi-AZ', d.multi_az ? 'Yes' : 'No'],
+        ];
+        if (d.read_replica_source) details.push(['Replica source', d.read_replica_source.split(':').pop()]);
+        return topoCard({ label: role, marker: index === 0 ? 'PROD' : 'DR', name: entry.region || 'Unconfigured', badge: healthy ? 'Healthy' : 'Degraded', badgeColor: healthy ? 'green' : 'red', details });
+      }).join('');
       badge.innerHTML = '<span class="size-1.5 rounded-full ' + (allOK ? 'bg-emerald-500' : 'bg-amber-500') + '"></span>' +
-        (allOK ? 'All layers healthy' : 'Degraded — check cards below');
+        (allOK ? 'Both regions healthy' : 'Degraded — check region cards');
     }
 
     function topoCard(o) {
@@ -157,6 +158,23 @@
           '<dl>' + rows + '</dl>' +
         '</div>' +
       '</article>';
+    }
+
+    /* ── Drill timeline ── */
+    function renderEvents(events) {
+      const container = document.getElementById('events');
+      if (!events || events.length === 0) {
+        container.innerHTML = '<p class="px-5 py-8 text-center text-sm text-muted-foreground">No drill events recorded yet.</p>';
+        return;
+      }
+      container.innerHTML = '<ol class="divide-y divide-border/60">' + events.map(event => {
+        const label = event.value ? event.name + ': ' + event.value : event.name;
+        return '<li class="flex items-center gap-3 px-5 py-3">' +
+          '<span class="size-2 shrink-0 rounded-full bg-primary"></span>' +
+          '<span class="min-w-0 flex-1 truncate text-sm font-medium" title="' + esc(label) + '">' + esc(label) + '</span>' +
+          '<time class="shrink-0 text-xs text-muted-foreground" datetime="' + esc(event.timestamp) + '" title="' + esc(new Date(event.timestamp).toLocaleString()) + '">' + timeAgo(event.timestamp) + '</time>' +
+        '</li>';
+      }).join('') + '</ol>';
     }
 
     /* ── Status banner ── */
@@ -245,12 +263,14 @@
     /* ── Fetch & render ── */
     async function fetchAll() {
       try {
-        const [statuses, topology] = await Promise.all([
+        const [statuses, topology, events] = await Promise.all([
           fetch('/status').then(r => r.json()),
           fetch('/topology').then(r => r.ok ? r.json() : null),
+          fetch('/events?limit=20').then(r => r.ok ? r.json() : []),
         ]);
         renderBanner(statuses);
         renderTopology(topology);
+        renderEvents(events);
         renderCards(statuses);
         const histories = await Promise.all(
           statuses.map(s =>
@@ -264,6 +284,8 @@
         }
       } catch (err) {
         renderTopology(null);
+        document.getElementById('events').innerHTML =
+          '<p class="px-5 py-8 text-center text-sm text-red-700 dark:text-red-400">Unable to load drill events.</p>';
         document.getElementById('cards').innerHTML =
           '<div class="rounded-xl border border-red-500/20 bg-red-500/5 px-5 py-12 text-center text-sm text-red-700 dark:text-red-400">Unable to fetch status. Retrying&hellip;</div>';
       }

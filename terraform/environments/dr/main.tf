@@ -45,6 +45,10 @@ data "aws_ssm_parameter" "database_password_dr" {
   name = "/${local.project_name}/prod/database/password"
 }
 
+data "aws_ssm_parameter" "link_create_token_dr" {
+  name = "/${local.project_name}/prod/link-create-token"
+}
+
 # Guards against creating a replica on a minor version that has drifted from
 # prod; M4 requires the two regions resolve to the same PostgreSQL 18 minor
 # before replica creation, not just "some" PostgreSQL 18.
@@ -89,12 +93,12 @@ module "ecs" {
 
   # Same repository name and digest as prod; ECR replication (configured in
   # the prod environment) mirrors the image into this region.
-  image_uri              = "${local.ecr_repository_url}@${local.prod_image_digest}"
-  db_endpoint            = module.rds.endpoint
-  db_name                = "sentinel"
-  db_user                = "sentinel"
-  db_instance_identifier = "${local.project_name}-${local.environment}"
-  db_password_ssm_arn    = data.aws_ssm_parameter.database_password_dr.arn
+  image_uri                 = "${local.ecr_repository_url}@${local.prod_image_digest}"
+  db_endpoint               = module.rds.endpoint
+  db_name                   = "sentinel"
+  db_user                   = "sentinel"
+  db_password_ssm_arn       = data.aws_ssm_parameter.database_password_dr.arn
+  link_create_token_ssm_arn = data.aws_ssm_parameter.link_create_token_dr.arn
 
   deploy_service = true
   desired_count  = var.desired_count
