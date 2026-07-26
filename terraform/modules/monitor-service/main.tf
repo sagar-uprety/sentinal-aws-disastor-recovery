@@ -156,12 +156,13 @@ resource "aws_ecs_service" "main" {
   #checkov:skip=CKV_AWS_332:pins supported Fargate platform 1.4.0 so observer behavior does not drift with LATEST
   count = var.deploy_service ? 1 : 0
 
-  name             = "${var.project_name}-${var.environment}"
-  cluster          = aws_ecs_cluster.main.id
-  task_definition  = aws_ecs_task_definition.main[0].arn
-  desired_count    = var.desired_count
-  launch_type      = "FARGATE"
-  platform_version = "1.4.0"
+  name                  = "${var.project_name}-${var.environment}"
+  cluster               = aws_ecs_cluster.main.id
+  task_definition       = aws_ecs_task_definition.main[0].arn
+  desired_count         = var.desired_count
+  launch_type           = "FARGATE"
+  platform_version      = "1.4.0"
+  wait_for_steady_state = true
 
   deployment_circuit_breaker {
     enable   = true
