@@ -20,7 +20,6 @@ FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /sentinel /sentinel
 COPY --from=builder /src/static /static
-COPY --from=builder /src/targets.json /targets.json
 COPY --from=styles /src/static/app.css /static/app.css
 COPY --from=styles /src/static/uPlot.iife.min.js /static/uPlot.iife.min.js
 COPY --from=styles /src/static/uPlot.min.css /static/uPlot.min.css

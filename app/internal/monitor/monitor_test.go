@@ -2,286 +2,132 @@ package monitor
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
-
-	"sentinel-aws-dr/app/internal/db"
+	"sentinel-aws-dr/app/internal/store"
 )
 
-// opens, resets, migrates, and seeds the local integration database.
-func openTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	ctx := context.Background()
-	testDB, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/sentinel?sslmode=disable")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := testDB.PingContext(ctx); err != nil {
-		t.Fatalf("db ping: %v (is Postgres running? try: docker compose up -d db)", err)
-	}
-	if err := db.Migrate(ctx, testDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if _, err := testDB.ExecContext(ctx, "TRUNCATE targets, checks RESTART IDENTITY CASCADE"); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	if err := db.SeedTargets(ctx, testDB, []string{"https://example.com"}); err != nil {
-		t.Fatalf("seed targets: %v", err)
-	}
-	return testDB
+type fakeStore struct {
+	health     error
+	targets    []store.Target
+	checks     []store.Check
+	statuses   []store.TargetStatus
+	events     []store.DrillEvent
+	eventLimit int
 }
 
-func closeTestDB(t *testing.T, testDB *sql.DB) {
-	t.Helper()
-	if err := testDB.Close(); err != nil {
-		t.Errorf("close db: %v", err)
-	}
+func (f *fakeStore) ListTargets(context.Context) ([]store.Target, error) { return f.targets, nil }
+func (f *fakeStore) RecordCheck(_ context.Context, check store.Check) error {
+	f.checks = append(f.checks, check)
+	return nil
 }
-
-// verifies successful responses are reported as up.
-func TestHTTPCheckUp(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("ok")); err != nil {
-			t.Fatalf("write response: %v", err)
+func (f *fakeStore) LatestStatuses(context.Context, time.Time) ([]store.TargetStatus, error) {
+	return f.statuses, nil
+}
+func (f *fakeStore) History(_ context.Context, target string, limit int) ([]store.Check, error) {
+	result := make([]store.Check, 0, limit)
+	for _, check := range f.checks {
+		if check.TargetURL == target && len(result) < limit {
+			result = append(result, check)
 		}
-	}))
-	defer server.Close()
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	cr := httpCheck(context.Background(), client, server.URL)
-
-	if cr.statusCode == nil || *cr.statusCode != 200 {
-		t.Errorf("expected status 200, got %v", cr.statusCode)
 	}
-	if !cr.isUp {
-		t.Error("expected isUp = true")
-	}
-	if cr.err != nil {
-		t.Errorf("expected no request error, got %v", cr.err)
+	return result, nil
+}
+func (f *fakeStore) ListEvents(_ context.Context, limit int) ([]store.DrillEvent, error) {
+	f.eventLimit = limit
+	return f.events, nil
+}
+func (f *fakeStore) Health(context.Context) error { return f.health }
+
+func TestHTTPCheckClassifiesResponses(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		code int
+		up   bool
+	}{{"success", http.StatusOK, true}, {"redirect", http.StatusMovedPermanently, true}, {"failure", http.StatusInternalServerError, false}} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(test.code) }))
+			defer server.Close()
+			client := &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			result := httpCheck(context.Background(), client, server.URL)
+			if result.err != nil || result.statusCode == nil || *result.statusCode != test.code || result.isUp != test.up {
+				t.Fatalf("unexpected result: %#v", result)
+			}
+		})
 	}
 }
 
-// verifies server errors are reported as down.
-func TestHTTPCheckDown(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		if _, err := w.Write([]byte("error")); err != nil {
-			t.Fatalf("write response: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	cr := httpCheck(context.Background(), client, server.URL)
-
-	if cr.statusCode == nil || *cr.statusCode != 500 {
-		t.Errorf("expected status 500, got %v", cr.statusCode)
-	}
-	if cr.isUp {
-		t.Error("expected isUp = false for 5xx")
-	}
-}
-
-// verifies timed-out requests have no status code and are down.
 func TestHTTPCheckTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-
-	client := &http.Client{Timeout: 100 * time.Millisecond}
-	cr := httpCheck(context.Background(), client, server.URL)
-
-	if cr.statusCode != nil {
-		t.Errorf("expected nil status code on timeout, got %d", *cr.statusCode)
-	}
-	if cr.isUp {
-		t.Error("expected isUp = false on timeout")
-	}
-	if cr.err == nil {
-		t.Error("expected timeout error")
+	result := httpCheck(context.Background(), &http.Client{Timeout: time.Millisecond}, server.URL)
+	if result.err == nil || result.statusCode != nil || result.isUp {
+		t.Fatalf("unexpected timeout result: %#v", result)
 	}
 }
 
-// verifies redirects remain reachable without being followed.
-func TestHTTPCheckRedirect(t *testing.T) {
-	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://example.com", http.StatusMovedPermanently)
-	}))
-	defer redirect.Close()
-
-	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
-	cr := httpCheck(context.Background(), client, redirect.URL)
-
-	if cr.statusCode == nil || *cr.statusCode != 301 {
-		t.Errorf("expected status 301, got %d", *cr.statusCode)
-	}
-	if !cr.isUp {
-		t.Error("expected isUp = true for 301 (redirects are reachable)")
+func TestCheckerRecordsConfiguredTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	dataStore := &fakeStore{}
+	checker := NewChecker(dataStore, server.URL, time.Minute, time.Second)
+	wantTime := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	checker.now = func() time.Time { return wantTime }
+	checker.runOnce(context.Background())
+	if len(dataStore.checks) != 1 || dataStore.checks[0].TargetURL != server.URL || !dataStore.checks[0].CheckedAt.Equal(wantTime) {
+		t.Fatalf("recorded checks = %#v", dataStore.checks)
 	}
 }
 
-// verifies only one database session can lead checks and release permits takeover.
-func TestCheckerLeadership(t *testing.T) {
-	testDB := openTestDB(t)
-	defer closeTestDB(t, testDB)
-
-	ctx := context.Background()
-	leader, err := testDB.Conn(ctx)
-	if err != nil {
-		t.Fatalf("open leader connection: %v", err)
+func TestHandlers(t *testing.T) {
+	now := time.Now().UTC()
+	dataStore := &fakeStore{
+		targets:  []store.Target{{URL: "https://example.com/healthz"}},
+		statuses: []store.TargetStatus{{URL: "https://example.com/healthz", IsUp: true, LastChecked: now, UptimePct: 100}},
+		checks:   []store.Check{{TargetURL: "https://example.com/healthz", IsUp: true, CheckedAt: now}},
+		events:   []store.DrillEvent{{Name: "failover-started", Timestamp: now}},
 	}
-	defer func() {
-		if closeErr := leader.Close(); closeErr != nil {
-			t.Errorf("close leader connection: %v", closeErr)
-		}
-	}()
-	standby, err := testDB.Conn(ctx)
-	if err != nil {
-		t.Fatalf("open standby connection: %v", err)
-	}
-	defer func() {
-		if closeErr := standby.Close(); closeErr != nil {
-			t.Errorf("close standby connection: %v", closeErr)
-		}
-	}()
-
-	var acquired bool
-	if err := leader.QueryRowContext(ctx, checkerLockQuery).Scan(&acquired); err != nil || !acquired {
-		t.Fatalf("leader acquire: acquired=%t err=%v", acquired, err)
-	}
-	if err := standby.QueryRowContext(ctx, checkerLockQuery).Scan(&acquired); err != nil {
-		t.Fatalf("standby acquire: %v", err)
-	}
-	if acquired {
-		t.Fatal("expected standby leadership to be denied")
-	}
-
-	var released bool
-	if err := leader.QueryRowContext(ctx, checkerUnlockQuery).Scan(&released); err != nil || !released {
-		t.Fatalf("leader release: released=%t err=%v", released, err)
-	}
-	if err := standby.QueryRowContext(ctx, checkerLockQuery).Scan(&acquired); err != nil || !acquired {
-		t.Fatalf("standby takeover: acquired=%t err=%v", acquired, err)
-	}
-	if err := standby.QueryRowContext(ctx, checkerUnlockQuery).Scan(&released); err != nil || !released {
-		t.Fatalf("standby release: released=%t err=%v", released, err)
-	}
-}
-
-// verifies a reachable database produces a healthy response.
-func TestHealthzHandlerOK(t *testing.T) {
-	testDB := openTestDB(t)
-	defer closeTestDB(t, testDB)
-
-	req := httptest.NewRequestWithContext(context.Background(), "GET", "/healthz", nil)
-	w := httptest.NewRecorder()
-	HandleHealthz(testDB)(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("json decode: %v", err)
-	}
-	if body["status"] != "ok" {
-		t.Errorf("expected status ok, got %v", body)
-	}
-}
-
-// verifies status responses contain persisted check data.
-func TestStatusJSON(t *testing.T) {
-	testDB := openTestDB(t)
-	defer closeTestDB(t, testDB)
-
-	if err := db.SeedTargetsFromList(context.Background(), testDB, []string{"https://example.com"}); err != nil {
-		t.Fatalf("seed target: %v", err)
-	}
-	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(200), 100, true)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /status", HandleStatus(testDB))
-
-	req := httptest.NewRequestWithContext(context.Background(), "GET", "/status", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var resp []db.TargetStatus
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("json decode: %v", err)
-	}
-	if len(resp) == 0 {
-		t.Error("expected at least one status entry")
-	}
-}
-
-func TestSeedTargetsReconcilesConfiguration(t *testing.T) {
-	testDB := openTestDB(t)
-	defer closeTestDB(t, testDB)
-	ctx := context.Background()
-
-	if err := db.SeedTargets(ctx, testDB, []string{"https://old.example.com", "https://keep.example.com"}); err != nil {
-		t.Fatalf("seed initial targets: %v", err)
-	}
-	if err := db.SeedTargets(ctx, testDB, []string{"https://keep.example.com", "https://new.example.com"}); err != nil {
-		t.Fatalf("reconcile targets: %v", err)
-	}
-
-	targets, err := db.ListTargets(ctx, testDB)
-	if err != nil {
-		t.Fatalf("list targets: %v", err)
-	}
-	if len(targets) != 2 || targets[0].URL != "https://keep.example.com" || targets[1].URL != "https://new.example.com" {
-		t.Fatalf("targets = %v, want keep and new targets", targets)
-	}
-}
-
-// verifies history returns only exact target URL matches.
-func TestHistoryJSON(t *testing.T) {
-	testDB := openTestDB(t)
-	defer closeTestDB(t, testDB)
-
-	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(200), 100, true)
-	db.RecordCheck(context.Background(), testDB, "https://example.com", intPtr(500), 200, false)
-	db.RecordCheck(context.Background(), testDB, "https://example.com/status", intPtr(200), 50, true)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /history", HandleHistory(testDB))
-
-	req := httptest.NewRequestWithContext(context.Background(), "GET", "/history?target=https://example.com&limit=10", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var resp []db.CheckRow
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("json decode: %v", err)
-	}
-	if len(resp) != 2 {
-		t.Errorf("expected 2 history entries, got %d", len(resp))
-	}
-	for _, check := range resp {
-		if check.TargetURL != "https://example.com" {
-			t.Errorf("history included non-exact target %q", check.TargetURL)
+	for _, test := range []struct {
+		handler http.HandlerFunc
+		path    string
+	}{
+		{HandleHealthz(dataStore), "/healthz"},
+		{HandleTargets(dataStore), "/targets"},
+		{HandleStatus(dataStore), "/status"},
+		{HandleHistory(dataStore), "/history?target=https://example.com/healthz&limit=1"},
+		{HandleEvents(dataStore), "/events?limit=5"},
+	} {
+		recorder := httptest.NewRecorder()
+		test.handler(recorder, httptest.NewRequestWithContext(context.Background(), http.MethodGet, test.path, nil))
+		if recorder.Code != http.StatusOK || !json.Valid(recorder.Body.Bytes()) {
+			t.Errorf("%s returned %d: %s", test.path, recorder.Code, recorder.Body.String())
 		}
 	}
+	if dataStore.eventLimit != 5 {
+		t.Fatalf("event limit = %d, want 5", dataStore.eventLimit)
+	}
 }
 
-// creates nullable status-code test values.
-func intPtr(i int) *int { return &i }
+func TestHealthHandlerUnavailable(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	HandleHealthz(&fakeStore{health: errors.New("unavailable")})(recorder, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+}
+
+func TestHistoryRequiresTarget(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	HandleHistory(&fakeStore{})(recorder, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/history", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}

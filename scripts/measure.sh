@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Reports phase timing and row-based RPO for the current drill only.
+# Reports phase timing and application-record RPO for the current drill only.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
 if [ "${1:-}" = "record-traffic-switch" ]; then
@@ -40,7 +41,7 @@ duration() {
   printf '%s' "$(( $(to_epoch "$2") - $(to_epoch "$1") ))"
 }
 
-for event in outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy dr_write_verified traffic_switch_requested traffic_verified_dr primary_last_check dr_pre_outage_last_check replica_lag_seconds replica_lag_timestamp; do
+for event in outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy dr_write_verified traffic_switch_requested traffic_verified_dr primary_link_created_at dr_pre_outage_link_created_at replica_lag_seconds replica_lag_timestamp; do
   require_event "$event"
 done
 
@@ -53,16 +54,16 @@ healthy_ts="$(event_ts dr_targets_healthy)"
 write_ts="$(event_ts dr_write_verified)"
 switch_requested_ts="$(event_ts traffic_switch_requested)"
 verified_ts="$(event_ts traffic_verified_dr)"
-primary_last_check="$(event_ts primary_last_check)"
-dr_last_check="$(event_ts dr_pre_outage_last_check)"
+primary_link_created_at="$(event_ts primary_link_created_at)"
+dr_link_created_at="$(event_ts dr_pre_outage_link_created_at)"
 replica_lag="$(event_ts replica_lag_seconds)"
 replica_lag_timestamp="$(event_ts replica_lag_timestamp)"
 
 rto_seconds="$(duration "$outage_ts" "$verified_ts")"
 automation_seconds="$(duration "$invoked_ts" "$write_ts")"
-rpo_seconds="$(duration "$dr_last_check" "$primary_last_check")"
+rpo_seconds="$(duration "$dr_link_created_at" "$primary_link_created_at")"
 if [ "$rpo_seconds" -lt 0 ]; then
-  echo "ERROR: row-based RPO is negative; target rows are not comparable." >&2
+  echo "ERROR: application-record RPO is negative; link timestamps are not comparable." >&2
   exit 1
 fi
 
@@ -89,9 +90,9 @@ End-to-end RTO:            ${rto_seconds}s
 Automation duration:       ${automation_seconds}s
 
 === Replica-promotion RPO ===
-Newest primary target row observed during drain: $primary_last_check
-Newest matching pre-outage row in DR:    $dr_last_check
-Row-based observed RPO (non-transactional boundary): ${rpo_seconds}s
+Prod-created link timestamp:                    $primary_link_created_at
+Matching link timestamp recovered in DR:        $dr_link_created_at
+Application-record observed RPO boundary:       ${rpo_seconds}s
 Pre-promotion ReplicaLag maximum:        ${replica_lag}s
 ReplicaLag datapoint timestamp:          $replica_lag_timestamp
 EOF

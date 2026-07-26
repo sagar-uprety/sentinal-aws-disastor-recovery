@@ -53,8 +53,8 @@ variable "db_password_ssm_arn" {
   type        = string
 }
 
-variable "db_instance_identifier" {
-  description = "RDS DB instance identifier queried by the status page for topology metadata."
+variable "link_create_token_ssm_arn" {
+  description = "ARN of the SSM SecureString parameter holding the URL-shortener operator token."
   type        = string
 }
 

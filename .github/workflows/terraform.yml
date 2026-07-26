@@ -25,6 +25,8 @@ on:
           - plan
           - foundation
           - deploy
+          - monitor-foundation
+          - monitor-deploy
           - destroy
       target:
         description: Root module for a manual speculative plan. Ignored by deploy and destroy.
@@ -34,12 +36,13 @@ on:
         options:
           - prod
           - dr
+          - monitoring
       confirm_destroy:
         description: Type DESTROY to authorize a destroy operation.
         required: false
         type: string
       image_digest:
-        description: Initial immutable image digest from app.yml publish-only mode. Required when creating the ECS service.
+        description: Initial immutable digest from workload.yml or monitor.yml publish-only mode. Required when creating the selected ECS service.
         required: false
         type: string
 
@@ -58,7 +61,6 @@ env:
 jobs:
   quality:
     name: Validate Terraform configuration
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -79,7 +81,7 @@ jobs:
 
       - name: Validate root modules without remote state
         run: |
-          for root in terraform/environments/bootstrap terraform/environments/prod terraform/environments/dr; do
+          for root in terraform/environments/bootstrap terraform/environments/monitoring terraform/environments/prod terraform/environments/dr; do
             data_dir="$RUNNER_TEMP/tf-data-${root##*/}"
             TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
             TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
@@ -204,11 +206,10 @@ jobs:
     needs: quality
     if: >-
       always() &&
-      (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+      needs.quality.result == 'success' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'foundation' || inputs.operation == 'deploy'))
+      (inputs.operation == 'foundation' || inputs.operation == 'deploy')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment:
@@ -287,7 +288,7 @@ jobs:
                 --services sentinel-aws-dr-prod \
                 --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
               if [ -z "$service_arn" ] || [ "$service_arn" = "None" ]; then
-                echo "A fresh service deployment requires image_digest from app.yml publish-only mode." >&2
+                echo "A fresh service deployment requires image_digest from workload.yml publish-only mode." >&2
                 exit 1
               fi
               task_definition="$(aws ecs describe-services \
@@ -318,32 +319,99 @@ jobs:
         run: terraform apply -input=false -lock-timeout=5m prod.tfplan
 
       - name: Initialize DR state
-        if: github.event_name == 'push' || inputs.operation == 'deploy'
+        if: inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform init -input=false
 
       - name: Plan DR pilot light
-        if: github.event_name == 'push' || inputs.operation == 'deploy'
+        if: inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform plan -input=false -lock-timeout=5m -out=dr.tfplan
 
       - name: Show DR pilot-light plan
-        if: github.event_name == 'push' || inputs.operation == 'deploy'
+        if: inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform show -no-color dr.tfplan
 
       - name: Apply DR pilot-light plan
-        if: github.event_name == 'push' || inputs.operation == 'deploy'
+        if: inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
         run: terraform apply -input=false -lock-timeout=5m dr.tfplan
 
       - name: Verify DR pilot-light state
-        if: github.event_name == 'push' || inputs.operation == 'deploy'
+        if: inputs.operation == 'deploy'
         run: |
           desired="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
           source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           test "$desired" = "0"
           test -n "$source" && test "$source" != "None"
+
+  deploy-monitor:
+    name: Provision isolated monitoring infrastructure
+    needs: quality
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.operation == 'monitor-foundation' || inputs.operation == 'monitor-deploy') &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: terraform-production
+      url: https://sentinel.sagaruprety.com.np
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-monitor-${{ github.run_id }}
+          aws-region: eu-west-1
+
+      - name: Initialize monitoring state
+        working-directory: terraform/environments/monitoring
+        run: terraform init -input=false
+
+      - name: Plan monitoring environment
+        working-directory: terraform/environments/monitoring
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          plan_args=()
+          if [ "${{ inputs.operation }}" = "monitor-foundation" ]; then
+            plan_args+=("-var=deploy_service=false")
+          else
+            if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "monitor-deploy requires image_digest from monitor.yml publish-only mode." >&2
+              exit 1
+            fi
+            plan_args+=("-var=deploy_service=true" "-var=image_digest=$IMAGE_DIGEST")
+          fi
+          terraform plan -input=false -lock-timeout=5m -out=monitoring.tfplan "${plan_args[@]}"
+
+      - name: Show monitoring plan
+        working-directory: terraform/environments/monitoring
+        run: terraform show -no-color monitoring.tfplan
+
+      - name: Apply monitoring plan
+        working-directory: terraform/environments/monitoring
+        run: terraform apply -input=false -lock-timeout=5m monitoring.tfplan
+
+      - name: Verify isolated monitor
+        if: inputs.operation == 'monitor-deploy'
+        run: |
+          aws ecs wait services-stable --region eu-west-1 --cluster sentinel-aws-dr-monitoring --services sentinel-aws-dr-monitoring
+          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://sentinel.sagaruprety.com.np/healthz
 
   destroy:
     name: Destroy DR and primary environments

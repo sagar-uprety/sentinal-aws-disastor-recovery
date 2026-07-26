@@ -19,6 +19,11 @@ ephemeral "random_password" "database" {
   special = false
 }
 
+ephemeral "random_password" "link_create_token" {
+  length  = 48
+  special = false
+}
+
 module "vpc" {
   source = "../../modules/vpc"
 
@@ -70,12 +75,12 @@ module "ecs" {
   target_group_arn      = module.alb.target_group_arn
 
   # Set var.image_digest to the immutable digest pushed to ECR in phase 2.
-  image_uri              = var.deploy_service ? "${module.ecr.repository_url}@${var.image_digest}" : "skip"
-  db_endpoint            = var.deploy_service ? module.rds.endpoint : "skip"
-  db_name                = "sentinel"
-  db_user                = "sentinel"
-  db_instance_identifier = "${local.project_name}-${local.environment}"
-  db_password_ssm_arn    = aws_ssm_parameter.database_password_prod.arn
+  image_uri                 = var.deploy_service ? "${module.ecr.repository_url}@${var.image_digest}" : "skip"
+  db_endpoint               = var.deploy_service ? module.rds.endpoint : "skip"
+  db_name                   = "sentinel"
+  db_user                   = "sentinel"
+  db_password_ssm_arn       = aws_ssm_parameter.database_password_prod.arn
+  link_create_token_ssm_arn = aws_ssm_parameter.link_create_token_prod.arn
 
   deploy_service = var.deploy_service
   desired_count  = var.desired_count
@@ -150,6 +155,17 @@ resource "aws_ssm_parameter" "database_password_prod" {
   value_wo_version = var.credential_version
 }
 
+resource "aws_ssm_parameter" "link_create_token_prod" {
+  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key to avoid a customer-managed-key monthly charge
+  name        = "/${local.project_name}/prod/link-create-token"
+  description = "URL-shortener operator token for prod"
+  type        = "SecureString"
+  tier        = "Standard"
+
+  value_wo         = ephemeral.random_password.link_create_token.result
+  value_wo_version = var.link_token_version
+}
+
 # AWS-managed key, not a customer-managed key: no per-key monthly fee, matches
 # the pattern already used for SSM and Performance Insights encryption below.
 data "aws_kms_key" "rds_dr" {
@@ -176,4 +192,17 @@ resource "aws_ssm_parameter" "database_password_dr" {
 
   value_wo         = ephemeral.random_password.database.result
   value_wo_version = var.credential_version
+}
+
+resource "aws_ssm_parameter" "link_create_token_dr" {
+  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key to avoid a customer-managed-key monthly charge
+  provider = aws.dr
+
+  name        = "/${local.project_name}/prod/link-create-token"
+  description = "URL-shortener operator token for DR"
+  type        = "SecureString"
+  tier        = "Standard"
+
+  value_wo         = ephemeral.random_password.link_create_token.result
+  value_wo_version = var.link_token_version
 }

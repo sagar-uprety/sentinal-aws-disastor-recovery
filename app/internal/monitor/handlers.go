@@ -1,109 +1,110 @@
 package monitor
 
 import (
-	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
-	"sentinel-aws-dr/app/internal/db"
+	"sentinel-aws-dr/app/internal/store"
 	"sentinel-aws-dr/app/internal/topology"
 )
 
-// reports readiness based on database connectivity.
-func HandleHealthz(database *sql.DB) http.HandlerFunc {
+func HandleHealthz(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := database.PingContext(r.Context()); err != nil {
-			slog.Error("healthz: db ping failed", "error", err)
-			http.Error(w, `{"status":"error"}`, http.StatusServiceUnavailable)
+		if err := dataStore.Health(r.Context()); err != nil {
+			slog.Error("healthz: store unavailable", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error"})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
-			slog.Error("healthz: write response failed", "error", err)
-		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 
-// returns all configured monitoring targets.
-func HandleTargets(database *sql.DB) http.HandlerFunc {
+func HandleTargets(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		targets, err := db.ListTargets(r.Context(), database)
+		targets, err := dataStore.ListTargets(r.Context())
 		if err != nil {
 			slog.Error("targets: list failed", "error", err)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			return
 		}
-		type targetResp struct {
-			URL string `json:"url"`
-			ID  int    `json:"id"`
+		if targets == nil {
+			targets = []store.Target{}
 		}
-		resp := make([]targetResp, len(targets))
-		for i, t := range targets {
-			resp[i] = targetResp{ID: t.ID, URL: t.URL}
-		}
-		writeJSON(w, resp)
+		writeJSON(w, http.StatusOK, targets)
 	}
 }
 
-// returns the latest status and 24-hour uptime for each target.
-func HandleStatus(database *sql.DB) http.HandlerFunc {
+func HandleStatus(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		statuses, err := db.GetLatestPerTarget(r.Context(), database)
+		statuses, err := dataStore.LatestStatuses(r.Context(), time.Now().UTC().Add(-24*time.Hour))
 		if err != nil {
 			slog.Error("status: query failed", "error", err)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			return
 		}
 		if statuses == nil {
-			statuses = []db.TargetStatus{}
+			statuses = []store.TargetStatus{}
 		}
-		writeJSON(w, statuses)
+		writeJSON(w, http.StatusOK, statuses)
 	}
 }
 
-// returns recent checks for the requested exact target URL.
-func HandleHistory(database *sql.DB) http.HandlerFunc {
+func HandleHistory(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("target")
 		if target == "" {
-			http.Error(w, `{"error":"target query parameter required"}`, http.StatusBadRequest)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target query parameter required"})
 			return
 		}
-		limitStr := r.URL.Query().Get("limit")
 		limit := 100
-		if limitStr != "" {
-			if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 500 {
-				limit = v
-			}
+		if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 500 {
+			limit = value
 		}
-		checks, err := db.GetHistory(r.Context(), database, target, limit)
+		checks, err := dataStore.History(r.Context(), target, limit)
 		if err != nil {
 			slog.Error("history: query failed", "target", target, "error", err)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			return
 		}
 		if checks == nil {
-			checks = []db.CheckRow{}
+			checks = []store.Check{}
 		}
-		writeJSON(w, checks)
+		writeJSON(w, http.StatusOK, checks)
 	}
 }
 
-// returns runtime ECS and RDS topology for the status-page resilience view.
+func HandleEvents(dataStore store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := 20
+		if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 100 {
+			limit = value
+		}
+		events, err := dataStore.ListEvents(r.Context(), limit)
+		if err != nil {
+			slog.Error("events: query failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+		if events == nil {
+			events = []store.DrillEvent{}
+		}
+		writeJSON(w, http.StatusOK, events)
+	}
+}
+
 func HandleTopology(service *topology.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, service.Snapshot(r.Context()))
+		writeJSON(w, http.StatusOK, service.Snapshot(r.Context()))
 	}
 }
 
-// writes a JSON response with the requested status code.
-func writeJSON(w http.ResponseWriter, v interface{}) {
+func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
 		slog.Error("json encode failed", "error", err)
 	}
 }

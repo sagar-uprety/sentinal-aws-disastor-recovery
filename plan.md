@@ -7,11 +7,11 @@ This document is the single source of truth for AI agents implementing the proje
 
 ## 1. Project Summary
 
-A self-monitoring uptime service ("status page") deployed as a production-grade, highly available AWS workload with automated cross-region disaster recovery using the pilot light strategy. Everything is defined in Terraform. The environment is ephemeral by design: apply, demo, record, destroy.
+A two-plane resilience demonstration on AWS. An isolated monitoring service observes a separate URL-shortener workload while that workload undergoes multi-AZ and pilot-light cross-region disaster-recovery drills. Everything is defined in Terraform. Workload infrastructure is ephemeral by design: apply, demo, record, destroy. Monitoring infrastructure has a separate lifecycle and remains available throughout workload drills.
 
-One-line pitch for the README: "A multi-AZ AWS workload with pilot light DR in a second region, fully defined in Terraform. The app monitors external sites and confirms public reachability after recovery, while AWS-native health signals and drill timestamps measure the outage, RTO, and RPO."
+One-line pitch for the README: "An isolated AWS monitoring plane visualizes multi-AZ and pilot-light recovery of a separate database-backed URL shortener, while AWS-native health signals and drill timestamps measure outage, RTO, and RPO."
 
-Design rationale to state in the README: the customer-facing status page is the workload that fails over. CloudWatch alarms, SNS notifications, Route53 health checks, ARC routing-control state, and recorded drill timestamps provide operator evidence without adding a regional observability stack that fails with the workload.
+Design rationale to state in the README: monitoring and workload are separate failure domains. The monitoring service remains available while the URL shortener fails over, and combines external HTTP checks with read-only AWS control-plane state. CloudWatch alarms, SNS notifications, Route53 health checks, ARC routing-control state, and recorded drill timestamps remain independent operator evidence.
 
 Reference architecture basis: AWS whitepaper "Disaster Recovery of Workloads on AWS" (pilot light strategy), AWS Well-Architected Reliability Pillar REL13-BP02.
 
@@ -25,7 +25,7 @@ Reference architecture basis: AWS whitepaper "Disaster Recovery of Workloads on 
 6. All project infrastructure via Terraform. The existing Cloudflare parent zone predates this project; one documented NS delegation from Cloudflare to a Route53 subdomain is the only external prerequisite and is not presented as project-managed infrastructure. No other console-created resources are allowed except the initial state bootstrap if unavoidable, and even that should be scripted.
 7. Least privilege IAM everywhere. Scope resources to specific ARNs whenever the AWS action supports resource-level permissions. Some list, describe, telemetry, and service bootstrap actions require `Resource = "*"`; every such exception must use only the required actions and be documented beside the policy. No wildcard actions such as `Action = "*"` are allowed. CI scans IAM policies with Checkov.
 8. Runtime secrets use SSM Parameter Store SecureString. Generate the database password as a Terraform ephemeral value and pass it only to AWS provider write-only arguments (`aws_db_instance.password_wo` and `aws_ssm_parameter.value_wo`), which require Terraform 1.11 or newer. Never use ordinary `password` or `value` arguments for secrets, because they persist plaintext in state. Never place secret values in outputs, code, command arguments, or CI logs. Terraform state may store only parameter ARNs, versions, and metadata.
-9. App stays trivial: one container, one main Postgres table, three or four endpoints, no auth, no user accounts, no alert-rule engine. If a change makes the app more interesting than the infrastructure, reject it.
+9. Both services stay trivial. The monitor owns checks, history, topology visualization, and no alert-rule engine. The workload is one URL-shortener container with one main PostgreSQL table, public redirects, and token-protected link creation. No user accounts. If either application becomes more interesting than the infrastructure, reject the change.
 10. Every Terraform module gets a README with inputs, outputs, and one sentence on design intent.
 11. All taggable AWS resources carry these tags:
 
@@ -40,18 +40,23 @@ Reference architecture basis: AWS whitepaper "Disaster Recovery of Workloads on 
 
 ## 3. Application Specification
 
+Section 3.1 records the monitoring application originally delivered in M1 and separated from the drill workload in M7. Section 3.2 defines the new workload.
+
+### 3.1 Monitoring service
+
 Language: Go (fallback: Python FastAPI if Go blocks progress). Single Docker container, distroless or alpine base, non-root user.
 
 Behavior:
 - Background loop (goroutine with ticker) checks each target URL every 30 seconds with a 5 second timeout via HTTP GET.
 - Each check writes one row: target_url, status_code (nullable), response_ms, is_up (bool), checked_at (timestamptz).
-- Targets are defined in the version-controlled `app/targets.json` file as a non-empty JSON `targets` array of HTTP(S) URLs, including the canonical public status URL. At startup, the app seeds those URLs idempotently into PostgreSQL.
+- Targets are defined in version-controlled monitor configuration as a non-empty list containing only the canonical URL-shortener health endpoint. Google, GitHub, and other unrelated external websites are removed. Monitoring persistence must not use the workload database.
 
 Endpoints:
 - `GET /healthz` returns 200 and `{"status":"ok"}` if the DB is reachable. Used by ALB target group health check.
 - `GET /targets` returns the target list as JSON.
 - `GET /status` returns the latest check per target.
 - `GET /history?target={url-encoded target URL}` returns the last 100 checks for that exact target URL (exact match on checks.target_url, no substring or LIKE matching; targets sharing a host suffix must not collide).
+- `GET /topology` returns workload topology collected through read-only AWS APIs in both workload regions. It must not report the monitor's own ECS task as workload topology.
 - `GET /` serves one static HTML page styled as a clean, modern status page used during the live drill. UI spec, all in a single static file with inline CSS and a small inline script, no framework, no npm, no build step:
   - Overall status banner at the top: "All systems operational" (green) when every target is up, "Service disruption" (red) otherwise, derived from `/status`.
   - One card per target: colored status dot (green/red), target hostname, latest response time in ms, "checked Xs ago", and an uptime percentage for the last 24 hours (computed server-side from the checks table, returned by /status).
@@ -76,9 +81,32 @@ CREATE INDEX IF NOT EXISTS idx_checks_target_time ON checks (target_url, checked
 
 Deliberate omission, document in app/README.md: checks.target_url has no foreign key to targets. At this scale, orphan rows are harmless, and denormalizing the URL keeps history readable even if a target is removed. State this as a conscious trade-off.
 
-Runtime configuration uses env vars: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, CHECK_INTERVAL_SECONDS (default 30), PORT (default 8080). Target configuration is the version-controlled `app/targets.json` file bundled into the image. ECS injects DB_PASSWORD from the region-local SSM SecureString and ordinary environment values for non-secret fields; the Go app assembles the connection string without logging it. Local development may continue to accept DATABASE_URL as a mutually exclusive convenience input.
+M7 replaces the monitor's workload PostgreSQL dependency with an on-demand DynamoDB table owned by the monitoring root. Runtime configuration includes the canonical workload URL, explicit prod and DR resource identifiers, check interval, port, and AWS Regions. The monitor receives only required read actions for ECS and RDS topology plus read/write access to its own DynamoDB table. ARC switching and authoritative Route53 verification remain operator-script responsibilities.
 
-Observability in the app: structured JSON logs to stdout, retained in the regional ECS CloudWatch Logs group. Check history is persisted in PostgreSQL and shown by the status page. The app does not expose or push metrics. No Grafana, Prometheus, OTel Collector, or telemetry archive is deployed.
+Observability in the monitor: structured JSON logs to stdout, retained in its CloudWatch Logs group. Check history uses monitor-owned DynamoDB persistence and is shown by the status page. Drill scripts retain operator events in `DRILL_LOG`; they do not write to workload RDS. The monitor does not expose or push custom metrics. No Grafana, Prometheus, OTel Collector, or telemetry archive is deployed.
+
+### 3.2 URL-shortener workload
+
+Language: Go. Single container, scratch or distroless final image, non-root user. One PostgreSQL table stores short links.
+
+Endpoints:
+- `GET /healthz` returns 200 only when PostgreSQL is reachable.
+- `POST /links` creates a short link through the normal application API. Creation requires a fixed operator bearer token loaded from SSM; the token is never persisted in Terraform state or browser assets.
+- `GET /links` lists recent links without exposing the operator token.
+- `GET /{slug}` returns an HTTP redirect to the stored destination.
+- `GET /` serves a minimal URL-shortener page. No workload topology or drill-specific write-probe endpoint is allowed.
+
+Schema:
+```sql
+CREATE TABLE IF NOT EXISTS links (
+  id BIGSERIAL PRIMARY KEY,
+  slug TEXT UNIQUE NOT NULL,
+  destination_url TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+The workload is the only service affected by HA, regional failover, failback, and teardown drills. A link created in prod before outage and a link created in DR after promotion provide normal application-level data-survival evidence across failover and failback.
 
 ## 4. Architecture Specification
 
@@ -89,10 +117,10 @@ Version policy:
 
 ### 4.1 Primary region (eu-central-1)
 - VPC `10.0.0.0/24` across eu-central-1a and eu-central-1b. Allocate two public `/27` subnets for ALB and public ingress, two private application `/27` subnets for ECS, and two isolated database `/28` subnets for RDS. A `/27` has 27 AWS-usable addresses and a `/28` has 11, enough for two steady ECS tasks, deployment overlap, ALB nodes, Regional NAT attachments, and RDS failover with substantial headroom. Reserve the remaining addresses for growth. The DR VPC uses non-overlapping `10.1.0.0/24`; document the address calculation in the module README.
-- ALB in public subnets, HTTPS :443 with a DNS-validated regional ACM certificate. HTTP :80 redirects permanently to HTTPS. `sagaruprety.com.np` remains authoritative in Cloudflare. Delegate the `sentinel.sagaruprety.com.np` subdomain to a Route53 public hosted zone using NS records in Cloudflare before applying ACM validation. Publish the dashboard at the delegated-zone apex `sentinel.sagaruprety.com.np`, with machine health at `/healthz`; Route53 manages the operator-gated regional route. Each regional ALB needs its own ACM certificate because ACM certificates are regional for ALB listeners.
+- Workload ALB in public subnets, HTTPS :443 with a DNS-validated regional ACM certificate. HTTP :80 redirects permanently to HTTPS. `sagaruprety.com.np` remains authoritative in Cloudflare. The persistent Route53 zone remains `sentinel.sagaruprety.com.np`. Publish the isolated monitor at the zone apex and the ARC-controlled workload at `app.sentinel.sagaruprety.com.np`. Each regional workload ALB needs its own ACM certificate because ACM certificates are regional for ALB listeners.
 - ECS Fargate cluster. One service, desired_count = 2 in demo mode, 1 in idle-testing mode. Tasks in private subnets. CPU 256, memory 512. Fargate does not support placement strategies or constraints; AZ spread across the two private subnets is automatic and best-effort, verified with evidence in M2 rather than configured.
 - Pin an explicit supported Fargate Linux platform version in Terraform and record it in the module README; do not rely silently on a changing `LATEST` value.
-- Egress for image pull, logs, SSM retrieval, and external checks uses one Regional NAT Gateway configured for both AZs plus the free S3 gateway endpoint. Regional NAT is part of every applied prod and DR environment, not a feature flag, because the workload cannot perform its core checks or reliably start replacement tasks without it. AWS bills one NAT Gateway-hour per supported AZ, so this has roughly the fixed hourly cost of one zonal NAT per AZ, not one zonal NAT total. It avoids the single-NAT AZ dependency and simplifies routing. Confirm Regional NAT availability in Frankfurt and Ireland before implementation; fallback is one zonal NAT per AZ, never one shared zonal NAT.
+- Egress for image pull, logs, SSM retrieval, and reliable replacement-task startup uses one Regional NAT Gateway configured for both AZs plus the free S3 gateway endpoint. Regional NAT is part of every applied prod and DR environment, not a feature flag. AWS bills one NAT Gateway-hour per supported AZ, so this has roughly the fixed hourly cost of one zonal NAT per AZ, not one zonal NAT total. It avoids the single-NAT AZ dependency and simplifies routing. Confirm Regional NAT availability in Frankfurt and Ireland before implementation; fallback is one zonal NAT per AZ, never one shared zonal NAT.
 - RDS PostgreSQL: pin major version 18 and use `data.aws_rds_engine_version` with `version = "18"` and `latest = true` to select the latest minor available in both eu-central-1 and eu-west-1 at apply time. Record the resolved minor in evidence and require both regions to match before replica creation. Enable automatic minor upgrades; never float automatically to a new major. Use db.t4g.micro if orderable for the resolved version in both regions, otherwise select the smallest supported Graviton class and document the cost change. Configure 20 GB gp3, backup_retention_period = 7, storage encryption, deletion_protection = false, and skip_final_snapshot = true. Module README must warn that the deletion settings are demo-only and that burstable instances can lag under sustained load. `multi_az` is true for the Milestone 2 HA test and full demo, false only for explicitly labeled basic testing.
 - Multi-AZ RDS synchronously maintains a standby in another AZ for availability; that standby is not a backup. RDS automated backups provide the seven-day regional PITR window and are stored by the managed service independently of one DB AZ. Cross-region automated backup replication separately copies recovery data to eu-west-1 for regional disaster and corruption recovery. No manual or final snapshot is retained after teardown unless a drill explicitly creates one and deletes it after evidence collection.
 - Security groups chained: ALB (ingress 80 and 443 from 0.0.0.0/0) -> ECS tasks (ingress 8080 from ALB SG only) -> RDS (ingress 5432 from ECS SG only).
@@ -108,22 +136,29 @@ Version policy:
 - The failover script uses replica promotion as the primary recovery path; the runbook documents PITR restore as the corruption-scenario alternative, including its expected 15-60 minute restore duration.
 - ECR replication rule so the image exists in eu-west-1.
 
+### 4.2.1 Isolated monitoring plane
+
+- Run the monitoring service as a separate always-on ECS service in eu-west-1 with its own VPC, ALB, security groups, persistence, ECR repository, Terraform root/state, and deployment workflow.
+- The monitoring service is not part of prod or DR workload modules, ARC records, failover scripts, failback scripts, HA injection, or workload destroy operations.
+- Monitor `https://app.sentinel.sagaruprety.com.np/healthz` over HTTPS. Read regional workload state through narrowly scoped AWS API permissions rather than public prod and DR origin hostnames.
+- Monitoring-plane failure is outside workload-drill scope. Route53 health checks and CloudWatch alarms remain independent evidence if the monitor itself is unavailable.
+
 Apply prod before DR because the replica, backup replication, and ECR replication depend on primary resource identifiers. Keep environment state separate. DR discovers prod resources through AWS data sources (not remote state), so DR plans and recovery operations do not depend on prod's state file availability. Destroy DR before prod. Promotion changes replica topology and CLI scaling changes ECS desired count, so the runbook must reconcile configuration and Terraform state after every drill.
 
 ### 4.3 Failover automation
 
 Recovery objectives, defined before testing:
-- End-to-end regional recovery target RTO: 30 minutes from the first confirmed user-visible primary outage until `sentinel.sagaruprety.com.np` serves verified traffic backed by writable DR data. Record detection, declaration, promotion, task startup, health verification, and routing as separate phases. Also report operator-invocation-to-recovery automation duration, but do not substitute it for end-to-end RTO.
-- Replica-promotion path target RPO: 60 seconds at demo load, measured from the newest primary check visible in DR after promotion.
+- End-to-end regional recovery target RTO: 30 minutes from the first confirmed user-visible primary outage until `app.sentinel.sagaruprety.com.np` serves verified traffic backed by writable DR data. Record detection, declaration, promotion, task startup, health verification, and routing as separate phases. Also report operator-invocation-to-recovery automation duration, but do not substitute it for end-to-end RTO.
+- Replica-promotion path target RPO: 60 seconds at demo load, measured by whether the prod-created link is present after promotion and supported by fresh pre-promotion `ReplicaLag` evidence.
 - PITR corruption path target RPO: no more than the service-supported restore granularity; measure it during the drill rather than assuming a value.
 
 Recovery is operator-gated at each irreversible boundary. DNS must never route users to an unready pilot light:
-- `scripts/simulate-disaster.sh`: requires `CONFIRM_DISASTER=YES`, starts a new drill segment, records the newest primary row for the canonical RPO target, verifies DR is an available read replica with ECS at zero, scales primary ECS to 0, and records the outage only after the primary ALB returns 503 with zero healthy targets. It restores the original primary count if outage confirmation fails. It does not alter traffic routing.
-- `scripts/failover.sh`: requires a current `outage_confirmed` event plus `CONFIRM_FAILOVER=YES`, validates the replica, immutable regional ECR digest, regional SSM parameter, and fresh `ReplicaLag` evidence, promotes the replica, verifies it is standalone, registers the DR task definition, scales ECS to 2 tasks across two AZs, requires two healthy ALB targets, verifies fresh database writes, and records the newest pre-outage row available in DR. It deliberately does not switch traffic.
-- `scripts/switch-traffic.sh`: is the separate final operator gate. It requires verified DR readiness, discovers the pre-created ARC cluster and routing controls, checks the expected initial control states, atomically changes primary Off and DR On through one of ARC's regional data-plane endpoints, then records completion only after authoritative Route53 DNS and `/topology` prove public traffic is served by eu-west-1.
-- Traffic switching uses an operator-gated Route53 Application Recovery Controller routing control connected to the `sentinel.sagaruprety.com.np` apex records. Provision the ARC routing-control cluster only for the drill; its published rate was $2.50 per cluster-hour when this plan was revised, but verify current pricing before apply. Include the charge in session evidence. The project owner controls teardown after evidence capture. Fallback: a deliberate Route53 record update after readiness verification, clearly identified as a less resilient control-plane operation. Automatic primary-health-check DNS failover to an unready DR ALB is forbidden.
-- `scripts/failback.sh`: guards operational failback phases while topology-changing Terraform plans run through protected manual GitHub Actions dispatches. It creates and later deletes the temporary safety snapshot, verifies reverse-replica source and lag, promotes and hardens prod, requires the known DR-written row before switching back, then verifies restored primary-to-DR replication and DR desired count 0. Local scripts assume the operator's active AWS credentials already have required permissions; no dedicated local recovery role is provisioned.
-- `scripts/measure.sh`: isolates the latest `drill_started` segment so two drills cannot mix events, reports each recovery phase, measures RTO through authoritative DNS and public DR `/topology` verification, and derives row-based RPO by comparing the newest primary target row before the outage with the newest matching pre-outage row present in DR. The pre-promotion `ReplicaLag` maximum is retained as supporting AWS control-plane evidence.
+- `scripts/simulate-disaster.sh`: requires `CONFIRM_DISASTER=YES`, creates and records a normal short link in prod, verifies DR is an available read replica with ECS at zero, scales primary ECS to 0, and records the outage only after the workload ALB returns 503 with zero healthy targets. It verifies the isolated monitor remains healthy, restores the original primary count if outage confirmation fails, and does not alter traffic routing.
+- `scripts/failover.sh`: requires a current `outage_confirmed` event plus `CONFIRM_FAILOVER=YES`, validates the replica, immutable regional ECR digest, regional SSM parameter, and fresh `ReplicaLag` evidence, promotes the replica, verifies it is standalone, registers the DR task definition, scales ECS to 2 tasks across two AZs, requires two healthy ALB targets, verifies the prod-created link, creates a DR link, and verifies monitor health. It deliberately does not switch traffic.
+- `scripts/switch-traffic.sh`: is the separate final operator gate. It requires verified DR readiness, discovers the pre-created ARC cluster and routing controls, checks expected initial control states, atomically changes primary Off and DR On through one of ARC's regional data-plane endpoints, then records completion only after authoritative Route53 DNS, workload health, and expected-link verification prove public workload traffic is served by eu-west-1. It separately verifies monitor health.
+- Traffic switching uses an operator-gated Route53 Application Recovery Controller routing control connected to `app.sentinel.sagaruprety.com.np` records. Provision ARC routing-control cluster only for drill; its published rate was $2.50 per cluster-hour when this plan was revised, but verify current pricing before apply. Include charge in session evidence. Project owner controls teardown after evidence capture. Fallback: deliberate Route53 record update after readiness verification, clearly identified as less resilient control-plane operation. Automatic primary-health-check DNS failover to an unready DR ALB is forbidden.
+- `scripts/failback.sh`: guards operational failback phases while topology-changing Terraform plans run through protected manual GitHub Actions dispatches. It creates and later deletes the temporary safety snapshot, verifies reverse-replica source and lag, promotes and hardens prod, requires the DR-created link before switching back, then verifies restored primary-to-DR replication and DR desired count 0. Local scripts assume the operator's active AWS credentials already have required permissions; no dedicated local recovery role is provisioned.
+- `scripts/measure.sh`: isolates the latest `drill_started` segment so two drills cannot mix events, reports each recovery phase, measures RTO through authoritative workload DNS and link verification, and reports prod-link recovery timestamps with pre-promotion `ReplicaLag` as supporting AWS control-plane evidence.
 - Every script records changed resources. After the drill, dispatch the guarded recovery workflow and inspect its saved topology plans before approving apply or destroy. Never use `terraform apply -refresh-only` as a substitute for the declared primary and replica roles.
 
 Control-plane operations create or change configuration, such as promoting RDS, scaling ECS, modifying Multi-AZ mode, or changing Route53 records. Data-plane operations use resources that already exist to serve traffic or toggle pre-created routing state, such as ALB requests, database queries, DNS answers, and ARC routing controls. Pilot light accepts some control-plane dependency to reduce standby cost, but the final traffic switch uses pre-created ARC data-plane controls after all required control-plane recovery steps succeed.
@@ -142,11 +177,11 @@ Every project service is chosen intentionally. Here is why each paid service is 
 
 **VPC endpoints:** The S3 gateway endpoint has no hourly charge and reduces NAT traffic, so it is enabled. ECR API/DKR, CloudWatch Logs, and SSM interface endpoints charge per endpoint per AZ plus data processing. For this ephemeral, low-traffic workload they are disabled by default because their fixed hourly cost is likely greater than NAT processing savings. They remain module options to demonstrate the production trade-off between private AWS API paths, NAT/AZ failure behavior, and cost.
 
-**SSM Parameter Store:** Two regional Standard-tier SecureString parameters hold the same RDS password, one for prod ECS and one for DR ECS. Terraform ephemeral values plus AWS provider write-only arguments keep plaintext out of state. Standard parameters fit the small secret count and avoid Secrets Manager. KMS API charges, if any, are included in measured session cost.
+**SSM Parameter Store:** Regional Standard-tier SecureString parameters hold the shared RDS password and URL-shortener operator token for prod and DR ECS. Terraform ephemeral values plus AWS provider write-only arguments keep plaintext out of state. Standard parameters fit the small secret count and avoid Secrets Manager. KMS API charges, if any, are included in measured session cost.
 
 ### 4.5 Route53
 - Keep health checks for detection and evidence, with a deliberate `failure_threshold` that avoids reacting to a single transient failure. Do not attach automatic failover routing that sends users to DR while its desired count is zero. The final measured drill must use an operator-gated Route53 ARC routing control after `failover.sh` verifies the promoted database, healthy DR targets, and successful writes. A scripted Route53 record update remains an emergency fallback only and must be documented as a less resilient control-plane operation, not presented as equivalent evidence.
-- The registered parent domain `sagaruprety.com.np` remains on Cloudflare. Terraform creates the `sentinel.sagaruprety.com.np` Route53 public hosted zone. Add its returned NS records to Cloudflare once, then verify delegation with `dig NS sentinel.sagaruprety.com.np`. Route53 publishes the dashboard at that zone apex and owns its ARC routing controls without moving the parent domain away from Cloudflare.
+- The registered parent domain `sagaruprety.com.np` remains on Cloudflare. Terraform creates the `sentinel.sagaruprety.com.np` Route53 public hosted zone. Add its returned NS records to Cloudflare once, then verify delegation with `dig NS sentinel.sagaruprety.com.np`. Route53 publishes monitor at zone apex and ARC-controlled workload at `app.sentinel.sagaruprety.com.np` without moving parent domain away from Cloudflare.
 
 ### 4.6 Monitoring
 - CloudWatch alarms: ALB 5xx count, ALB healthy host count < 1, ECS running task count < desired, RDS CPU > 80, RDS free storage low. All alarms notify one SNS topic with email subscription. The DR task-count alarm expects zero while pilot light is inactive; `failover.sh` changes it to two after scaling DR, and Terraform reconciliation restores zero after the drill.
@@ -180,11 +215,16 @@ All ten rows are mandatory; none are documentation-only. Do not simulate an AWS 
 
 ```
 aws-resilient-status-page/
-├── app/
+├── app/                         # isolated monitoring service
 │   ├── Dockerfile
 │   ├── main.go (or app/ package layout)
 │   ├── targets.json
 │   ├── static/index.html
+│   └── README.md
+├── workload/                    # URL-shortener drill workload
+│   ├── Dockerfile
+│   ├── cmd/shortener/
+│   ├── internal/
 │   └── README.md
 ├── terraform/
 │   ├── modules/
@@ -198,6 +238,7 @@ aws-resilient-status-page/
 │   │   └── ecr/
 │   └── environments/
 │       ├── bootstrap/        # persistent state backend, GitHub OIDC roles, and delegated Route53 zone
+│       ├── monitoring/       # isolated observer, separate state and lifecycle
 │       ├── prod/             # eu-central-1
 │       └── dr/               # eu-west-1
 ├── scripts/
@@ -209,7 +250,8 @@ aws-resilient-status-page/
 │   ├── failback.sh
 │   └── measure.sh
 ├── .github/workflows/
-│   ├── app.yml               # PR quality checks; protected main-branch ECS deployment
+│   ├── monitor.yml           # isolated monitor CI/CD
+│   ├── workload.yml          # URL-shortener CI/CD across prod and DR
 │   ├── recovery.yml          # protected failback topology plan/apply operations
 │   └── terraform.yml         # quality, speculative plan comments, and protected manual deploy/destroy
 ├── docker-compose.yml        # local dev stack: app and postgres
@@ -285,7 +327,7 @@ Acceptance criteria:
 
 ### Milestone 3: CI/CD, monitoring, deployment safety (2 days)
 Tasks:
-- [x] app.yml workflow: pull-request Go/frontend/container quality checks; protected main-branch deployment that pushes an immutable ECR image by digest, registers the reviewed task definition, waits for ECS stability, and verifies public health using OIDC credentials with no long-lived AWS keys. Terraform itself continued to be run manually through M3 and M4 so DR work was not blocked on CI tooling. Terraform workflow implementation and local validation were completed in M5, then exercised live through PRs #14–#17 on 2026-07-21.
+- [x] app.yml workflow: pull-request Go/frontend/container quality checks; protected main-branch deployment that pushes an immutable ECR image by digest, registers the reviewed task definition, waits for ECS stability, and verifies public health using OIDC credentials with no long-lived AWS keys. Terraform itself continued to be run manually through M3 and M4 so DR work was not blocked on CI tooling. Terraform workflow implementation and local validation were completed in M5, then exercised live through PRs #14-#17 on 2026-07-21.
 - [x] monitoring module: CloudWatch alarms, SNS notifications, and an EventBridge ECS deployment-failure notification per 4.6.
 - [x] Alerting: CloudWatch alarms + SNS + EventBridge rule per 4.6.
 Acceptance criteria:
@@ -298,7 +340,7 @@ Acceptance criteria:
 
 ### Milestone 4: Disaster recovery (2-3 days)
 
-**Status 2026-07-17 (end of session):** prod's workload resources had been deleted to save cost; this session rebuilt prod from zero, built out the full DR side (Route53 delegation, ARC), ran a real PITR restore drill, and ran a real failover rehearsal end to end — disaster declared, replica promoted, DR scaled up, ARC toggled, traffic verified live on DR, RTO/RPO measured. See `docs/milestone-4-evidence.md` for full detail: two state-reconciliation incidents, a safety-rule semantics bug, a `failover.sh` bug, and a `measure.sh` bug, all caught and fixed live rather than glossed over. M4 implementation and historical acceptance evidence are complete. The final topology reset was intentionally stopped mid-way per explicit project-owner instruction after the temporary reverse replica was verified; its fresh live execution is now an M6 task. All AWS resources from that historical session were destroyed, so M6 does not resume that topology.
+**Status 2026-07-17 (end of session):** prod's workload resources had been deleted to save cost; this session rebuilt prod from zero, built out the full DR side (Route53 delegation, ARC), ran a real PITR restore drill, and ran a real failover rehearsal end to end: disaster declared, replica promoted, DR scaled up, ARC toggled, traffic verified live on DR, RTO/RPO measured. See `docs/milestone-4-evidence.md` for full detail: two state-reconciliation incidents, a safety-rule semantics bug, a `failover.sh` bug, and a `measure.sh` bug, all caught and fixed live rather than glossed over. M4 implementation and historical acceptance evidence are complete. The final topology reset was intentionally stopped mid-way per explicit project-owner instruction after the temporary reverse replica was verified; its fresh live execution is now an M6 task. All AWS resources from that historical session were destroyed, so M6 does not resume that topology.
 
 Tasks:
 - [x] Confirm Regional NAT availability in eu-west-1 before the DR VPC apply. Confirmed by the DR apply itself succeeding: `module.vpc.aws_nat_gateway.main` (availability_mode=regional) created in eu-west-1 without issue.
@@ -308,25 +350,25 @@ Tasks:
 - [x] Provision Route53 ARC routing controls only for the drill and verify the `$2.50/cluster-hour` cost. Applied with explicit project-owner go-ahead on the cost. `terraform/modules/route53-failover` created (cluster, control panel, 2 routing controls, 2 safety rules, 2 RECOVERY_CONTROL health checks, 2 detection-only HTTP health checks, 2 failover records). The cluster was destroyed with the rest of the workload at session end.
 - [x] environments/dr composing the same modules: VPC with free S3 gateway endpoint, interface endpoints disabled, ALB, ECS (desired_count 0), ECR replication. Applied: 78 resources, `terraform plan` shows no drift.
 - [x] Extend the monitoring module into eu-west-1 for DR ALB, ECS, and RDS alarms plus the ECS deployment-failure EventBridge rule. The module deliberately contains no ECS observability services, keeping the DR environment pilot-light sized.
-- [x] Cross-region read replica (single-AZ, `db.t4g.micro`, read from prod's own resolved class rather than hardcoded) in eu-west-1 plus `aws_db_instance_automated_backups_replication` with `retention_period = 7`. Required extending the `rds` module (`replicate_source_db_arn`, `kms_key_id` variables) since it only supported standalone instances before. Both mechanisms applied and verified — see evidence doc for lag and retention numbers.
+- [x] Cross-region read replica (single-AZ, `db.t4g.micro`, read from prod's own resolved class rather than hardcoded) in eu-west-1 plus `aws_db_instance_automated_backups_replication` with `retention_period = 7`. Required extending the `rds` module (`replicate_source_db_arn`, `kms_key_id` variables) since it only supported standalone instances before. Both mechanisms applied and verified; see evidence doc for lag and retention numbers.
 - [x] Validate the write-only SSM credential lifecycle across replica creation and promotion. The DR-region SSM parameter (`aws_ssm_parameter.database_password_dr`, write-only, created via the `aws.dr` provider alias in prod's state) successfully served the promoted DR workload during the rehearsal. A password-rotation drill is explicitly excluded from project scope by owner decision; applied-state no-plaintext verification remains mandatory in M6.
-- [x] Route53 health monitoring and operator-gated traffic switching per 4.5. Two RECOVERY_CONTROL health checks gate the two failover records — DNS reflects only the ARC control's manual state, never raw ALB health, so no automatic routing to zero-capacity DR is possible by construction. Two plain-HTTP detection-only health checks (`/healthz`, `failure_threshold=3`) exist for evidence/alarming and are not wired to any record.
+- [x] Route53 health monitoring and operator-gated traffic switching per 4.5. Two RECOVERY_CONTROL health checks gate the two failover records. DNS reflects only the ARC control's manual state, never raw ALB health, so no automatic routing to zero-capacity DR is possible by construction. Two plain-HTTP detection-only health checks (`/healthz`, `failure_threshold=3`) exist for evidence/alarming and are not wired to any record.
 - [x] Scripts: `simulate-disaster.sh`, `failover.sh`, `switch-traffic.sh`, `failback.sh`, `measure.sh`, and `simulate-ha.sh`. The original M4 versions were executed for real. The current hardened versions add explicit confirmation gates, per-drill event isolation, prerequisite checks, two-target and two-AZ readiness, atomic ARC switching through regional data-plane endpoints, authoritative DNS plus `/topology` verification, row-based RPO, and failback reset checks. Repository implementation and shell validation are complete; final live execution is tracked in M6.
 - [x] Prod-first apply, DR-first destroy, non-secret remote-state dependencies, bootstrap-state regional dependency, promotion drift, and reconciliation are documented across this plan, `docs/runbook-failover.md`, and `docs/milestone-4-evidence.md`. The canonical editable diagram is `docs/aws-dr-architecture.drawio`.
 - [x] runbook-failover.md. Written with real measured numbers from the rehearsal below, not placeholders.
 Acceptance criteria:
-- [x] Starting from no workload resources, apply prod foundations first, publish and verify the immutable image in prod ECR, wait for ECR replication and verify the same digest in eu-west-1, apply the prod service, then apply DR with desired_count 0. Prod and DR sequence both completed and verified (see evidence doc). One real gap found and fixed: the image had been pushed to prod ECR *before* replication was configured, so it never backfilled to eu-west-1 automatically (AWS only replicates images pushed after the replication rule exists) — required an explicit re-push to trigger it. Re-verified the exact digest present in both regions afterward. The final automated from-zero exercise is tracked in M6.
+- [x] Starting from no workload resources, apply prod foundations first, publish and verify the immutable image in prod ECR, wait for ECR replication and verify the same digest in eu-west-1, apply the prod service, then apply DR with desired_count 0. Prod and DR sequence both completed and verified (see evidence doc). One real gap found and fixed: the image had been pushed to prod ECR *before* replication was configured, so it never backfilled to eu-west-1 automatically (AWS only replicates images pushed after the replication rule exists), which required an explicit re-push to trigger it. Re-verified the exact digest present in both regions afterward. The final automated from-zero exercise is tracked in M6.
 - [x] Read replica in eu-west-1 shows replication lag under 30 seconds at demo load. Measured 10-17s via CloudWatch `ReplicaLag` after initial catch-up.
 - [x] Replicated automated backups visible in eu-west-1 with a 7-day retention window; confirm the retention matches the primary. Confirmed via `aws rds describe-db-instance-automated-backups --region eu-west-1`: retention 7, status `replicating`.
-- [x] Execute one isolated PITR restore in eu-west-1 into a new, separate DB instance. Restored from the replicated automated backup (`use-latest-restorable-time`) into a throwaway instance with temporary public networking; verified known pre-corruption rows present via `docker run postgres:18-alpine psql` and the SSM-stored password; measured 12m11s restore duration; observed RPO ≈11m59s (corruption point vs. newest restored row — section 4.3 sets no fixed PITR target, measured as-is); deleted the instance and its temporary subnet group/security group, confirmed removal via `DBInstanceNotFound`/`DBSubnetGroupNotFoundFault`/`InvalidGroup.NotFound`. See `docs/milestone-4-evidence.md`.
+- [x] Execute one isolated PITR restore in eu-west-1 into a new, separate DB instance. Restored from the replicated automated backup (`use-latest-restorable-time`) into a throwaway instance with temporary public networking; verified known pre-corruption rows present via `docker run postgres:18-alpine psql` and the SSM-stored password; measured 12m11s restore duration; observed RPO ≈11m59s (corruption point vs. newest restored row, section 4.3 sets no fixed PITR target, measured as-is); deleted the instance and its temporary subnet group/security group, confirmed removal via `DBInstanceNotFound`/`DBSubnetGroupNotFoundFault`/`InvalidGroup.NotFound`. See `docs/milestone-4-evidence.md`.
 - [x] Recovery rehearsal of `failover.sh` promoted the replica to a working standalone database whose data included checks written in primary shortly before the rehearsal. The original script's `taskRoleArn: null` bug was fixed live. Re-execution with strengthened write/RPO assertions and pre-promotion ReplicaLag evidence is tracked as the final M6 drill rather than unfinished M4 implementation.
 - [x] Traffic remains on primary while DR is unready, then switches only after the promoted database accepts writes and DR ALB targets are healthy. Exercised for real, in that order: prod served traffic (confirmed 503 once actually down) while DR sat at desired_count=0; only after `failover.sh`'s promotion, DR health check, and write verification did the ARC toggle happen, as a separate deliberate step.
-- [x] ARC behavior is explicitly verified: all sub-claims now confirmed live, including the previously-untested one. Toggled primary Off / dr On via a single atomic `update-routing-control-states` call (both changes evaluated together, never passing through an invalid both-off or both-on intermediate state). Route53's `HealthCheckStatus` CloudWatch metric flipped (primary 1→0, dr 0→1) about a minute after the toggle — real propagation latency, not instant — and `dig` against a Route53 nameserver directly then returned DR's exact ALB IPs (not prod's), with a live `curl` through `status.sentinel.sagaruprety.com.np/healthz` returning 200 served by DR.
-- [x] Route53 health checks use the documented `/healthz` path and deliberate failure threshold; demonstrate that one transient failed probe does not route traffic and that health monitoring remains detection-only until the operator toggles ARC. Two HTTP health checks (`/healthz`, `failure_threshold=3`) exist for detection/evidence and are architecturally incapable of routing traffic — they aren't referenced by either failover record, only the RECOVERY_CONTROL health checks are. Confirmed both regions' detection health checks tracked reality correctly through the drill (prod's CloudWatch alarms went to `ALARM` on `healthy-hosts`/`running-tasks` the moment prod actually went down; DR's stayed `OK` throughout its own activation).
+- [x] ARC behavior is explicitly verified: all sub-claims now confirmed live, including the previously-untested one. Toggled primary Off / dr On via a single atomic `update-routing-control-states` call (both changes evaluated together, never passing through an invalid both-off or both-on intermediate state). Route53's `HealthCheckStatus` CloudWatch metric flipped (primary 1→0, dr 0→1) about a minute after the toggle, showing real propagation latency rather than an instant change. `dig` against a Route53 nameserver directly then returned DR's exact ALB IPs (not prod's), with a live `curl` through `status.sentinel.sagaruprety.com.np/healthz` returning 200 served by DR.
+- [x] Route53 health checks use the documented `/healthz` path and deliberate failure threshold; demonstrate that one transient failed probe does not route traffic and that health monitoring remains detection-only until the operator toggles ARC. Two HTTP health checks (`/healthz`, `failure_threshold=3`) exist for detection/evidence and are architecturally incapable of routing traffic. They aren't referenced by either failover record; only the RECOVERY_CONTROL health checks are. Confirmed both regions' detection health checks tracked reality correctly through the drill (prod's CloudWatch alarms went to `ALARM` on `healthy-hosts`/`running-tasks` the moment prod actually went down; DR's stayed `OK` throughout its own activation).
 - [x] After measured service recovery, convert the promoted single-AZ DR database to Multi-AZ, verify the standby is available, and report the reduced-availability window separately from RTO. Converted via `modify-db-instance --multi-az --apply-immediately`; see evidence doc for the measured conversion window, reported separately from the 736s RTO above (Multi-AZ conversion is a post-recovery hardening step, not part of recovery itself).
-- [x] Before declaring drill readiness, verify DR prerequisites match primary: ECR image digest present in eu-west-1 (confirmed), DR task definition matches prod's reviewed configuration (true by construction), SSM parameter metadata/versions current (confirmed). Service quota sufficiency was implicitly confirmed by the rehearsal itself succeeding — DR scaled to 2/2 with no quota error.
+- [x] Before declaring drill readiness, verify DR prerequisites match primary: ECR image digest present in eu-west-1 (confirmed), DR task definition matches prod's reviewed configuration (true by construction), SSM parameter metadata/versions current (confirmed). Service quota sufficiency was implicitly confirmed by the rehearsal itself succeeding; DR scaled to 2/2 with no quota error.
 - [x] Verify DR monitoring after activation: healthy-host, running-task, database, and deployment-failure signals exist in eu-west-1 and the notification path works. All five DR alarms read `OK` post-activation; prod's alarms correctly flipped to `ALARM` on exactly the two signals that should trip (`healthy-hosts`, `running-tasks`), confirming the monitoring reflects real state on both sides, not just DR's.
-- [x] `terraform plan` after scripted promotion and scaling clearly exposes drift; intended post-drill configuration is reconciled before destroy. Confirmed: plan shows `desired_count` wanting to revert 2→0, the task definition revision wanting to revert 2→1, and the promoted RDS instance showing Terraform wanting to re-assert `replicate_source_db` (which would attempt to recreate it as a replica if blindly applied — not done). Reconciliation is the failback procedure below, not a blind `apply`.
+- [x] `terraform plan` after scripted promotion and scaling clearly exposes drift; intended post-drill configuration is reconciled before destroy. Confirmed: plan shows `desired_count` wanting to revert 2→0, the task definition revision wanting to revert 2→1, and the promoted RDS instance showing Terraform wanting to re-assert `replicate_source_db` (which would attempt to recreate it as a replica if blindly applied, not done). Reconciliation is the failback procedure below, not a blind `apply`.
 - [x] The route53-failover module has a README per Hard Rule 10: inputs, outputs, one-sentence design intent, and a cost note on the ARC cluster's per-hour billing.
 
 ### Milestone 5: Release preparation and local validation (1-2 days)
@@ -369,9 +411,9 @@ Tasks:
 - [x] DR checks for the outage window were queried during RPO and write verification. DR traffic, database-write, topology, terminal, and alarm evidence is retained in `docs/evidence/m6/` and `docs/milestone-6-evidence.md`; video was not required.
 - [ ] **Optional after M6:** run a second full regional drill after a verified topology reset to add repeatability evidence and a second RTO/RPO sample. This does not block M6 or project completion and must not be implied as executed until retained evidence exists.
 - [x] DR remote-state decoupling completed 2026-07-22. All seven `terraform_remote_state` lookups replaced with AWS data sources (`aws_db_instance`, `aws_lb`, `aws_ssm_parameter`, `aws_route53_zone`). DR no longer depends on prod's state file. Four obsolete prod outputs removed.
-- [x] DR plan runs on main-branch deploy after prod apply (line 321-338 in terraform.yml). PRs plan prod only because DR depends on applied prod outputs. A non-authoritative PR DR plan was considered and explicitly rejected — the current sequenced deployment order (prod plan → prod apply → DR plan → DR apply) is the intended design.
+- [x] DR plan runs on main-branch deploy after prod apply (line 321-338 in terraform.yml). PRs plan prod only because DR depends on applied prod outputs. A non-authoritative PR DR plan was considered and explicitly rejected. Current sequenced deployment order (prod plan → prod apply → DR plan → DR apply) is intended design.
 - [x] Complete `docs/postmortem.md` and final README with measured drill results and verified rebuild instructions.
-- [ ] **DESTROY** — workload teardown, DR before prod unless live topology dictates otherwise. Requires explicit user confirmation in two stages: (1) typed confirmation before `terraform destroy` in DR, (2) typed confirmation before `terraform destroy` in prod. No destroy may proceed without the operator typing a confirmation token. Baseline run `29873075087` verified this order on 2026-07-21; repeat after all M6 evidence is collected, committed, and reviewed. Bootstrap resources (state bucket, lock table, OIDC roles, Route53 zone) are preserved.
+- [ ] **DESTROY:** workload teardown, DR before prod unless live topology dictates otherwise. Requires explicit user confirmation in two stages: (1) typed confirmation before `terraform destroy` in DR, (2) typed confirmation before `terraform destroy` in prod. No destroy may proceed without the operator typing a confirmation token. Baseline run `29873075087` verified this order on 2026-07-21; repeat after all M6 evidence is collected, committed, and reviewed. Bootstrap resources (state bucket, lock table, OIDC roles, Route53 zone) are preserved.
 
 Acceptance criteria:
 - [x] PR Terraform plans, local Infracost, code-only deployment, and reviewed M6 workload deployment were exercised. Run `29911585417` remains truthful failed-run evidence; run `29917714546` safely resumed and completed the DR pilot light without rebuilding healthy prod.
@@ -381,26 +423,50 @@ Acceptance criteria:
 - [x] Every resilience-matrix row has retained M2-M6 evidence. M6 added topology evidence for task replacement, controlled AZ-capacity loss, forced RDS Multi-AZ failover, and regional recovery; the controlled task test is explicitly not described as a complete AZ outage.
 - [x] Website topology evidence matches task and AZ changes, RDS writer/standby exchange, eu-west-1 DR service, and eu-central-1 after failback. Final healthy prod evidence retained as `13-final-prod-healthy.png`. Standby-only reset state verified through AWS/workflow output.
 - [x] README contains only measured numbers. A stranger can rebuild and operate the project from the current instructions.
-- [x] Workload destroyed — deferred to Milestone 7.
+- [x] Workload destroy remained outside M6 acceptance and is deferred to Milestone 8. Current live workload is retained temporarily for the M7 migration.
 
-### Milestone 7: Cleanup and future improvements (optional, does not block project completion)
+### Milestone 7: Separate monitoring plane and URL-shortener workload
+
+**Intent:** correct the historical architecture's observer/workload coupling. Preserve M0-M6 evidence as truthful historical evidence, then deploy an isolated monitor that remains available while a separate URL-shortener workload undergoes drills.
+
+Tasks:
+- [~] URL-shortener code, tests, non-root container, local Compose support, and dedicated README exist. CI and live deployment evidence remain pending.
+- [~] Monitor code targets only canonical workload health URL and reads explicit prod and DR ECS/RDS identifiers. Deployment and live topology evidence remain pending.
+- [~] Monitor-owned on-demand DynamoDB check and drill-event persistence exists with no workload RDS connection. Scripts retain the local `DRILL_LOG` and also publish event records to DynamoDB. Applied-state and live timeline evidence remain pending.
+- [~] `terraform/environments/monitoring` defines separate state, VPC, ECS, ALB, ECR, DNS, IAM, logs, alarms, SNS, security groups, DynamoDB, and outputs in eu-west-1. Deployment and independent-state evidence remain pending.
+- [~] Prod and DR definitions run URL-shortener image while retaining replication, ARC, backups, alarms, and DR desired count semantics. Deployment evidence remains pending.
+- [~] DNS code assigns monitor apex and ARC-controlled workload subdomain. Live DNS and HTTPS evidence remain pending.
+- [~] `monitor.yml` and `workload.yml` independently publish and deploy images. Workflow execution evidence remains pending.
+- [~] Drill scripts and runbooks use prod-created and DR-created links for failover and failback evidence. Fresh live drill evidence remains pending.
+- [~] README, runbooks, cost text, least-privilege description, and M7 evidence template describe two-plane design. Live evidence remains pending.
+- [ ] Canonical architecture diagram update is deferred by owner instruction. It remains non-complete and existing diagram must not be presented as current M7 architecture.
+- [ ] Run a fresh HA and regional drill with the monitor continuously available. Historical M6 results remain labeled historical and are not presented as proof of the new design.
+
+Acceptance criteria:
+- [ ] Stopping, replacing, scaling, promoting, routing, resetting, or destroying workload resources does not restart, scale, reroute, or destroy monitoring resources.
+- [ ] Monitor remains publicly reachable and records canonical workload outage and recovery throughout ECS, RDS Multi-AZ, regional failover, and failback tests.
+- [ ] Monitor task role has only read-only ECS/RDS observation actions, documented wildcard resources where those APIs require them, access to its own DynamoDB table, and no ECS, RDS, ARC, Route53, or Terraform mutation permissions.
+- [ ] Workload exposes only normal URL-shortener behavior plus health. No `/topology`, `/write-probe`, pulse, heartbeat, or monitoring-history behavior exists in workload code.
+- [ ] A prod-created link survives failover, a DR-created link survives failback, and retained evidence records both checks alongside measured RTO/RPO.
+- [ ] Independent Terraform plans and destroy plans prove monitoring state has no workload resources and workload states have no monitoring resources.
+- [ ] Local validation, CI, Terraform validation, TFLint, Checkov, Infracost, smoke tests, and container scans pass.
+
+### Milestone 8: Cleanup and future improvements (optional, does not block project completion)
 
 - [ ] Cost Explorer finalization: record actual AWS session cost and duration in README.
 - [ ] Architecture PNG export from `docs/aws-dr-architecture.drawio`.
 - [ ] Replace `PowerUserAccess` with a CloudTrail-derived least-privilege IAM policy using IAM Access Analyzer. Requires creating a CloudTrail trail first.
 - [ ] Optional second full regional drill for repeatability evidence.
-- [ ] **DESTROY** — workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap preserved.
+- [ ] **DESTROY:** workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap and isolated monitoring plane preserved unless separately approved for destruction.
 
 ## 7. Timeline
 
-Roughly three to four weeks part-time: M0+M1 week 1, M2+M3 week 2, M4 plus M5 local preparation in week 3, then M6 as one or two dedicated final AWS sessions in week 4. This sequencing intentionally avoids repeated environment rebuilds and concentrates AWS cost, deployment, drills, evidence capture, and teardown at project end. Hard cap on app work (1 day). M2 is tight at 2-3 days given Regional NAT, forced RDS failover, write-only credential wiring, and dual-region PostgreSQL version resolution; expect it to run toward the high end. M4 is optimistic at 2-3 days once it includes cross-region RDS with verified retention, one executed PITR restore, ARC cluster lifecycle, Cloudflare delegation, regional ACM certificates, four scripts, and failback design; budget 4-5 days. If any milestone runs 50 percent over, cut failback automation before extending time.
+M0-M6 were completed as the original coupled architecture. M7 is a separate re-architecture phase with repository implementation, isolated monitoring deployment, workload migration, and one fresh drill. M8 contains optional cleanup and improvement work. Preserve historical estimates and evidence rather than rewriting them as if the two-plane design existed during M6.
 
-## 8. CV Bullet (final, use only after Milestone 6)
+## 8. CV Bullet (final, revise only after Milestone 7)
 
-"Designed and demonstrated a highly available AWS workload (personal project): Terraform-provisioned ECS Fargate across two AZs with Multi-AZ RDS, CloudWatch alarms and SNS notifications, GitHub Actions CI/CD with automated rollback, and cross-region pilot light disaster recovery with Route53 ARC failover, achieving a measured RTO of 8 minutes 58 seconds with point-in-time recovery."
-
-Replace X with the measured value. Keep the personal project label.
+Do not replace the historical CV bullet with a two-plane claim until M7 has fresh live evidence. After M7, report the isolated observer, URL-shortener workload, and newly measured recovery values only.
 
 ## 9. Out of Scope (do not let agents add these)
 
-Custom auth, user accounts, alerting rules inside the app, Kubernetes/EKS, multi-account setups, service mesh, and AI/LLM features. Always-on infrastructure is limited to the bootstrap state backend, GitHub OIDC roles, and delegated Route53 zone; workload, ARC, health checks, and application records remain ephemeral.
+User accounts, alerting rules inside either app, Kubernetes/EKS, multi-account setups, service mesh, and AI/LLM features. Authentication is limited to one operator token for URL creation. Always-on infrastructure is limited to bootstrap resources and the isolated monitoring plane; workload, ARC, workload health checks, and workload application records remain ephemeral.

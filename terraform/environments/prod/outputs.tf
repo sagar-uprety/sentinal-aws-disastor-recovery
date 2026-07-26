@@ -14,7 +14,7 @@ output "ecr_repository_url" {
 }
 
 output "github_actions_role_arn" {
-  description = "IAM role ARN GitHub Actions assumes via OIDC (set as the AWS_ROLE_ARN repo variable for app.yml)."
+  description = "IAM role ARN GitHub Actions assumes via OIDC for workload.yml."
   value       = module.github_oidc.role_arn
 }
 

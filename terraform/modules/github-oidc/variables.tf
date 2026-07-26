@@ -24,27 +24,27 @@ variable "github_oidc_provider_arn" {
 }
 
 variable "ecr_repository_arn" {
-  description = "ARN of the ECR repository app.yml pushes images to."
+  description = "ARN of the ECR repository workload.yml pushes images to."
   type        = string
 }
 
 variable "ecs_cluster_arn" {
-  description = "ARN of the ECS cluster app.yml deploys to."
+  description = "ARN of the ECS cluster workload.yml deploys to."
   type        = string
 }
 
 variable "ecs_service_arn" {
-  description = "ARN of the ECS service app.yml updates."
+  description = "ARN of the ECS service workload.yml updates."
   type        = string
 }
 
 variable "ecs_task_execution_role_arn" {
-  description = "ARN of the ECS task execution role that app.yml must be able to pass when registering a new task definition revision."
+  description = "ARN of the ECS task execution role that workload.yml passes when registering a task definition revision."
   type        = string
 }
 
 variable "ecs_task_role_arn" {
-  description = "ARN of the ECS application task role that app.yml must be able to pass when registering a new task definition revision."
+  description = "ARN of the ECS workload task role that workload.yml passes when registering a task definition revision."
   type        = string
 }
 

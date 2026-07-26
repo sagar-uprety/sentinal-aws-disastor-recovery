@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
 DR_REGION="eu-west-1"
@@ -11,8 +12,8 @@ DR_SERVICE="sentinel-aws-dr-dr"
 DR_DB_ID="sentinel-aws-dr-dr"
 DR_ECS_ALARM_NAME="sentinel-aws-dr-dr-ecs-running-tasks"
 DR_ALB_ALARM_NAME="sentinel-aws-dr-dr-alb-healthy-hosts"
-STATUS_HOST="sentinel.sagaruprety.com.np"
-RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
+WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
+MONITOR_HOST="sentinel.sagaruprety.com.np"
 RPO_TARGET_SECONDS="${RPO_TARGET_SECONDS:-60}"
 
 if [ "${CONFIRM_FAILOVER:-}" != "YES" ]; then
@@ -20,7 +21,10 @@ if [ "${CONFIRM_FAILOVER:-}" != "YES" ]; then
   exit 1
 fi
 require_current_event "outage_confirmed"
-outage_ts="$(current_event_ts outage_confirmed)"
+require_current_event "pre_outage_link_slug"
+require_current_event "primary_link_created_at"
+pre_outage_slug="$(current_event_ts pre_outage_link_slug)"
+primary_link_created_at="$(current_event_ts primary_link_created_at)"
 
 read -r db_status replica_source <<<"$(aws rds describe-db-instances \
   --region "$DR_REGION" \
@@ -83,6 +87,12 @@ aws ssm get-parameter \
   --name "$password_parameter_arn" \
   --with-decryption \
   --query 'Parameter.Version' --output text >/dev/null
+
+link_token_parameter_arn="$(jq -r '.containerDefinitions[0].secrets[] | select(.name == "LINK_CREATE_TOKEN") | .valueFrom' "$task_definition_json")"
+if [[ "$link_token_parameter_arn" != arn:aws:ssm:eu-west-1:* ]]; then
+  echo "ERROR: DR task definition does not reference an eu-west-1 link-token parameter." >&2
+  exit 1
+fi
 
 if [ "$resume_promoted" = false ]; then
   five_minutes_ago="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
@@ -270,35 +280,20 @@ dr_alb_dns="$(aws elbv2 describe-load-balancers \
   --region "$DR_REGION" \
   --names "sentinel-aws-dr-dr-alb" \
   --query 'LoadBalancers[0].DNSName' --output text)"
-write_verification_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-write_verified=false
-for _ in {1..18}; do
-  status_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${dr_alb_dns}:443" "https://${STATUS_HOST}/status" || true)"
-  if jq -e --arg started "$write_verification_started" --arg target "$RPO_TARGET_URL" '
-    type == "array" and
-    ([.[] | select(.url == $target) | .last_checked | select(type == "string")] | max) > $started
-  ' >/dev/null <<<"$status_body"; then
-    dr_known_row="$(jq -r --arg target "$RPO_TARGET_URL" '[.[] | select(.url == $target) | .last_checked | select(type == "string")] | max' <<<"$status_body")"
-    record_event_at "dr_known_row" "$dr_known_row"
-    log_event "dr_write_verified"
-    write_verified=true
-    break
-  fi
-  sleep 5
-done
-if [ "$write_verified" != true ]; then
-  echo "ERROR: DR did not persist a fresh check row; traffic must not be switched." >&2
+if ! require_short_link_direct "$WORKLOAD_HOST" "$dr_alb_dns" "$pre_outage_slug"; then
+  echo "ERROR: DR does not contain prod-created link $pre_outage_slug; traffic must not be switched." >&2
   exit 1
 fi
+record_event_at "dr_pre_outage_link_created_at" "$primary_link_created_at"
 
-encoded_target="$(jq -rn --arg value "$RPO_TARGET_URL" '$value | @uri')"
-history_body="$(curl -fsS --connect-to "${STATUS_HOST}:443:${dr_alb_dns}:443" "https://${STATUS_HOST}/history?target=${encoded_target}&limit=500")"
-dr_pre_outage_last_check="$(jq -r --arg cutoff "$outage_ts" '[.[] | select(.checked_at <= $cutoff) | .checked_at] | max // empty' <<<"$history_body")"
-if [ -z "$dr_pre_outage_last_check" ]; then
-  echo "ERROR: DR history has no pre-outage row for $RPO_TARGET_URL; RPO cannot be measured." >&2
-  exit 1
-fi
-record_event_at "dr_pre_outage_last_check" "$dr_pre_outage_last_check"
+dr_link_slug="dr-drill-$(date -u +%Y%m%d%H%M%S)"
+dr_link="$(create_short_link_direct "$DR_REGION" "$WORKLOAD_HOST" "$dr_alb_dns" "$dr_link_slug" "https://${MONITOR_HOST}")"
+dr_link_created_at="$(jq -r '.created_at' <<<"$dr_link")"
+record_event_at "dr_link_slug" "$dr_link_slug"
+record_event_at "dr_link_created_at" "$dr_link_created_at"
+log_event "dr_write_verified"
+curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
+log_event "monitor_available_during_failover"
 
 cat <<EOF
 

@@ -2,112 +2,59 @@ package monitor
 
 import (
 	"context"
-	"database/sql"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"sentinel-aws-dr/app/internal/db"
+	"sentinel-aws-dr/app/internal/store"
 )
 
 type Checker struct {
-	database    *sql.DB
-	client      *http.Client
-	interval    time.Duration
-	httpTimeout time.Duration
+	store    store.Store
+	client   *http.Client
+	now      func() time.Time
+	target   string
+	interval time.Duration
 }
 
-const (
-	checkerLockQuery   = `SELECT pg_try_advisory_lock(hashtext('sentinel-aws-dr'), hashtext('monitor-checker'))`
-	checkerUnlockQuery = `SELECT pg_advisory_unlock(hashtext('sentinel-aws-dr'), hashtext('monitor-checker'))`
-)
-
-// Creates an HTTP checker with bounded request duration and no redirect following.
-func NewChecker(database *sql.DB, interval, timeout time.Duration) *Checker {
+func NewChecker(dataStore store.Store, target string, interval, timeout time.Duration) *Checker {
 	return &Checker{
-		database:    database,
-		interval:    interval,
-		httpTimeout: timeout,
+		store: dataStore, target: target, interval: interval, now: time.Now,
 		client: &http.Client{
-			Timeout: timeout,
-			// A redirect proves reachability and should retain its original status code.
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+			Timeout:       timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
 
-// Elects one checker across replicas and retries leadership until cancellation.
 func (c *Checker) Run(ctx context.Context) {
-	slog.Info("checker election started", "interval", c.interval.Seconds())
-	retry := time.NewTicker(c.interval)
-	defer retry.Stop()
-
+	slog.Info("checker started", "target", c.target, "interval_seconds", c.interval.Seconds())
+	c.runOnce(ctx)
+	ticker := time.NewTicker(c.interval)
+	defer ticker.Stop()
 	for {
-		conn, err := c.database.Conn(ctx)
-		if err == nil {
-			var leader bool
-			err = conn.QueryRowContext(ctx, checkerLockQuery).Scan(&leader)
-			if err == nil && leader {
-				slog.Info("checker leadership acquired")
-				c.runAsLeader(ctx, conn)
-				unlockCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				var unlocked bool
-				unlockErr := conn.QueryRowContext(unlockCtx, checkerUnlockQuery).Scan(&unlocked)
-				cancel()
-				if unlockErr != nil && ctx.Err() == nil {
-					slog.Error("checker: leadership release failed", "error", unlockErr)
-				}
-			}
-			if closeErr := conn.Close(); closeErr != nil {
-				slog.Error("checker: close leadership connection failed", "error", closeErr)
-			}
-		}
-		if err != nil && ctx.Err() == nil {
-			slog.Error("checker: leadership election failed", "error", err)
-		}
-
 		select {
 		case <-ctx.Done():
 			slog.Info("checker stopped")
 			return
-		case <-retry.C:
-		}
-	}
-}
-
-// Runs checks while the dedicated advisory-lock session remains healthy.
-func (c *Checker) runAsLeader(ctx context.Context, conn *sql.Conn) {
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
-
-	for {
-		if err := conn.PingContext(ctx); err != nil {
-			if ctx.Err() == nil {
-				slog.Error("checker: leadership connection lost", "error", err)
-			}
-			return
-		}
-		c.runOnce(ctx)
-
-		select {
-		case <-ctx.Done():
-			return
 		case <-ticker.C:
+			c.runOnce(ctx)
 		}
 	}
 }
 
-// Loads the current target set and checks each target once.
 func (c *Checker) runOnce(ctx context.Context) {
-	targets, err := db.ListTargets(ctx, c.database)
-	if err != nil {
-		slog.Error("checker: failed to list targets", "error", err)
-		return
+	result := httpCheck(ctx, c.client, c.target)
+	attrs := []any{"target", result.url, "status_code", result.statusCode, "response_ms", result.responseMs, "is_up", result.isUp}
+	if result.err != nil {
+		attrs = append(attrs, "error", result.err)
 	}
-	for _, t := range targets {
-		c.checkTarget(ctx, t)
+	slog.Info("check result", attrs...)
+	if err := c.store.RecordCheck(ctx, store.Check{
+		CheckedAt: c.now().UTC(), StatusCode: result.statusCode, TargetURL: result.url,
+		ResponseMs: result.responseMs, IsUp: result.isUp,
+	}); err != nil {
+		slog.Error("checker: record failed", "target", result.url, "error", err)
 	}
 }
 
@@ -119,50 +66,27 @@ type checkResult struct {
 	isUp       bool
 }
 
-// Measures one request and classifies 2xx and 3xx responses as reachable.
 func httpCheck(ctx context.Context, client *http.Client, url string) checkResult {
 	start := time.Now()
-	cr := checkResult{url: url}
-
+	result := checkResult{url: url}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		cr.err = err
-		cr.responseMs = int(time.Since(start).Milliseconds())
-		return cr
+		result.err = err
+		result.responseMs = int(time.Since(start).Milliseconds())
+		return result
 	}
-
 	resp, err := client.Do(req)
-	cr.responseMs = int(time.Since(start).Milliseconds())
-
+	result.responseMs = int(time.Since(start).Milliseconds())
 	if err != nil {
-		cr.err = err
-	} else {
-		code := resp.StatusCode
-		cr.statusCode = &code
-		if cerr := resp.Body.Close(); cerr != nil {
-			slog.Error("close response body failed", "error", cerr)
+		result.err = err
+		return result
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Error("close response body failed", "error", err)
 		}
-		if code >= 200 && code < 400 {
-			cr.isUp = true
-		}
-	}
-	return cr
-}
-
-// Records one check result in PostgreSQL and writes a structured log entry.
-func (c *Checker) checkTarget(ctx context.Context, t db.TargetRow) {
-	cr := httpCheck(ctx, c.client, t.URL)
-
-	attrs := []any{
-		"target", cr.url,
-		"status_code", cr.statusCode,
-		"response_ms", cr.responseMs,
-		"is_up", cr.isUp,
-	}
-	if cr.err != nil {
-		attrs = append(attrs, "error", cr.err)
-	}
-	slog.Info("check result", attrs...)
-
-	db.RecordCheck(ctx, c.database, cr.url, cr.statusCode, cr.responseMs, cr.isUp)
+	}()
+	result.statusCode = &resp.StatusCode
+	result.isUp = resp.StatusCode >= 200 && resp.StatusCode < 400
+	return result
 }

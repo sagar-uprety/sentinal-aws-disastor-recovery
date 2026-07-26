@@ -1,5 +1,5 @@
 locals {
-  app_hostname = "sentinel.sagaruprety.com.np"
+  app_hostname = "app.sentinel.sagaruprety.com.np"
 }
 
 data "aws_route53_zone" "sentinel" {
@@ -17,7 +17,20 @@ resource "aws_acm_certificate" "primary" {
   }
 }
 
-resource "aws_route53_record" "certificate_validation" {
+moved {
+  from = aws_route53_record.certificate_validation["sentinel.sagaruprety.com.np"]
+  to   = aws_route53_record.legacy_monitor_certificate_validation
+}
+
+removed {
+  from = aws_route53_record.legacy_monitor_certificate_validation
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "aws_route53_record" "workload_certificate_validation" {
   for_each = {
     for dvo in aws_acm_certificate.primary.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
@@ -36,7 +49,7 @@ resource "aws_route53_record" "certificate_validation" {
 
 resource "aws_acm_certificate_validation" "primary" {
   certificate_arn         = aws_acm_certificate.primary.arn
-  validation_record_fqdns = [for record in aws_route53_record.certificate_validation : record.fqdn]
+  validation_record_fqdns = [for record in aws_route53_record.workload_certificate_validation : record.fqdn]
 }
 
 removed {
