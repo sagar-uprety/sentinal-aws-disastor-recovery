@@ -1,18 +1,4 @@
 services:
-  db:
-    image: postgres:18-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-
   app:
     build:
       context: ./app
@@ -20,9 +6,37 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-sentinel}?sslmode=disable
       CHECK_INTERVAL_SECONDS: "30"
+      MONITORED_URL: http://workload:8080/healthz
       PORT: "8080"
     depends_on:
-      db:
+      workload:
+        condition: service_started
+
+  workload-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: shortener
+      POSTGRES_PASSWORD: ${WORKLOAD_POSTGRES_PASSWORD:-shortener-local}
+      POSTGRES_DB: shortener
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortener"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  workload:
+    build:
+      context: ./workload
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      DATABASE_URL: postgres://shortener:${WORKLOAD_POSTGRES_PASSWORD:-shortener-local}@workload-db:5432/shortener?sslmode=disable
+      LINK_CREATE_TOKEN: ${LINK_CREATE_TOKEN:-local-operator-token}
+      PORT: "8080"
+    depends_on:
+      workload-db:
         condition: service_healthy

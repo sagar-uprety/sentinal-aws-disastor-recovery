@@ -3,12 +3,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
 ARC_CONTROL_REGION="${ARC_CONTROL_REGION:-us-west-2}"
 ARC_CLUSTER_NAME="${ARC_CLUSTER_NAME:-sentinel-aws-dr-arc}"
 ARC_CONTROL_PANEL_NAME="${ARC_CONTROL_PANEL_NAME:-sentinel-aws-dr-arc}"
-STATUS_HOST="sentinel.sagaruprety.com.np"
+STATUS_HOST="app.sentinel.sagaruprety.com.np"
+MONITOR_HOST="sentinel.sagaruprety.com.np"
 HOSTED_ZONE_NAME="sentinel.sagaruprety.com.np."
 TARGET="${1:-}"
 
@@ -29,13 +31,14 @@ dr)
   }
   require_current_event "dr_targets_healthy"
   require_current_event "dr_write_verified"
-  require_current_event "dr_pre_outage_last_check"
+  require_current_event "pre_outage_link_slug"
   expected_primary="On"
   expected_dr="Off"
   new_primary="Off"
   new_dr="On"
   target_region="eu-west-1"
   target_alb="sentinel-aws-dr-dr-alb"
+  verification_slug="$(current_event_ts pre_outage_link_slug)"
   initialize=false
   ;;
 primary)
@@ -50,6 +53,7 @@ primary)
   new_dr="Off"
   target_region="eu-central-1"
   target_alb="sentinel-aws-dr-prod-alb"
+  verification_slug="$(current_event_ts failback_dr_final_link_slug)"
   initialize=false
   ;;
 *)
@@ -167,13 +171,16 @@ alb_dns="$(aws elbv2 describe-load-balancers \
 
 verified=false
 for _ in {1..36}; do
+  target_ips="$(dig +short A "$alb_dns")"
   authoritative_ips=()
   while IFS= read -r ip; do
     authoritative_ips[${#authoritative_ips[@]}]="$ip"
   done < <(dig +short @"$nameserver" A "$STATUS_HOST")
   for ip in "${authoritative_ips[@]}"; do
-    topology="$(curl -fsS --resolve "${STATUS_HOST}:443:${ip}" "https://${STATUS_HOST}/topology" || true)"
-    if jq -e --arg region "$target_region" '.application.region == $region and .database.available == true' >/dev/null <<<"$topology"; then
+    if grep -Fxq "$ip" <<<"$target_ips" && \
+      curl --fail --silent --show-error --resolve "${STATUS_HOST}:443:${ip}" "https://${STATUS_HOST}/healthz" >/dev/null && \
+      links="$(curl --fail --silent --show-error --resolve "${STATUS_HOST}:443:${ip}" "https://${STATUS_HOST}/links")" && \
+      jq -e --arg slug "$verification_slug" 'any(.[]; .slug == $slug)' >/dev/null <<<"$links"; then
       verified=true
       break 2
     fi
@@ -187,7 +194,9 @@ if [ "$verified" != true ]; then
 fi
 log_event "traffic_verified_${TARGET}"
 log_event "traffic_verified"
-echo "Traffic verified on $TARGET through authoritative Route 53 DNS and /topology."
+curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
+log_event "monitor_available_after_traffic_switch"
+echo "Traffic verified on $TARGET through authoritative Route 53 DNS, workload health, and link $verification_slug. Monitor remained available."
 if [ "$TARGET" = "PRIMARY" ]; then
   cat <<'EOF'
 Dispatch the protected topology-reset workflow and follow both plan/apply job logs:

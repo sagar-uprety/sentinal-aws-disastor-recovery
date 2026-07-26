@@ -54,6 +54,7 @@ terraform.rc
 
 # Go
 app/sentinel
+workload/shortener
 *.exe
 *.exe~
 *.dll

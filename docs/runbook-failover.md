@@ -1,15 +1,17 @@
 # Failover Runbook
 
-AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model: the eu-west-1 database replica, VPC, ALB, ECS service definition, ECR image, SSM parameter, and monitoring exist before the drill, while ECS desired count remains 0. ARC routing controls are provisioned on-demand via `create_arc=true` to avoid $2.50/hr idle cost.
+AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model for the URL-shortener workload: eu-west-1 database replica, workload VPC, ALB, ECS service definition, ECR image, and SSM parameters exist before drill, while workload ECS desired count remains 0. Isolated monitor uses separate state and infrastructure and remains outside workload operations. ARC routing controls are provisioned on demand via `create_arc=true` to avoid idle cost.
 
-The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 measurements remain in `docs/milestone-4-evidence.md`; current operational measurements below come from M6.
+Historical scripts completed a live M6 drill on 2026-07-22. Those measurements describe former coupled architecture and remain historical. M7 repository changes have not been deployed or exercised live.
 
 ## Preconditions
 
-- Primary serves the dashboard at `https://sentinel.sagaruprety.com.np` with two healthy ECS targets; `/healthz` is its machine-readable health endpoint.
+- Isolated monitor serves `https://sentinel.sagaruprety.com.np` from separate eu-west-1 state, VPC, ECS service, ALB, ECR repository, and DynamoDB table.
+- Primary workload serves `https://app.sentinel.sagaruprety.com.np` with two healthy ECS targets; `/healthz` verifies PostgreSQL readiness.
 - DR RDS is an available read replica and DR ECS desired count is 0.
 - The immutable image digest exists in eu-west-1 ECR.
-- The eu-west-1 SSM SecureString metadata and version are current.
+- Regional database-password and link-creation-token SSM SecureString metadata and versions are current. Terraform generates both secrets through ephemeral values and write-only arguments.
+- Protected GitHub environments define `AWS_TERRAFORM_ROLE_ARN`, `AWS_ROLE_ARN`, and `AWS_MONITOR_ROLE_ARN`.
 - **Before a drill, provision ARC:** set `create_arc = true` in the DR Terraform configuration and deploy:
   ```bash
   gh workflow run terraform.yml --ref main -f operation=deploy -f target=dr
@@ -20,7 +22,7 @@ The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 meas
   ```
   ARC controls must be primary `On`, DR `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
-- Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, and ARC operations. This project does not provision a separate local recovery role.
+- Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, ARC, and monitor-table DynamoDB operations. This project does not provision a separate local recovery role.
 - **After drill, tear down ARC** to save cost: set `create_arc = false` and deploy again.
 
 ## Drill Sequence
@@ -31,7 +33,7 @@ The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 meas
    CONFIRM_DISASTER=YES DRILL_LOG=./drill-events.log scripts/simulate-disaster.sh
    ```
 
-   The script verifies pilot-light prerequisites, records the newest primary row for the canonical RPO target, scales primary ECS to 0, and records `outage_confirmed` only after the primary ALB returns 503 with zero healthy targets. It restores the original desired count if confirmation fails.
+   Script verifies pilot-light prerequisites, creates and records a normal short link in prod, scales primary ECS to 0, and records `outage_confirmed` only after workload ALB returns 503 with zero healthy targets. It also requires monitor health and restores original desired count if confirmation fails.
 
 2. Independently review `drill-events.log`, primary target health, and user impact. Promotion is irreversible.
 
@@ -41,7 +43,7 @@ The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 meas
    CONFIRM_FAILOVER=YES DRILL_LOG=./drill-events.log scripts/failover.sh
    ```
 
-   Before promotion, the script requires the current outage marker, validates the replica, regional immutable image, regional SSM parameter, and fresh ReplicaLag evidence. It then promotes RDS, starts two ECS tasks across two AZs, requires two healthy ALB targets, verifies a fresh database write, and records the newest matching pre-outage row available in DR. It does not switch traffic.
+   Before promotion, script requires current outage marker, validates replica, regional immutable image, regional SSM token parameter, and fresh ReplicaLag evidence. It then promotes RDS, starts two ECS tasks across two AZs, requires two healthy ALB targets, verifies prod-created link, creates a DR link through `POST /links`, and verifies monitor health. It does not switch traffic.
 
 4. Switch the pre-created ARC controls as a separate operator gate:
 
@@ -49,9 +51,9 @@ The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 meas
    CONFIRM_TRAFFIC_SWITCH=DR DRILL_LOG=./drill-events.log scripts/switch-traffic.sh dr
    ```
 
-   The script discovers the ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies the resulting states. It records completion only after authoritative Route53 DNS and `/topology` prove eu-west-1 serves the canonical hostname. This demo discovers identifiers through AWS control-plane APIs immediately before switching; a production runbook should retain the five data-plane endpoints and control ARNs out of band.
+   Script discovers ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies resulting states. It records completion only after authoritative Route53 DNS, workload health, and expected short link prove eu-west-1 serves `app.sentinel.sagaruprety.com.np`. It separately verifies monitor health. This demo discovers identifiers through AWS control-plane APIs immediately before switching; production runbook should retain five data-plane endpoints and control ARNs out of band.
 
-   Retain the refreshed website Recovery topology after the switch. It must show eu-west-1 for the serving task, compute, and database; two running tasks across two AZs with `HA ready`; and the promoted DR database as available writer. During the injected outage, the canonical website being unavailable is expected evidence rather than a topology-rendering failure.
+   Retain refreshed monitor topology after switch. It must show eu-west-1 workload compute and database state while monitor remains served from isolated plane.
 
 5. Print measurements:
 
@@ -76,11 +78,11 @@ The hardened scripts completed a live M6 drill on 2026-07-22. Historical M4 meas
 
 ## Measurement Semantics
 
-The replica-promotion RPO target is 60 seconds. `simulate-disaster.sh` records the canonical target's newest primary check before the outage. After promotion, `failover.sh` reads DR history and records the newest matching row at or before `outage_confirmed`. `measure.sh` reports their difference as row-based observed RPO.
+Replica-promotion RPO target is 60 seconds. `simulate-disaster.sh` creates a normal prod link before outage. `failover.sh` requires that link after promotion, records its original timestamp, and creates a second link in DR. Failback requires DR-created link after prod promotion. Link survival is application-level evidence; fresh pre-promotion `ReplicaLag` remains supporting AWS control-plane evidence.
 
 `failover.sh` also records the latest fresh CloudWatch `ReplicaLag` maximum before promotion. AWS documents `ReplicaLag=0` as synchronized and `-1` as inactive or unknown. The script refuses a drill promotion when evidence is missing, stale, or above 60 seconds unless the operator explicitly sets `ALLOW_RPO_TARGET_MISS=YES` to preserve and report a deliberate target miss.
 
-M6 result: user-visible outage confirmation through authoritative DNS and public DR `/topology` verification was 538 seconds. `failover_invoked` through fresh DR write verification was 457 seconds; invocation through public verification was 516 seconds. Row-based observed RPO was 0 seconds, with fresh pre-promotion `ReplicaLag` of 12 seconds. These replace M4 rehearsal values for current scripts.
+Historical M6 result: user-visible outage confirmation through authoritative DNS and public DR `/topology` verification was 538 seconds. `failover_invoked` through fresh DR write verification was 457 seconds; invocation through public verification was 516 seconds. Row-based observed RPO was 0 seconds, with fresh pre-promotion `ReplicaLag` of 12 seconds. These values do not validate M7.
 
 ## Failback And Topology Reset
 
@@ -107,7 +109,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    DRILL_LOG=./drill-events.log scripts/failback.sh verify-replica
    ```
 
-3. Verify prod is a fresh reverse replica. Then begin a planned failback interruption by scaling DR compute to zero and retaining the last observed DR row. Only after writes are frozen does the script recheck fresh lag evidence, promote prod, convert it to Multi-AZ, and start prod tasks. DR and prod are never independent active writers:
+3. Verify prod is a fresh reverse replica. Then begin a planned failback interruption by scaling DR compute to zero and retaining DR-created link slug. Only after writes are frozen does script recheck fresh lag evidence, promote prod, convert it to Multi-AZ, start prod tasks, and require that DR-created link. DR and prod are never independent active writers:
 
    ```bash
    CONFIRM_FAILBACK_FREEZE=YES DRILL_LOG=./drill-events.log scripts/failback.sh freeze-writes
@@ -121,7 +123,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
    ```
 
-   Retain the refreshed website Recovery topology showing eu-central-1 for the serving task, compute, and database; two running tasks across two AZs with `HA ready`; and the prod database as available Multi-AZ writer.
+   Retain refreshed monitor topology showing eu-central-1 workload compute and database state, then verify both prod-created and DR-created links through workload URL.
 
 5. Dispatch the guarded reset workflow. Its exact saved plans reconcile prod as standalone, rebuild DR as prod's replica, and retain DR ECS at desired count zero:
 

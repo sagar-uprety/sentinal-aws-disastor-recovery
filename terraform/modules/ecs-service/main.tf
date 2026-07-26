@@ -46,40 +46,6 @@ resource "aws_iam_role" "task" {
   })
 }
 
-resource "aws_iam_role_policy" "rds_topology" {
-  #checkov:skip=CKV_AWS_355:rds:DescribeDBInstances does not support resource-level permissions; the app only requests its configured identifier.
-  name = "${var.project_name}-${var.environment}-rds-topology"
-  role = aws_iam_role.task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["rds:DescribeDBInstances"]
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "ecs_topology" {
-  #checkov:skip=CKV_AWS_355:ecs:ListTasks does not support service-level resource constraints; the app queries only its own cluster and service names.
-  name = "${var.project_name}-${var.environment}-ecs-topology"
-  role = aws_iam_role.task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ecs:DescribeServices",
-        "ecs:DescribeTasks",
-        "ecs:ListTasks",
-      ]
-      Resource = "*"
-    }]
-  })
-}
-
 resource "aws_iam_role_policy" "ssm_access" {
   name = "${var.project_name}-${var.environment}-ssm-access"
   role = aws_iam_role.task_execution.name
@@ -88,9 +54,12 @@ resource "aws_iam_role_policy" "ssm_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["ssm:GetParameters"]
-        Resource = [var.db_password_ssm_arn]
+        Effect = "Allow"
+        Action = ["ssm:GetParameters"]
+        Resource = [
+          var.db_password_ssm_arn,
+          var.link_create_token_ssm_arn,
+        ]
       },
       {
         Effect = "Allow"
@@ -116,7 +85,7 @@ resource "aws_security_group" "ecs" {
     security_groups = [var.alb_security_group_id]
   }
 
-  #checkov:skip=CKV_AWS_382:sentinel is an uptime checker that probes arbitrary externally-configured target URLs (see TARGETS env var) plus AWS API endpoints (ECR, SSM, CloudWatch, RDS); it needs broad outbound by design
+  #checkov:skip=CKV_AWS_382:the workload needs HTTPS egress for public redirects and AWS service access through the Regional NAT gateway
   egress {
     description = "All outbound"
     from_port   = 0
@@ -163,15 +132,16 @@ resource "aws_ecs_task_definition" "app" {
         { name = "DB_PORT", value = split(":", var.db_endpoint)[1] },
         { name = "DB_NAME", value = var.db_name },
         { name = "DB_USER", value = var.db_user },
-        { name = "DB_INSTANCE_IDENTIFIER", value = var.db_instance_identifier },
-        { name = "AWS_REGION", value = data.aws_region.current.region },
         { name = "PORT", value = tostring(var.container_port) },
-        { name = "CHECK_INTERVAL_SECONDS", value = "30" },
       ]
       secrets = [
         {
           name      = "DB_PASSWORD"
           valueFrom = var.db_password_ssm_arn
+        },
+        {
+          name      = "LINK_CREATE_TOKEN"
+          valueFrom = var.link_create_token_ssm_arn
         }
       ]
       logConfiguration = {
@@ -187,13 +157,15 @@ resource "aws_ecs_task_definition" "app" {
 }
 
 resource "aws_ecs_service" "app" {
+  #checkov:skip=CKV_AWS_332:pins supported Fargate platform 1.4.0 so drill behavior does not drift with LATEST
   count = var.deploy_service ? 1 : 0
 
-  name            = "${var.project_name}-${var.environment}"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.app[0].arn
-  desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+  name             = "${var.project_name}-${var.environment}"
+  cluster          = aws_ecs_cluster.main.id
+  task_definition  = aws_ecs_task_definition.app[0].arn
+  desired_count    = var.desired_count
+  launch_type      = "FARGATE"
+  platform_version = "1.4.0"
 
   deployment_circuit_breaker {
     enable   = true
@@ -218,9 +190,7 @@ resource "aws_ecs_service" "app" {
   }
 
   depends_on = [
-    aws_iam_role_policy.ecs_topology,
     aws_iam_role_policy.ssm_access,
-    aws_iam_role_policy.rds_topology,
     aws_iam_role_policy_attachment.task_execution,
   ]
 }

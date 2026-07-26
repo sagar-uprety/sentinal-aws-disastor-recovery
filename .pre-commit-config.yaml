@@ -52,6 +52,9 @@ repos:
     hooks:
       - id: golangci-lint-full
         entry: bash -c 'cd app && golangci-lint run --fix --config=../.golangci.yml'
+      - id: golangci-lint-full
+        name: golangci-lint workload
+        entry: bash -c 'cd workload && golangci-lint run --fix --config=../.golangci.yml'
 
   - repo: local
     hooks:
@@ -68,10 +71,22 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+      - id: workload-go-vet
+        name: workload go vet
+        entry: bash -c 'cd workload && go vet ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
       - id: go-test
         name: go test
         description: Run Go tests
         entry: bash -c 'cd app && go test ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: workload-go-test
+        name: workload go test
+        entry: bash -c 'cd workload && go test ./...'
         language: system
         types: [go]
         pass_filenames: false
@@ -82,6 +97,12 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+      - id: workload-go-race
+        name: workload go test -race
+        entry: bash -c 'cd workload && go test -race ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
       - id: go-mod-tidy
         name: go mod tidy
         description: Clean up go.mod/go.sum
@@ -89,10 +110,22 @@ repos:
         language: system
         files: go\.mod$
         pass_filenames: false
+      - id: workload-go-mod-tidy
+        name: workload go mod tidy
+        entry: bash -c 'cd workload && go mod tidy'
+        language: system
+        files: ^workload/go\.mod$
+        pass_filenames: false
       - id: govulncheck
         name: govulncheck
         description: Check for known vulnerabilities
         entry: bash -c 'cd app && govulncheck ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: workload-govulncheck
+        name: workload govulncheck
+        entry: bash -c 'cd workload && govulncheck ./...'
         language: system
         types: [go]
         pass_filenames: false
@@ -108,9 +141,10 @@ repos:
       - id: infracost-scan
         name: Infracost scan
         description: Check terraform infrastructure cost
-        entry: bash -c 'infracost scan terraform/ --currency EUR 10>&1 | awk "/Monthly cost:/" || true'
+        entry: bash -o pipefail -c 'infracost scan terraform/ --currency EUR 2>&1 | awk "/Monthly cost:/"'
         language: system
         pass_filenames: false
         always_run: false
         files: \.(tf|tfvars)$
+        stages: [manual]
         verbose: true

@@ -285,8 +285,9 @@ jobs:
 
       - name: Verify traffic and primary readiness
         run: |
+          curl --fail --show-error --silent https://app.sentinel.sagaruprety.com.np/healthz >/dev/null
           topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
-          jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
+          jq -e 'any(.regions[]; .region == "eu-central-1" and .database.available == true and .database.multi_az == true)' >/dev/null <<<"$topology"
 
           read -r status source <<<"$(aws rds describe-db-instances \
             --region eu-central-1 \
@@ -391,8 +392,9 @@ jobs:
 
       - name: Recheck primary traffic and readiness
         run: |
+          curl --fail --show-error --silent https://app.sentinel.sagaruprety.com.np/healthz >/dev/null
           topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
-          jq -e '.application.region == "eu-central-1" and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"
+          jq -e 'any(.regions[]; .region == "eu-central-1" and .database.available == true and .database.multi_az == true)' >/dev/null <<<"$topology"
           read -r status source <<<"$(aws rds describe-db-instances \
             --region eu-central-1 \
             --db-instance-identifier sentinel-aws-dr-prod \
@@ -524,7 +526,8 @@ jobs:
         run: |
           for _ in {1..60}; do
             topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology || true)"
-            if jq -e '.application.region == "eu-central-1" and .compute.desired_count == 2 and .compute.running_count == 2 and .compute.multi_az == true and .database.available == true and .database.multi_az == true' >/dev/null <<<"$topology"; then
+            workload_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://app.sentinel.sagaruprety.com.np/healthz || true)"
+            if [ "$workload_status" = "200" ] && jq -e 'any(.regions[]; .region == "eu-central-1" and .compute.desired == 2 and .compute.running == 2 and (.compute.availability_zones | length) == 2 and .database.available == true and .database.multi_az == true)' >/dev/null <<<"$topology"; then
               exit 0
             fi
             sleep 10

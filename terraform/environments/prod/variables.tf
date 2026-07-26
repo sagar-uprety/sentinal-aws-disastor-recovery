@@ -22,6 +22,12 @@ variable "credential_version" {
   default     = 1
 }
 
+variable "link_token_version" {
+  description = "Increment to rotate the URL-shortener operator token in both regional SSM parameters."
+  type        = number
+  default     = 1
+}
+
 variable "multi_az" {
   description = "Enable RDS Multi-AZ for high availability testing."
   type        = bool

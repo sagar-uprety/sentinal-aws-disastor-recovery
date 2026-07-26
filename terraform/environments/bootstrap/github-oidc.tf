@@ -149,6 +149,10 @@ resource "aws_iam_role_policy" "terraform_workload" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-ecs-task",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-vpc-flow-logs",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-rds-monitoring",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-github-actions",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-ecs-task-exec",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-ecs-task",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-vpc-flow-logs",
         ]
       },
       {
@@ -164,6 +168,9 @@ resource "aws_iam_role_policy" "terraform_workload" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-ecs-task",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-vpc-flow-logs",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-dr-rds-monitoring",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-ecs-task-exec",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-ecs-task",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-monitoring-vpc-flow-logs",
         ]
       },
       {

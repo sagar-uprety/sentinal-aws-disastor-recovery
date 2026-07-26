@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
 REGION="eu-central-1"
@@ -10,8 +11,8 @@ CLUSTER="sentinel-aws-dr-prod"
 SERVICE="sentinel-aws-dr-prod"
 DATABASE="sentinel-aws-dr-prod"
 TARGET_GROUP="sentinel-aws-dr-prod-tg"
-STATUS_HOST="sentinel.sagaruprety.com.np"
-RPO_TARGET_URL="${RPO_TARGET_URL:-https://${STATUS_HOST}}"
+WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
+MONITOR_HOST="sentinel.sagaruprety.com.np"
 
 if [ "${CONFIRM_HA:-}" != "YES" ]; then
   echo "Set CONFIRM_HA=YES to run a controlled HA drill." >&2
@@ -22,6 +23,10 @@ target_group_arn="$(aws elbv2 describe-target-groups \
   --region "$REGION" \
   --names "$TARGET_GROUP" \
   --query 'TargetGroups[0].TargetGroupArn' --output text)"
+alb_dns="$(aws elbv2 describe-load-balancers \
+  --region "$REGION" \
+  --names "sentinel-aws-dr-prod-alb" \
+  --query 'LoadBalancers[0].DNSName' --output text)"
 
 task_arns() {
   aws ecs list-tasks \
@@ -33,7 +38,7 @@ task_arns() {
 }
 
 public_health_status() {
-  curl -sS -o /dev/null -w '%{http_code}' "https://${STATUS_HOST}/healthz" || true
+  curl -sS -o /dev/null -w '%{http_code}' "https://${WORKLOAD_HOST}/healthz" || true
 }
 
 healthy_target_count() {
@@ -68,8 +73,8 @@ require_healthy_baseline() {
   healthy="$(healthy_target_count)"
   az_count="$(task_az_count "${tasks[@]}")"
   status="$(public_health_status)"
-  topology="$(curl -fsS "https://${STATUS_HOST}/topology" || true)"
-  if [ "$desired" != "2" ] || [ "$running" != "2" ] || [ "${#tasks[@]}" -ne 2 ] || [ "$healthy" != "2" ] || [ "$az_count" != "2" ] || [ "$status" != "200" ] || ! jq -e '.application.region == "eu-central-1" and .database.identifier == "sentinel-aws-dr-prod" and .database.available == true' >/dev/null <<<"$topology"; then
+  topology="$(curl -fsS "https://${MONITOR_HOST}/topology" || true)"
+  if [ "$desired" != "2" ] || [ "$running" != "2" ] || [ "${#tasks[@]}" -ne 2 ] || [ "$healthy" != "2" ] || [ "$az_count" != "2" ] || [ "$status" != "200" ] || ! jq -e 'any(.regions[]; .region == "eu-central-1" and .database.identifier == "sentinel-aws-dr-prod" and .database.available == true)' >/dev/null <<<"$topology"; then
     echo "ERROR: HA baseline requires ECS 2/2, two task AZs, two healthy targets, and public HTTP 200." >&2
     echo "Observed desired=$desired running=$running tasks=${#tasks[@]} azs=$az_count healthy=$healthy http=$status." >&2
     exit 1
@@ -83,6 +88,10 @@ wait_for_ecs_recovery() {
   local tasks=()
   for _ in {1..60}; do
     status="$(public_health_status)"
+    if ! curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null; then
+      echo "ERROR: isolated monitor became unavailable during $event_prefix recovery." >&2
+      return 1
+    fi
     if [ "$status" != "200" ]; then
       health_failed=true
     fi
@@ -163,14 +172,9 @@ az)
   ;;
 
 db)
-  encoded_target="$(jq -rn --arg value "$RPO_TARGET_URL" '$value | @uri')"
-  history_before="$(curl -fsS "https://${STATUS_HOST}/history?target=${encoded_target}&limit=1")"
-  known_row="$(jq -r '.[0].checked_at // empty' <<<"$history_before")"
-  if [ -z "$known_row" ]; then
-    echo "ERROR: no database row is available for the Multi-AZ continuity check." >&2
-    exit 1
-  fi
-  record_event_at "ha_db_known_row_before" "$known_row"
+  known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
+  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${MONITOR_HOST}" >/dev/null
+  record_event_at "ha_db_known_link_before" "$known_slug"
   read -r multi_az writer_az standby_az <<<"$(aws rds describe-db-instances \
     --region "$REGION" \
     --db-instance-identifier "$DATABASE" \
@@ -208,12 +212,11 @@ db)
     echo "ERROR: database writer and public health did not recover after forced failover." >&2
     exit 1
   fi
-  history_after="$(curl -fsS "https://${STATUS_HOST}/history?target=${encoded_target}&limit=500")"
-  if ! jq -e --arg known "$known_row" 'any(.[]; .checked_at == $known)' >/dev/null <<<"$history_after"; then
-    echo "ERROR: known pre-failover database row is missing after Multi-AZ recovery." >&2
+  if ! require_short_link_direct "$WORKLOAD_HOST" "$alb_dns" "$known_slug"; then
+    echo "ERROR: known pre-failover link is missing after Multi-AZ recovery." >&2
     exit 1
   fi
-  record_event_at "ha_db_known_row_after" "$known_row"
+  record_event_at "ha_db_known_link_after" "$known_slug"
   elapsed=$(( $(date -u +%s) - started ))
   record_event_at "ha_db_recovery_seconds" "$elapsed"
   record_event_at "ha_db_health_interruption_samples" "$health_interruptions"
