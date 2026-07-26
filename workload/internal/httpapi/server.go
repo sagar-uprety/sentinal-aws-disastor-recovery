@@ -17,25 +17,66 @@ import (
 )
 
 const indexHTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Short Route</title>
-<style>
-:root{color-scheme:light;--ink:#102a43;--muted:#627d98;--paper:#f4f8fb;--card:#fff;--line:#bcccdc;--blue:#1d4ed8;--orange:#f97316}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:ui-sans-serif,system-ui,sans-serif}main{width:min(920px,calc(100% - 32px));margin:0 auto;padding:64px 0}header{display:grid;grid-template-columns:1fr auto;gap:32px;align-items:end;border-bottom:2px solid var(--ink);padding-bottom:24px}h1{font-size:clamp(3rem,10vw,7rem);line-height:.8;letter-spacing:-.08em;margin:0}.route{font:700 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:var(--blue)}.arrow{font-size:4rem;color:var(--orange)}section{background:var(--card);border:1px solid var(--line);margin-top:24px;padding:24px}form{display:grid;grid-template-columns:1fr 1fr;gap:16px}label{display:grid;gap:7px;font-size:13px;font-weight:700}label:first-child{grid-column:1/-1}input{width:100%;border:1px solid var(--line);padding:12px;font:inherit;background:#fff}input:focus{outline:3px solid #bfdbfe;border-color:var(--blue)}button{border:0;background:var(--blue);color:#fff;padding:13px 18px;font-weight:800;cursor:pointer;align-self:end}button:hover{background:#1e40af}.message{min-height:24px;color:var(--muted)}ul{list-style:none;padding:0;margin:0}li{display:grid;grid-template-columns:140px 1fr;gap:18px;padding:14px 0;border-top:1px solid var(--line)}li a{font:700 14px ui-monospace,monospace;color:var(--blue)}li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}@media(max-width:640px){main{padding:36px 0}header,form{grid-template-columns:1fr}.arrow{display:none}li{grid-template-columns:1fr;gap:5px}}
-</style>
-</head>
-<body><main><header><div><div class="route">Database-backed drill workload</div><h1>Short<br>Route</h1></div><div class="arrow">↗</div></header>
-<section><form id="create"><label>Destination URL<input name="destination_url" type="url" required placeholder="https://example.com/path"></label><label>Short name<input name="slug" required pattern="[a-zA-Z0-9_-]{3,32}" placeholder="demo-link"></label><label>Operator token<input name="token" type="password" required autocomplete="off"></label><button>Create short link</button></form><p class="message" id="message" aria-live="polite"></p></section>
-<section><div class="route">Recent routes</div><ul id="links"></ul></section></main>
-<script>
-const list=document.querySelector('#links'),message=document.querySelector('#message');
-async function load(){const response=await fetch('/links');const links=await response.json();list.replaceChildren(...links.map(link=>{const item=document.createElement('li'),short=document.createElement('a'),destination=document.createElement('span');short.href='/'+link.slug;short.textContent='/'+link.slug;destination.textContent=link.destination_url;item.append(short,destination);return item}))}
-document.querySelector('#create').addEventListener('submit',async event=>{event.preventDefault();message.textContent='Creating route...';const data=new FormData(event.currentTarget),response=await fetch('/links',{method:'POST',headers:{'Authorization':'Bearer '+data.get('token'),'Content-Type':'application/json'},body:JSON.stringify({slug:data.get('slug'),destination_url:data.get('destination_url')})});const body=await response.json();message.textContent=response.ok?'Created /'+body.slug:body.error;response.ok&&load()});
-load().catch(()=>{message.textContent='Could not load routes.'});
-</script></body></html>`
+	<html lang="en">
+	<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<title>Brick Link</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+	<style>
+	*{box-sizing:border-box;margin:0;padding:0}
+	:root{--lego-red:#ed1c24;--lego-yellow:#ffd500;--lego-blue:#0051ba;--lego-green:#00a651;--lego-dark:#1a1a2e;--lego-bg:#f5f0e1;--lego-card:#fff;--lego-line:#d4c9b0;--lego-shadow:rgba(0,0,0,.15)}
+	body{background:var(--lego-bg);font-family:'Barlow',sans-serif;color:var(--lego-dark);min-height:100vh;padding:32px 16px}
+	main{max-width:880px;margin:0 auto}
+	header{text-align:center;padding:32px 0;position:relative}
+	header::after{content:'';display:block;width:120px;height:8px;margin:20px auto 0;border-radius:4px;background:linear-gradient(90deg,var(--lego-red) 25%,var(--lego-yellow) 25% 50%,var(--lego-blue) 50% 75%,var(--lego-green) 75%)}
+	.tag{font:700 11px/1 'Barlow',sans-serif;text-transform:uppercase;letter-spacing:.15em;color:var(--lego-blue);margin-bottom:8px}
+	h1{font-family:'Fredoka',sans-serif;font-weight:700;font-size:clamp(2.8rem,12vw,6rem);line-height:1;color:var(--lego-red);text-shadow:3px 3px 0 rgba(0,0,0,.1);letter-spacing:-.02em}
+	h1 span{color:var(--lego-dark)}
+	.sub{font-size:14px;color:#666;margin-top:8px}
+	.card{background:var(--lego-card);border:4px solid var(--lego-line);border-radius:16px;padding:28px;margin-top:24px;box-shadow:0 4px 12px var(--lego-shadow)}
+	.card-title{font-family:'Fredoka',sans-serif;font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.08em;color:var(--lego-blue);margin-bottom:20px;display:flex;align-items:center;gap:10px}
+	.card-title::before{content:'';display:inline-block;width:16px;height:16px;border-radius:4px;background:var(--lego-blue)}
+	form{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+	label{display:grid;gap:6px;font-size:13px;font-weight:700;color:#444}
+	label:first-child{grid-column:1/-1}
+	input{width:100%;border:3px solid var(--lego-line);border-radius:10px;padding:12px 14px;font:inherit;font-size:15px;background:#faf8f2;transition:border-color .15s}
+	input:focus{outline:none;border-color:var(--lego-blue);background:#fff}
+	.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;background:var(--lego-red);color:#fff;font-family:'Fredoka',sans-serif;font-weight:600;font-size:15px;padding:13px 28px;border-radius:12px;cursor:pointer;align-self:end;transition:transform .1s,box-shadow .1s;box-shadow:0 4px 0 #b3141a}
+	.btn:hover{transform:translateY(-2px);box-shadow:0 6px 0 #b3141a}
+	.btn:active{transform:translateY(2px);box-shadow:0 1px 0 #b3141a}
+	.message{min-height:28px;font-size:14px;color:#666;margin-top:12px;text-align:center;font-weight:600}
+	.message.ok{color:var(--lego-green)}
+	.message.err{color:var(--lego-red)}
+	ul{list-style:none;padding:0;margin:0}
+	li{display:grid;grid-template-columns:140px 1fr auto;gap:14px;align-items:center;padding:14px 0;border-top:3px solid #eee}
+	li:first-child{border-top:0}
+	li a{font-family:'Fredoka',sans-serif;font-weight:600;font-size:16px;color:var(--lego-blue);text-decoration:none;background:#eef4ff;padding:4px 12px;border-radius:8px;transition:background .15s}
+	li a:hover{background:#dde8ff}
+	li .dest{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#888;font-size:13px}
+	li .slug{font-size:11px;color:#aaa;text-align:right}
+	.bricks{display:flex;justify-content:center;gap:6px;margin-top:16px}
+	.brick{width:32px;height:14px;border-radius:3px}
+	.brick.r{background:var(--lego-red)}
+	.brick.y{background:var(--lego-yellow)}
+	.brick.b{background:var(--lego-blue)}
+	.brick.g{background:var(--lego-green)}
+	@media(max-width:640px){body{padding:16px 12px}.card{padding:20px}form{grid-template-columns:1fr}li{grid-template-columns:1fr;gap:8px}}
+	</style>
+	</head>
+	<body><main><header><div class="tag">Disaster recovery drill workload</div><h1>Brick&nbsp;<span>Link</span></h1><p class="sub">Shorten URLs. Survive outages.</p><div class="bricks"><div class="brick r"></div><div class="brick y"></div><div class="brick b"></div><div class="brick g"></div></div></header>
+	<div class="card"><div class="card-title">New short link</div><form id="create"><label>Destination URL<input name="destination_url" type="url" required placeholder="https://example.com/path"></label><label>Short name<input name="slug" required pattern="[a-zA-Z0-9_-]{3,32}" placeholder="demo-link" maxlength="32"></label><label>Operator token<input name="token" type="password" required autocomplete="off"></label><button class="btn" type="submit">+ Build brick</button></form><div class="message" id="message" aria-live="polite"></div></div>
+	<div class="card"><div class="card-title">Recent routes</div><ul id="links"><li style="grid-template-columns:1fr;text-align:center;color:#aaa;padding:20px 0;border:0">Loading routes...</li></ul></div></main>
+	<script>
+	const list=document.querySelector('#links'),msg=document.querySelector('#message');
+	async function load(){const r=await fetch('/links');const links=await r.json();if(!links.length){list.innerHTML='<li style="grid-template-columns:1fr;text-align:center;color:#aaa;padding:20px 0;border:0">No routes yet. Build one!</li>';return}list.innerHTML=links.map(l=>'<li><a href="/'+l.slug+'">/'+l.slug+'</a><span class="dest">'+esc(l.destination_url)+'</span><span class="slug">'+ago(l.created_at)+'</span></li>').join('')}
+	function esc(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c])}
+	function ago(t){const s=Math.floor((Date.now()-new Date(t).getTime())/1000);if(s<10)return'just now';if(s<60)return s+'s ago';const m=Math.floor(s/60);return m<60?m+'m ago':Math.floor(m/60)+'h ago'}
+	document.querySelector('#create').addEventListener('submit',async e=>{e.preventDefault();msg.textContent='Building brick...';msg.className='message';const d=new FormData(e.currentTarget);try{const r=await fetch('/links',{method:'POST',headers:{'Authorization':'Bearer '+d.get('token'),'Content-Type':'application/json'},body:JSON.stringify({slug:d.get('slug'),destination_url:d.get('destination_url')})});const b=await r.json();r.ok?(msg.textContent='Created /'+b.slug+'  |  '+b.destination_url,msg.className='message ok',load()):(msg.textContent=b.error,msg.className='message err')}catch(e){msg.textContent='Network error',msg.className='message err'}});
+	load();
+	</script></body></html>`
 
 var slugPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 
