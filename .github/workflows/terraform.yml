@@ -414,7 +414,7 @@ jobs:
           curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://sentinel.sagaruprety.com.np/healthz
 
   destroy:
-    name: Destroy DR and primary environments
+    name: Destroy all environments (DR, prod, monitoring)
     needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' &&
@@ -422,7 +422,7 @@ jobs:
       inputs.confirm_destroy == 'DESTROY' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     environment: terraform-production
     permissions:
       contents: read
@@ -451,7 +451,7 @@ jobs:
             --db-instance-identifier sentinel-aws-dr-prod \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
           if [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; then
-            echo "Prod is still a DR replica. Complete recovery.yml failback-reset before the normal DR-first destroy." >&2
+            echo "Prod is still a DR replica. Complete recovery.yml failback-reset before destroy." >&2
             exit 1
           fi
 
@@ -491,3 +491,26 @@ jobs:
         env:
           CONFIRM_CLEANUP: "YES"
         run: bash scripts/cleanup-workload-artifacts.sh
+
+      - name: Configure AWS credentials for monitoring
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-session-name: terraform-destroy-monitor-${{ github.run_id }}
+          aws-region: eu-west-1
+
+      - name: Initialize monitoring state
+        working-directory: terraform/environments/monitoring
+        run: terraform init -input=false
+
+      - name: Plan monitoring destruction
+        working-directory: terraform/environments/monitoring
+        run: terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
+
+      - name: Show monitoring destruction plan
+        working-directory: terraform/environments/monitoring
+        run: terraform show -no-color destroy.tfplan
+
+      - name: Apply monitoring destruction plan
+        working-directory: terraform/environments/monitoring
+        run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
