@@ -97,11 +97,6 @@ resource "aws_dynamodb_table" "checks" {
   }
 }
 
-data "aws_lb" "prod" {
-  provider = aws.prod
-  name     = "${local.project_name}-prod-alb"
-}
-
 module "service" {
   source = "../../modules/monitor-service"
 
@@ -117,7 +112,7 @@ module "service" {
 
   dynamodb_table_arn  = aws_dynamodb_table.checks.arn
   dynamodb_table_name = aws_dynamodb_table.checks.name
-  monitored_url       = "https://${data.aws_lb.prod.dns_name}/healthz"
+  monitored_url       = "https://app.${local.app_hostname}/healthz"
 
   prod_region              = "eu-central-1"
   prod_ecs_cluster         = "${local.project_name}-prod"
