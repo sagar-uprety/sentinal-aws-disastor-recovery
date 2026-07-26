@@ -142,6 +142,8 @@ resource "aws_nat_gateway" "main" {
       availability_zone = availability_zone_address.value
     }
   }
+
+  depends_on = [aws_internet_gateway.main]
 }
 
 resource "aws_route_table" "public" {
