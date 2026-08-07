@@ -21,16 +21,14 @@ if [ "${CONFIRM_FAILOVER:-}" != "YES" ]; then
   exit 1
 fi
 require_current_event "outage_confirmed"
-require_current_event "pre_outage_link_slug"
 require_current_event "primary_link_created_at"
-pre_outage_slug="$(current_event_ts pre_outage_link_slug)"
-primary_link_created_at="$(current_event_ts primary_link_created_at)"
 
 read -r db_status replica_source <<<"$(aws rds describe-db-instances \
   --region "$DR_REGION" \
   --db-instance-identifier "$DR_DB_ID" \
   --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
 resume_promoted=false
+promotion_in_progress=false
 if [ -z "$replica_source" ] || [ "$replica_source" = "None" ]; then
   require_current_event "failover_invoked"
   if [ -n "$(current_event_ts replica_promoted)" ]; then
@@ -38,6 +36,13 @@ if [ -z "$replica_source" ] || [ "$replica_source" = "None" ]; then
     exit 1
   fi
   resume_promoted=true
+elif [ -n "$(current_event_ts failover_invoked)" ]; then
+  # promote-read-replica was already called earlier in this drill; the
+  # instance just has not finished settling (AWS keeps the source ARN set
+  # while status is "modifying" mid-promotion). Resume by polling instead
+  # of erroring out or calling promote-read-replica a second time.
+  echo "Promotion already invoked earlier in this drill (status=$db_status); resuming poll..."
+  promotion_in_progress=true
 elif [ "$db_status" != "available" ]; then
   echo "ERROR: $DR_DB_ID is not an available read replica; refusing irreversible promotion." >&2
   exit 1
@@ -94,7 +99,7 @@ if [[ "$link_token_parameter_arn" != arn:aws:ssm:eu-west-1:* ]]; then
   exit 1
 fi
 
-if [ "$resume_promoted" = false ]; then
+if [ "$resume_promoted" = false ] && [ "$promotion_in_progress" = false ]; then
   five_minutes_ago="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
   lag_data="$(aws cloudwatch get-metric-statistics \
     --region "$DR_REGION" \
@@ -128,7 +133,7 @@ if [ "$resume_promoted" = false ]; then
 
   echo "Promoting replica $DR_DB_ID in $DR_REGION..."
   aws rds promote-read-replica --region "$DR_REGION" --db-instance-identifier "$DR_DB_ID" >/dev/null
-else
+elif [ "$resume_promoted" = true ]; then
   echo "Resuming current drill after verified replica promotion..."
 fi
 
@@ -280,11 +285,18 @@ dr_alb_dns="$(aws elbv2 describe-load-balancers \
   --region "$DR_REGION" \
   --names "sentinel-aws-dr-dr-alb" \
   --query 'LoadBalancers[0].DNSName' --output text)"
-if ! require_short_link_direct "$WORKLOAD_HOST" "$dr_alb_dns" "$pre_outage_slug"; then
-  echo "ERROR: DR does not contain prod-created link $pre_outage_slug; traffic must not be switched." >&2
+require_current_event "primary_link_slugs_before_outage"
+primary_slugs_before_outage="$(current_event_ts primary_link_slugs_before_outage)"
+missing_slugs="$(require_all_short_links_direct "$WORKLOAD_HOST" "$dr_alb_dns" "$primary_slugs_before_outage")" || {
+  echo "ERROR: DR is missing links present on primary before the outage: $missing_slugs; traffic must not be switched." >&2
   exit 1
-fi
-record_event_at "dr_pre_outage_link_created_at" "$primary_link_created_at"
+}
+# Real DR-side observation, not a copy of primary's timestamp: replicated
+# rows keep the same created_at on both sides by definition, which cannot
+# measure elapsed data-loss time. This event's own timestamp (from
+# log_event) is what's real: the wall-clock moment DR was confirmed to
+# already hold every link that existed on primary before the outage.
+log_event "pre_outage_link_verified_in_dr"
 
 dr_link_slug="dr-drill-$(date -u +%Y%m%d%H%M%S)"
 dr_link="$(create_short_link_direct "$DR_REGION" "$WORKLOAD_HOST" "$dr_alb_dns" "$dr_link_slug" "https://${MONITOR_HOST}")"
