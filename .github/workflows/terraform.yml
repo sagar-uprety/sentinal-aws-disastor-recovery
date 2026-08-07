@@ -437,7 +437,7 @@ jobs:
           if [ -n "$PROVIDED_DIGEST" ]; then
             echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            docker build -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f app/Dockerfile .
+            docker build -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f app/Dockerfile app
             docker push "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}"
             digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -549,7 +549,7 @@ jobs:
           if [ -n "$PROVIDED_DIGEST" ]; then
             echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            docker build -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f workload/Dockerfile .
+            docker build -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f workload/Dockerfile workload
             docker push "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}"
             digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
