@@ -73,6 +73,12 @@ primary_link_created_at="$(jq -r '.created_at' <<<"$pre_outage_link")"
 record_event_at "pre_outage_link_slug" "$pre_outage_slug"
 record_event_at "primary_link_created_at" "$primary_link_created_at"
 
+# Full inventory while primary is still fully writable, not just the one link
+# just created. failover.sh verifies every one of these survived promotion,
+# not a sample of one.
+primary_slugs_before_outage="$(list_short_links_direct "$WORKLOAD_HOST" "$alb_dns" | jq -r '[.[].slug] | join(",")')"
+record_event_at "primary_link_slugs_before_outage" "$primary_slugs_before_outage"
+
 aws ecs update-service \
   --region "$PROD_REGION" \
   --cluster "$CLUSTER" \

@@ -2,38 +2,15 @@
 
 DRILL_LOG="${DRILL_LOG:-./drill-events.log}"
 LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/sentinel-aws-dr/prod/link-create-token}"
-MONITOR_EVENT_REGION="${MONITOR_EVENT_REGION:-eu-west-1}"
-MONITOR_EVENT_TABLE="${MONITOR_EVENT_TABLE:-sentinel-aws-dr-monitoring-checks}"
-
-publish_monitor_event() {
-  local event="$1" timestamp="$2" value="${3:-}" item suffix
-  suffix="$(printf '%05d' "$RANDOM")"
-  item="$(jq -cn \
-    --arg event "$event" \
-    --arg pk "EVENTS" \
-    --arg sk "EVENT#${timestamp}#${suffix}#${event}" \
-    --arg timestamp "$timestamp" \
-    --arg value "$value" \
-    '{pk:{S:$pk},sk:{S:$sk},event:{S:$event},timestamp:{S:$timestamp},value:{S:$value}}')"
-  aws dynamodb put-item \
-    --region "$MONITOR_EVENT_REGION" \
-    --table-name "$MONITOR_EVENT_TABLE" \
-    --item "$item" \
-    >/dev/null
-}
 
 log_event() {
   local timestamp
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '%s\t%s\n' "$1" "$timestamp" >>"$DRILL_LOG"
-  publish_monitor_event "$1" "$timestamp"
 }
 
 record_event_at() {
-  local timestamp
-  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '%s\t%s\n' "$1" "$2" >>"$DRILL_LOG"
-  publish_monitor_event "$1" "$timestamp" "$2"
 }
 
 current_event_ts() {
@@ -84,4 +61,25 @@ require_short_link_direct() {
   local host="$1" alb_dns="$2" slug="$3" links
   links="$(list_short_links_direct "$host" "$alb_dns")"
   jq -e --arg slug "$slug" 'any(.[]; .slug == $slug)' >/dev/null <<<"$links"
+}
+
+# Verifies every slug in a comma-separated list exists in host's current link
+# list, fetching /links once rather than once per slug. A single known-slug
+# check only proves one write survived; this proves every write present on
+# primary immediately before the outage survived, not just a sample of one.
+# On success, prints nothing and returns 0. On failure, prints the missing
+# slugs (comma-separated) to stdout and returns 1.
+require_all_short_links_direct() {
+  local host="$1" alb_dns="$2" slugs_csv="$3" links missing
+  links="$(list_short_links_direct "$host" "$alb_dns")"
+  missing="$(jq -r --arg slugs "$slugs_csv" '
+    ($slugs | split(",") | map(select(length > 0))) as $expected
+    | ([.[].slug]) as $present
+    | ($expected - $present) | join(",")
+  ' <<<"$links")"
+  if [ -n "$missing" ]; then
+    echo "$missing"
+    return 1
+  fi
+  return 0
 }

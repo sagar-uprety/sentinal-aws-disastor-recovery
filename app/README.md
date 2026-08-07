@@ -18,7 +18,6 @@ Open http://localhost:8080. Local mode monitors `http://localhost:8081/healthz` 
 | `GET /targets` | Configured target list containing exactly one URL |
 | `GET /status` | Latest result and rolling 24-hour uptime |
 | `GET /history?target={URL}&limit={1-500}` | Recent results for exact target URL |
-| `GET /events?limit={1-100}` | Recent drill lifecycle events |
 | `GET /topology` | Explicit production and DR ECS/RDS resource state |
 | `GET /` | Static status UI |
 
@@ -45,9 +44,6 @@ Table keys are strings named `pk` and `sk`.
 - `sk`: `CHECK#<UTC RFC3339Nano timestamp>`
 - `expires_at`: Unix epoch seconds, 30 days after check time; configure this as table TTL attribute
 
-Drill lifecycle events share the table and use:
+History and 24-hour uptime use DynamoDB `Query` against the target's partition and time-sortable keys. Sentinel never scans table.
 
-- `pk`: `EVENTS`
-- `sk`: `EVENT#<UTC RFC3339Nano timestamp>#<event-name>`
-
-History, 24-hour uptime, and drill events use DynamoDB `Query` against dedicated partitions and time-sortable keys. Sentinel never scans table.
+Drill lifecycle events are not stored here. `scripts/drill-lib.sh` writes timestamped events to a local plain-text `DRILL_LOG` file only, and `scripts/measure.sh` reads that file to compute RTO/RPO. There is no monitor-side event storage or timeline UI.
