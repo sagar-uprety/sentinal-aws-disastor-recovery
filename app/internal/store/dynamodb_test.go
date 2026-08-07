@@ -84,30 +84,3 @@ func TestDynamoDBLatestStatusQueriesTimeRange(t *testing.T) {
 		t.Fatalf("query input = %#v", client.queryInput)
 	}
 }
-
-func TestDynamoDBListEventsUsesEventPartition(t *testing.T) {
-	timestamp := time.Date(2026, 7, 26, 12, 0, 0, 123000000, time.UTC)
-	item, err := attributevalue.MarshalMap(eventItem{
-		PK: "EVENTS", SK: "EVENT#2026-07-26T12:00:00.123Z#01234#failover-started",
-		DrillEvent: DrillEvent{Name: "failover-started", Timestamp: timestamp, Value: "drill-value"},
-	})
-	if err != nil {
-		t.Fatalf("marshal event: %v", err)
-	}
-	client := &fakeDynamoDB{items: []map[string]types.AttributeValue{item}}
-	dataStore := NewDynamoDB(client, "checks", "https://example.com/healthz")
-	events, err := dataStore.ListEvents(context.Background(), 10)
-	if err != nil {
-		t.Fatalf("list events: %v", err)
-	}
-	partition, ok := client.queryInput.ExpressionAttributeValues[":pk"].(*types.AttributeValueMemberS)
-	if !ok || partition.Value != "EVENTS" {
-		t.Fatalf("event partition = %#v", client.queryInput.ExpressionAttributeValues[":pk"])
-	}
-	if aws.ToString(client.queryInput.KeyConditionExpression) != "pk = :pk AND begins_with(sk, :prefix)" || aws.ToBool(client.queryInput.ScanIndexForward) || aws.ToInt32(client.queryInput.Limit) != 10 {
-		t.Fatalf("query input = %#v", client.queryInput)
-	}
-	if len(events) != 1 || events[0].Name != "failover-started" || events[0].Timestamp.Format(time.RFC3339Nano) != "2026-07-26T12:00:00.123Z" || events[0].Value != "drill-value" {
-		t.Fatalf("events = %#v", events)
-	}
-}

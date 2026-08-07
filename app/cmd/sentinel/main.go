@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,13 +22,14 @@ import (
 )
 
 type config struct {
-	monitoredURL  string
-	dynamoTable   string
-	awsRegion     string
-	regions       []topology.RegionConfig
-	port          int
-	checkInterval time.Duration
-	httpTimeout   time.Duration
+	monitoredURL     string
+	dynamoTable      string
+	awsRegion        string
+	topologyMockFile string
+	regions          []topology.RegionConfig
+	port             int
+	checkInterval    time.Duration
+	httpTimeout      time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -54,7 +56,7 @@ func loadConfig() (config, error) {
 	return config{
 		monitoredURL: target, dynamoTable: table, awsRegion: awsRegion, port: port,
 		checkInterval: time.Duration(interval) * time.Second, httpTimeout: 5 * time.Second,
-		regions: regions,
+		regions: regions, topologyMockFile: os.Getenv("TOPOLOGY_MOCK_FILE"),
 	}, nil
 }
 
@@ -104,6 +106,23 @@ func validateTarget(raw string) error {
 	return nil
 }
 
+// loadTopologyService replays TOPOLOGY_MOCK_FILE when set, since real AWS
+// ECS/RDS topology cannot exist in local development. Never set outside docker-compose.
+func loadTopologyService(ctx context.Context, cfg *config) (*topology.Service, error) {
+	if cfg.topologyMockFile == "" {
+		return topology.New(ctx, cfg.regions), nil
+	}
+	data, err := os.ReadFile(cfg.topologyMockFile)
+	if err != nil {
+		return nil, fmt.Errorf("read TOPOLOGY_MOCK_FILE: %w", err)
+	}
+	var snapshot topology.Snapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("parse TOPOLOGY_MOCK_FILE: %w", err)
+	}
+	return topology.NewMock(snapshot), nil
+}
+
 func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -141,13 +160,15 @@ func run() error {
 
 	checker := monitor.NewChecker(dataStore, cfg.monitoredURL, cfg.checkInterval, cfg.httpTimeout)
 	go checker.Run(ctx)
-	topologyService := topology.New(ctx, cfg.regions)
+	topologyService, err := loadTopologyService(ctx, &cfg)
+	if err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", monitor.HandleHealthz(dataStore))
 	mux.HandleFunc("GET /targets", monitor.HandleTargets(dataStore))
 	mux.HandleFunc("GET /status", monitor.HandleStatus(dataStore))
 	mux.HandleFunc("GET /history", monitor.HandleHistory(dataStore))
-	mux.HandleFunc("GET /events", monitor.HandleEvents(dataStore))
 	mux.HandleFunc("GET /topology", monitor.HandleTopology(topologyService))
 	mux.Handle("GET /", http.FileServer(http.Dir("static")))
 	server := &http.Server{

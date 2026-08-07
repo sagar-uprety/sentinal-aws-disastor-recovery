@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -30,12 +29,6 @@ type checkItem struct {
 	SK string `dynamodbav:"sk"`
 	Check
 	ExpiresAt int64 `dynamodbav:"expires_at"`
-}
-
-type eventItem struct {
-	PK string `dynamodbav:"pk"`
-	SK string `dynamodbav:"sk"`
-	DrillEvent
 }
 
 func NewDynamoDB(client dynamodbAPI, table, targetURL string) *DynamoDB {
@@ -86,40 +79,6 @@ func (d *DynamoDB) LatestStatuses(ctx context.Context, since time.Time) ([]Targe
 
 func (d *DynamoDB) History(ctx context.Context, target string, limit int) ([]Check, error) {
 	return d.query(ctx, target, time.Time{}, time.Time{}, int32(limit))
-}
-
-func (d *DynamoDB) ListEvents(ctx context.Context, limit int) ([]DrillEvent, error) {
-	input := &dynamodb.QueryInput{
-		TableName:              aws.String(d.table),
-		KeyConditionExpression: aws.String("pk = :pk AND begins_with(sk, :prefix)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":pk":     &types.AttributeValueMemberS{Value: "EVENTS"},
-			":prefix": &types.AttributeValueMemberS{Value: "EVENT#"},
-		},
-		ScanIndexForward: aws.Bool(false),
-		Limit:            aws.Int32(int32(limit)),
-	}
-	output, err := d.client.Query(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("query events: %w", err)
-	}
-	var items []eventItem
-	if err := attributevalue.UnmarshalListOfMaps(output.Items, &items); err != nil {
-		return nil, fmt.Errorf("unmarshal events: %w", err)
-	}
-	events := make([]DrillEvent, 0, len(items))
-	for _, item := range items {
-		event := item.DrillEvent
-		if event.Name == "" || event.Timestamp.IsZero() {
-			var parseErr error
-			event, parseErr = drillEventFromSK(item.SK)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-		}
-		events = append(events, event)
-	}
-	return events, nil
 }
 
 func (d *DynamoDB) Health(ctx context.Context) error {
@@ -183,19 +142,3 @@ func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time,
 func targetPK(target string) string { return "TARGET#" + target }
 
 func checkSK(checkedAt time.Time) string { return "CHECK#" + checkedAt.UTC().Format(time.RFC3339Nano) }
-
-func drillEventFromSK(sk string) (DrillEvent, error) {
-	value, ok := strings.CutPrefix(sk, "EVENT#")
-	if !ok {
-		return DrillEvent{}, fmt.Errorf("invalid event sort key %q", sk)
-	}
-	timestamp, name, ok := strings.Cut(value, "#")
-	if !ok || name == "" {
-		return DrillEvent{}, fmt.Errorf("invalid event sort key %q", sk)
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, timestamp)
-	if err != nil {
-		return DrillEvent{}, fmt.Errorf("invalid event sort key %q: %w", sk, err)
-	}
-	return DrillEvent{Name: name, Timestamp: parsed}, nil
-}

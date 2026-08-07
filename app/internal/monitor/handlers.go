@@ -76,25 +76,6 @@ func HandleHistory(dataStore store.Store) http.HandlerFunc {
 	}
 }
 
-func HandleEvents(dataStore store.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		limit := 20
-		if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 100 {
-			limit = value
-		}
-		events, err := dataStore.ListEvents(r.Context(), limit)
-		if err != nil {
-			slog.Error("events: query failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-			return
-		}
-		if events == nil {
-			events = []store.DrillEvent{}
-		}
-		writeJSON(w, http.StatusOK, events)
-	}
-}
-
 func HandleTopology(service *topology.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, service.Snapshot(r.Context()))

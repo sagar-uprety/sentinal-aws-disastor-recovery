@@ -11,7 +11,6 @@ import (
 type Memory struct {
 	target Target
 	checks []Check
-	events []DrillEvent
 	mu     sync.RWMutex
 }
 
@@ -64,23 +63,6 @@ func (m *Memory) History(_ context.Context, target string, limit int) ([]Check, 
 	return result, nil
 }
 
-func (m *Memory) AddEvent(event DrillEvent) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.events = append(m.events, event)
-}
-
-func (m *Memory) ListEvents(_ context.Context, limit int) ([]DrillEvent, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	events := append([]DrillEvent(nil), m.events...)
-	sort.SliceStable(events, func(i, j int) bool { return events[i].Timestamp.After(events[j].Timestamp) })
-	if len(events) > limit {
-		events = events[:limit]
-	}
-	return events, nil
-}
-
 func (m *Memory) Health(context.Context) error { return nil }
 
 func statusFromChecks(latest Check, up, total int) TargetStatus {
@@ -89,11 +71,12 @@ func statusFromChecks(latest Check, up, total int) TargetStatus {
 		uptime = math.Round((1000*float64(up))/float64(total)) / 10
 	}
 	return TargetStatus{
-		LastChecked: latest.CheckedAt,
-		StatusCode:  latest.StatusCode,
-		URL:         latest.TargetURL,
-		ResponseMs:  latest.ResponseMs,
-		UptimePct:   uptime,
-		IsUp:        latest.IsUp,
+		LastChecked:    latest.CheckedAt,
+		StatusCode:     latest.StatusCode,
+		URL:            latest.TargetURL,
+		ResponseMs:     latest.ResponseMs,
+		UptimePct:      uptime,
+		SampleCount24h: total,
+		IsUp:           latest.IsUp,
 	}
 }

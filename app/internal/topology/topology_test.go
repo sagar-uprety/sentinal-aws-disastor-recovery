@@ -64,6 +64,15 @@ func TestSnapshotWithoutConfiguredAWS(t *testing.T) {
 	}
 }
 
+func TestNewMockReplaysSnapshotWithoutCallingAWS(t *testing.T) {
+	want := Snapshot{Regions: []Region{{Region: "eu-central-1", Database: Database{Role: "writer"}}}}
+	service := NewMock(want)
+	got := service.Snapshot(context.Background())
+	if len(got.Regions) != 1 || got.Regions[0].Region != "eu-central-1" || got.Regions[0].Database.Role != "writer" {
+		t.Fatalf("Snapshot() = %#v, want %#v", got, want)
+	}
+}
+
 func TestShortID(t *testing.T) {
 	if got := shortID("arn:aws:ecs:eu-west-1:123:task/cluster/task-id"); got != "task-id" {
 		t.Fatalf("shortID = %q", got)

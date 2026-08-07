@@ -68,6 +68,7 @@ type regionReader struct {
 }
 
 type Service struct {
+	mock    *Snapshot
 	regions []regionReader
 }
 
@@ -86,7 +87,16 @@ func New(ctx context.Context, configs []RegionConfig) *Service {
 	return service
 }
 
+// NewMock returns a Service that always replays snapshot instead of calling AWS.
+// Local development only: wired up by TOPOLOGY_MOCK_FILE, never set in any deployed environment.
+func NewMock(snapshot Snapshot) *Service {
+	return &Service{mock: &snapshot}
+}
+
 func (s *Service) Snapshot(ctx context.Context) Snapshot {
+	if s.mock != nil {
+		return *s.mock
+	}
 	result := Snapshot{Regions: make([]Region, len(s.regions))}
 	var wait sync.WaitGroup
 	for i := range s.regions {
