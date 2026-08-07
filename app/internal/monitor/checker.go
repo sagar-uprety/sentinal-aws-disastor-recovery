@@ -23,6 +23,14 @@ func NewChecker(dataStore store.Store, target string, interval, timeout time.Dur
 		client: &http.Client{
 			Timeout:       timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			// The target's DNS answer changes on regional failover (that's the
+			// whole point of this checker). A pooled keep-alive connection
+			// never re-resolves DNS as long as it keeps getting reused, and at
+			// a 30s check interval it never sits idle long enough to expire
+			// from Go's default 90s pool -- so the checker would keep talking
+			// to the pre-failover region indefinitely. Force a fresh
+			// connection (and thus fresh DNS lookup) on every check instead.
+			Transport: &http.Transport{DisableKeepAlives: true},
 		},
 	}
 }
