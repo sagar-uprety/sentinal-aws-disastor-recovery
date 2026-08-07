@@ -380,6 +380,11 @@ jobs:
           terraform_version: 1.15.5
           terraform_wrapper: false
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -437,7 +442,7 @@ jobs:
           if [ -n "$PROVIDED_DIGEST" ]; then
             echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            docker build -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f app/Dockerfile .
+            docker build --platform linux/arm64 -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f app/Dockerfile app
             docker push "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}"
             digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -549,7 +554,7 @@ jobs:
           if [ -n "$PROVIDED_DIGEST" ]; then
             echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            docker build -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f workload/Dockerfile .
+            docker build --platform linux/arm64 -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f workload/Dockerfile workload
             docker push "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}"
             digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"

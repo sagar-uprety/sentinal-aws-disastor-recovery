@@ -13,12 +13,10 @@ import (
 )
 
 type fakeStore struct {
-	health     error
-	targets    []store.Target
-	checks     []store.Check
-	statuses   []store.TargetStatus
-	events     []store.DrillEvent
-	eventLimit int
+	health   error
+	targets  []store.Target
+	checks   []store.Check
+	statuses []store.TargetStatus
 }
 
 func (f *fakeStore) ListTargets(context.Context) ([]store.Target, error) { return f.targets, nil }
@@ -37,10 +35,6 @@ func (f *fakeStore) History(_ context.Context, target string, limit int) ([]stor
 		}
 	}
 	return result, nil
-}
-func (f *fakeStore) ListEvents(_ context.Context, limit int) ([]store.DrillEvent, error) {
-	f.eventLimit = limit
-	return f.events, nil
 }
 func (f *fakeStore) Health(context.Context) error { return f.health }
 
@@ -93,7 +87,6 @@ func TestHandlers(t *testing.T) {
 		targets:  []store.Target{{URL: "https://example.com/healthz"}},
 		statuses: []store.TargetStatus{{URL: "https://example.com/healthz", IsUp: true, LastChecked: now, UptimePct: 100}},
 		checks:   []store.Check{{TargetURL: "https://example.com/healthz", IsUp: true, CheckedAt: now}},
-		events:   []store.DrillEvent{{Name: "failover-started", Timestamp: now}},
 	}
 	for _, test := range []struct {
 		handler http.HandlerFunc
@@ -103,16 +96,12 @@ func TestHandlers(t *testing.T) {
 		{HandleTargets(dataStore), "/targets"},
 		{HandleStatus(dataStore), "/status"},
 		{HandleHistory(dataStore), "/history?target=https://example.com/healthz&limit=1"},
-		{HandleEvents(dataStore), "/events?limit=5"},
 	} {
 		recorder := httptest.NewRecorder()
 		test.handler(recorder, httptest.NewRequestWithContext(context.Background(), http.MethodGet, test.path, nil))
 		if recorder.Code != http.StatusOK || !json.Valid(recorder.Body.Bytes()) {
 			t.Errorf("%s returned %d: %s", test.path, recorder.Code, recorder.Body.String())
 		}
-	}
-	if dataStore.eventLimit != 5 {
-		t.Fatalf("event limit = %d, want 5", dataStore.eventLimit)
 	}
 }
 

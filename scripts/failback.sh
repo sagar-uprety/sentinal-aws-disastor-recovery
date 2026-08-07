@@ -204,6 +204,7 @@ promote-primary)
     --db-instance-identifier "$PROD_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
   resume_promoted=false
+  promotion_in_progress=false
   if [ -z "$source" ] || [ "$source" = "None" ]; then
     require_current_event "primary_promoted"
     require_current_event "failback_cutover_lag_seconds"
@@ -212,6 +213,13 @@ promote-primary)
       exit 1
     fi
     resume_promoted=true
+  elif [ -n "$(current_event_ts failback_cutover_lag_seconds)" ]; then
+    # promote-read-replica was already called earlier in this failback; the
+    # instance just has not finished settling (AWS keeps the source ARN set
+    # while status is "modifying" mid-promotion). Resume by polling instead
+    # of erroring out or calling promote-read-replica a second time.
+    echo "Promotion already invoked earlier in this failback (status=$status); resuming poll..."
+    promotion_in_progress=true
   elif [ "$status" != "available" ] || [[ "$source" != *"$DR_DB_ID"* ]]; then
     echo "ERROR: prod is not an available replica of $DR_DB_ID." >&2
     exit 1
@@ -219,7 +227,7 @@ promote-primary)
 
   require_dr_writes_frozen
 
-  if [ "$resume_promoted" = false ]; then
+  if [ "$resume_promoted" = false ] && [ "$promotion_in_progress" = false ]; then
     if ! lag_evidence="$(wait_for_replica_lag "$PROD_REGION" "$PROD_DB_ID")"; then
       echo "ERROR: no fresh acceptable prod replica lag evidence after DR writes were frozen." >&2
       exit 1
@@ -232,7 +240,7 @@ promote-primary)
     aws rds promote-read-replica \
       --region "$PROD_REGION" \
       --db-instance-identifier "$PROD_DB_ID" >/dev/null
-  else
+  elif [ "$resume_promoted" = true ]; then
     echo "Resuming current failback after verified prod promotion..."
   fi
 

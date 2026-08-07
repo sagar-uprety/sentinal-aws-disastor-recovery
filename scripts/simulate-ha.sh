@@ -172,6 +172,15 @@ az)
   ;;
 
 db)
+  # Forces a real Multi-AZ failover on the production database -- materially
+  # higher blast radius (a brief write-path interruption on prod) than
+  # stopping one ECS task or one AZ's worth of tasks, so it gets its own
+  # confirmation on top of CONFIRM_HA, matching the per-action gating used
+  # in failback.sh and switch-traffic.sh.
+  if [ "${CONFIRM_HA_DB_FAILOVER:-}" != "YES" ]; then
+    echo "Set CONFIRM_HA_DB_FAILOVER=YES to force a real Multi-AZ RDS failover on production." >&2
+    exit 1
+  fi
   known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
   create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${MONITOR_HOST}" >/dev/null
   record_event_at "ha_db_known_link_before" "$known_slug"
@@ -228,6 +237,7 @@ db)
 
 *)
   echo "Usage: CONFIRM_HA=YES $0 {task|az <availability-zone>|db}" >&2
+  echo "       db additionally requires CONFIRM_HA_DB_FAILOVER=YES (forces a real Multi-AZ RDS failover)." >&2
   exit 1
   ;;
 esac

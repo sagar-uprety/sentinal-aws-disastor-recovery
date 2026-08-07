@@ -4,8 +4,6 @@ An AWS resilience project evolving toward an isolated monitoring plane that obse
 
 The dashboard is served at `https://sentinel.sagaruprety.com.np`; its machine-readable health endpoint is `/healthz`.
 
-Portfolio project by Sagar Koirala. Target: Senior DevOps Engineer / Platform Engineer (Germany).
-
 ## Status
 
 Milestones 0 through 6 are complete for the historical self-monitoring architecture. Milestone 7 repository implementation is in progress and has not been deployed or verified live. Current code defines an isolated monitor at `sentinel.sagaruprety.com.np` in eu-west-1 and a URL shortener at `app.sentinel.sagaruprety.com.np` across the existing prod and DR environments. Key measured historical results from the live drill on 2026-07-22:

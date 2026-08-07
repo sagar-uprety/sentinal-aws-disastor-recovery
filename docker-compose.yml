@@ -9,6 +9,11 @@ services:
       CHECK_INTERVAL_SECONDS: "30"
       MONITORED_URL: http://workload:8080/healthz
       PORT: "8080"
+      # Real ECS/RDS topology can't exist locally; replay a fixture instead.
+      # Never set outside this file, so deployed environments always use live AWS data.
+      TOPOLOGY_MOCK_FILE: /testdata/topology.local.json
+    volumes:
+      - ./app/testdata:/testdata:ro
     depends_on:
       workload:
         condition: service_started
