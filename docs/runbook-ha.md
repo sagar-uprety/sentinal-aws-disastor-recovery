@@ -4,8 +4,8 @@ This runbook tests primary-region high availability. It is separate from pilot-l
 
 ## Preconditions
 
-- Isolated monitor is healthy at `https://sentinel.sagaruprety.com.np` and deployed from separate monitoring state.
-- Workload is healthy at `https://app.sentinel.sagaruprety.com.np`, with prod `multi_az=true` and two healthy ECS tasks.
+- Isolated monitor is healthy at `https://monitor.pilotlight.sagaruprety.com.np` and deployed from separate monitoring state.
+- Workload is healthy at `https://shortener.pilotlight.sagaruprety.com.np`, with prod `multi_az=true` and two healthy ECS tasks.
 - Open monitor and record workload topology before each drill. ECS card must show `2 / 2 running`, two Availability Zones, and `HA ready`.
 - Use `CONFIRM_HA=YES` only during an approved drill.
 

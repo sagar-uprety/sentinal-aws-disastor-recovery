@@ -1,12 +1,12 @@
-# Sentinel - Resilient Status Page on AWS
+# Pilotlight - AWS Multi-Region Disaster Recovery
 
-An AWS resilience project evolving toward an isolated monitoring plane that observes a separate database-backed URL shortener through multi-AZ and pilot-light recovery drills.
+An AWS resilience project with an isolated monitoring plane that observes a separate database-backed URL shortener through multi-AZ and pilot-light recovery drills.
 
-The dashboard is served at `https://sentinel.sagaruprety.com.np`; its machine-readable health endpoint is `/healthz`.
+The monitor dashboard is served at `https://monitor.pilotlight.sagaruprety.com.np`; its machine-readable health endpoint is `/healthz`.
 
 ## Status
 
-Milestones 0 through 6 are complete for the historical self-monitoring architecture. Milestone 7 repository implementation is in progress and has not been deployed or verified live. Current code defines an isolated monitor at `sentinel.sagaruprety.com.np` in eu-west-1 and a URL shortener at `app.sentinel.sagaruprety.com.np` across the existing prod and DR environments. Key measured historical results from the live drill on 2026-07-22:
+Milestones 0 through 6 are complete for the historical self-monitoring architecture. Milestone 7 repository implementation is in progress and has not been deployed or verified live. Current code defines an isolated monitor at `monitor.pilotlight.sagaruprety.com.np` in eu-west-1 and a URL shortener at `shortener.pilotlight.sagaruprety.com.np` across the existing prod and DR environments. Key measured historical results from the live drill on 2026-07-22:
 
 - **RTO:** 538s (8m58s) against a 30-minute target
 - **RPO:** 0s row-based observation with 12s pre-promotion `ReplicaLag`
@@ -23,7 +23,7 @@ All historical evidence is retained in drill evidence, `docs/postmortem.md`, and
 Repository code currently defines, but has not deployed:
 
 - An isolated monitor in eu-west-1 with separate Terraform state, VPC, ECS service, ALB, ECR repository, and on-demand DynamoDB table.
-- A monitor task that checks `https://app.sentinel.sagaruprety.com.np/healthz` and reads explicit prod and DR ECS and RDS state through read-only AWS APIs.
+- A monitor task that checks `https://shortener.pilotlight.sagaruprety.com.np/healthz` and reads explicit prod and DR ECS and RDS state through read-only AWS APIs.
 - A live drill timeline fed by the same guarded scripts that retain the local evidence log, with events stored in monitor-owned DynamoDB.
 - A PostgreSQL-backed URL shortener on the existing eu-central-1 prod and eu-west-1 pilot-light DR environments.
 - A Terraform-generated URL creation token passed only through write-only arguments and stored in regional SSM SecureString parameters.
@@ -36,9 +36,9 @@ Run these without deploying infrastructure:
 ```bash
 terraform fmt -check -recursive terraform
 tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=terraform
-cd app && go test ./...
-cd ../workload && go test ./...
-bash -n ../scripts/*.sh
+cd apps/monitor && go test ./...
+cd ../url-shortener && go test ./...
+bash -n ../../scripts/*.sh
 pre-commit run --all-files
 ```
 

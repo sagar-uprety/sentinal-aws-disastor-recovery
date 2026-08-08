@@ -3,7 +3,7 @@
     {
       "region": "eu-central-1",
       "compute": {
-        "name": "sentinel-aws-dr-prod",
+        "name": "pilotlight-prod",
         "region": "eu-central-1",
         "availability_zones": ["eu-central-1a", "eu-central-1b"],
         "tasks": [
@@ -16,7 +16,7 @@
       },
       "database": {
         "availability_zone": "eu-central-1a",
-        "identifier": "sentinel-aws-dr-prod",
+        "identifier": "pilotlight-prod",
         "read_replica_source": "",
         "region": "eu-central-1",
         "role": "writer",
@@ -29,7 +29,7 @@
     {
       "region": "eu-west-1",
       "compute": {
-        "name": "sentinel-aws-dr-dr",
+        "name": "pilotlight-dr",
         "region": "eu-west-1",
         "availability_zones": [],
         "tasks": [],
@@ -39,8 +39,8 @@
       },
       "database": {
         "availability_zone": "eu-west-1b",
-        "identifier": "sentinel-aws-dr-dr",
-        "read_replica_source": "arn:aws:rds:eu-central-1:926883320788:db:sentinel-aws-dr-prod",
+        "identifier": "pilotlight-dr",
+        "read_replica_source": "arn:aws:rds:eu-central-1:926883320788:db:pilotlight-prod",
         "region": "eu-west-1",
         "role": "read replica",
         "secondary_availability_zone": "",

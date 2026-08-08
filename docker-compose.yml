@@ -1,24 +1,24 @@
 services:
-  app:
+  monitor:
     build:
-      context: ./app
+      context: ./apps/monitor
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
       CHECK_INTERVAL_SECONDS: "30"
-      MONITORED_URL: http://workload:8080/healthz
+      MONITORED_URL: http://shortener:8080/healthz
       PORT: "8080"
       # Real ECS/RDS topology can't exist locally; replay a fixture instead.
       # Never set outside this file, so deployed environments always use live AWS data.
       TOPOLOGY_MOCK_FILE: /testdata/topology.local.json
     volumes:
-      - ./app/testdata:/testdata:ro
+      - ./apps/monitor/testdata:/testdata:ro
     depends_on:
-      workload:
+      shortener:
         condition: service_started
 
-  workload-db:
+  shortener-db:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: shortener
@@ -32,16 +32,16 @@ services:
       timeout: 2s
       retries: 10
 
-  workload:
+  shortener:
     build:
-      context: ./workload
+      context: ./apps/url-shortener
       dockerfile: Dockerfile
     ports:
       - "8081:8080"
     environment:
-      DATABASE_URL: postgres://shortener:${WORKLOAD_POSTGRES_PASSWORD:-shortener-local}@workload-db:5432/shortener?sslmode=disable
+      DATABASE_URL: postgres://shortener:${WORKLOAD_POSTGRES_PASSWORD:-shortener-local}@shortener-db:5432/shortener?sslmode=disable
       LINK_CREATE_TOKEN: ${LINK_CREATE_TOKEN:-local-operator-token}
       PORT: "8080"
     depends_on:
-      workload-db:
+      shortener-db:
         condition: service_healthy

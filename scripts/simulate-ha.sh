@@ -7,12 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/drill-lib.sh"
 
 REGION="eu-central-1"
-CLUSTER="sentinel-aws-dr-prod"
-SERVICE="sentinel-aws-dr-prod"
-DATABASE="sentinel-aws-dr-prod"
-TARGET_GROUP="sentinel-aws-dr-prod-tg"
-WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
-MONITOR_HOST="sentinel.sagaruprety.com.np"
+CLUSTER="pilotlight-prod"
+SERVICE="pilotlight-prod"
+DATABASE="pilotlight-prod"
+TARGET_GROUP="pilotlight-prod-tg"
+WORKLOAD_HOST="shortener.pilotlight.sagaruprety.com.np"
+MONITOR_HOST="monitor.pilotlight.sagaruprety.com.np"
 
 if [ "${CONFIRM_HA:-}" != "YES" ]; then
   echo "Set CONFIRM_HA=YES to run a controlled HA drill." >&2
@@ -25,7 +25,7 @@ target_group_arn="$(aws elbv2 describe-target-groups \
   --query 'TargetGroups[0].TargetGroupArn' --output text)"
 alb_dns="$(aws elbv2 describe-load-balancers \
   --region "$REGION" \
-  --names "sentinel-aws-dr-prod-alb" \
+  --names "pilotlight-prod-alb" \
   --query 'LoadBalancers[0].DNSName' --output text)"
 
 task_arns() {
@@ -74,7 +74,7 @@ require_healthy_baseline() {
   az_count="$(task_az_count "${tasks[@]}")"
   status="$(public_health_status)"
   topology="$(curl -fsS "https://${MONITOR_HOST}/topology" || true)"
-  if [ "$desired" != "2" ] || [ "$running" != "2" ] || [ "${#tasks[@]}" -ne 2 ] || [ "$healthy" != "2" ] || [ "$az_count" != "2" ] || [ "$status" != "200" ] || ! jq -e 'any(.regions[]; .region == "eu-central-1" and .database.identifier == "sentinel-aws-dr-prod" and .database.available == true)' >/dev/null <<<"$topology"; then
+  if [ "$desired" != "2" ] || [ "$running" != "2" ] || [ "${#tasks[@]}" -ne 2 ] || [ "$healthy" != "2" ] || [ "$az_count" != "2" ] || [ "$status" != "200" ] || ! jq -e 'any(.regions[]; .region == "eu-central-1" and .database.identifier == "pilotlight-prod" and .database.available == true)' >/dev/null <<<"$topology"; then
     echo "ERROR: HA baseline requires ECS 2/2, two task AZs, two healthy targets, and public HTTP 200." >&2
     echo "Observed desired=$desired running=$running tasks=${#tasks[@]} azs=$az_count healthy=$healthy http=$status." >&2
     exit 1
@@ -124,7 +124,7 @@ case "${1:-}" in
 task)
   read -r task _ <<<"$(task_arns)"
   if [ -z "$task" ]; then
-    echo "No running Sentinel task found." >&2
+    echo "No running workload task found." >&2
     exit 1
   fi
   record_event_at "ha_task_stopped" "$task"

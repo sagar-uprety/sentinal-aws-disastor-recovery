@@ -1,6 +1,6 @@
-# Sentinel Monitor
+# Pilotlight Monitor
 
-Repository implementation for isolated HTTP uptime monitor and status page; not yet deployed for M7. Sentinel checks one canonical workload health URL, stores deployed history in DynamoDB, and exposes workload topology across production and disaster-recovery regions.
+Repository implementation for isolated HTTP uptime monitor and status page; not yet deployed for M7. The monitor checks one canonical workload health URL, stores deployed history in DynamoDB, and exposes workload topology across production and disaster-recovery regions.
 
 ## Local start
 
@@ -44,6 +44,6 @@ Table keys are strings named `pk` and `sk`.
 - `sk`: `CHECK#<UTC RFC3339Nano timestamp>`
 - `expires_at`: Unix epoch seconds, 30 days after check time; configure this as table TTL attribute
 
-History and 24-hour uptime use DynamoDB `Query` against the target's partition and time-sortable keys. Sentinel never scans table.
+History and 24-hour uptime use DynamoDB `Query` against the target's partition and time-sortable keys. The monitor never scans table.
 
 Drill lifecycle events are not stored here. `scripts/drill-lib.sh` writes timestamped events to a local plain-text `DRILL_LOG` file only, and `scripts/measure.sh` reads that file to compute RTO/RPO. There is no monitor-side event storage or timeline UI.

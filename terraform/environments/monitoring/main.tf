@@ -4,8 +4,8 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
 
-data "aws_route53_zone" "sentinel" {
-  name         = "sentinel.sagaruprety.com.np."
+data "aws_route53_zone" "pilotlight" {
+  name         = "pilotlight.sagaruprety.com.np."
   private_zone = false
 }
 
@@ -48,7 +48,7 @@ resource "aws_route53_record" "certificate_validation" {
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.sentinel.zone_id
+  zone_id         = data.aws_route53_zone.pilotlight.zone_id
 }
 
 resource "aws_acm_certificate_validation" "main" {
@@ -112,7 +112,7 @@ module "service" {
 
   dynamodb_table_arn  = aws_dynamodb_table.checks.arn
   dynamodb_table_name = aws_dynamodb_table.checks.name
-  monitored_url       = "https://app.${local.app_hostname}/healthz"
+  monitored_url       = "https://${local.workload_hostname}/healthz"
 
   prod_region              = "eu-central-1"
   prod_ecs_cluster         = "${local.project_name}-prod"
@@ -129,7 +129,7 @@ resource "aws_route53_record" "monitor" {
   count = var.deploy_service ? 1 : 0
 
   allow_overwrite = true
-  zone_id         = data.aws_route53_zone.sentinel.zone_id
+  zone_id         = data.aws_route53_zone.pilotlight.zone_id
   name            = local.app_hostname
   type            = "A"
 

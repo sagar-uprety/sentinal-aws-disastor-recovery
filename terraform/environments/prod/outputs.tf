@@ -1,5 +1,5 @@
 output "alb_dns_name" {
-  description = "Public ALB DNS name for the Sentinel status page."
+  description = "Public ALB DNS name for the URL-shortener workload."
   value       = module.alb.alb_dns_name
 }
 
@@ -9,7 +9,7 @@ output "alb_zone_id" {
 }
 
 output "ecr_repository_url" {
-  description = "ECR repository URL for the Sentinel image."
+  description = "ECR repository URL for the URL-shortener image."
   value       = module.ecr.repository_url
 }
 
@@ -24,11 +24,11 @@ output "sns_topic_arn" {
 }
 
 output "route53_zone_id" {
-  description = "Hosted zone ID for sentinel.sagaruprety.com.np."
-  value       = data.aws_route53_zone.sentinel.zone_id
+  description = "Hosted zone ID for pilotlight.sagaruprety.com.np."
+  value       = data.aws_route53_zone.pilotlight.zone_id
 }
 
 output "route53_zone_name_servers" {
   description = "NS records delegated from the Cloudflare-managed parent zone."
-  value       = data.aws_route53_zone.sentinel.name_servers
+  value       = data.aws_route53_zone.pilotlight.name_servers
 }

@@ -228,7 +228,7 @@ jobs:
     timeout-minutes: 150
     environment:
       name: terraform-production
-      url: https://sentinel.sagaruprety.com.np
+      url: https://monitor.pilotlight.sagaruprety.com.np
     permissions:
       contents: read
       id-token: write
@@ -255,9 +255,9 @@ jobs:
 
       - name: Verify public Route 53 delegation
         run: |
-          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name sentinel.sagaruprety.com.np. --query "HostedZones[?Name=='sentinel.sagaruprety.com.np.'].Id | [0]" --output text)"
+          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name pilotlight.sagaruprety.com.np. --query "HostedZones[?Name=='pilotlight.sagaruprety.com.np.'].Id | [0]" --output text)"
           for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text); do
-            if ! dig +short NS sentinel.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
+            if ! dig +short NS pilotlight.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
               echo "Missing public delegation to $nameserver. Apply bootstrap and update Cloudflare before deployment." >&2
               exit 1
             fi
@@ -267,11 +267,11 @@ jobs:
         run: |
           prod_source="$(aws rds describe-db-instances \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
           dr_source="$(aws rds describe-db-instances \
             --region eu-west-1 \
-            --db-instance-identifier sentinel-aws-dr-dr \
+            --db-instance-identifier pilotlight-dr \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
           if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
             echo "Database topology is in failback. Use recovery.yml instead of deploy." >&2
@@ -286,8 +286,8 @@ jobs:
           plan_args=("-var=multi_az=true")
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "foundation" ]; then
             service_arn="$(aws ecs describe-services \
-              --cluster sentinel-aws-dr-prod \
-              --services sentinel-aws-dr-prod \
+              --cluster pilotlight-prod \
+              --services pilotlight-prod \
               --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
             if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
               echo "Foundation mode is only valid before the prod ECS service exists." >&2
@@ -298,22 +298,22 @@ jobs:
             plan_args+=("-var=deploy_service=true")
             if [ -z "$IMAGE_DIGEST" ]; then
               service_arn="$(aws ecs describe-services \
-                --cluster sentinel-aws-dr-prod \
-                --services sentinel-aws-dr-prod \
+                --cluster pilotlight-prod \
+                --services pilotlight-prod \
                 --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
               if [ -z "$service_arn" ] || [ "$service_arn" = "None" ]; then
                 echo "A fresh service deployment requires image_digest from workload.yml publish-only mode." >&2
                 exit 1
               fi
               task_definition="$(aws ecs describe-services \
-                --cluster sentinel-aws-dr-prod \
-                --services sentinel-aws-dr-prod \
+                --cluster pilotlight-prod \
+                --services pilotlight-prod \
                 --query 'services[0].taskDefinition' --output text)"
               # JMESPath backticks are literals, not shell substitutions.
               # shellcheck disable=SC2016
               image="$(aws ecs describe-task-definition \
                 --task-definition "$task_definition" \
-                --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+                --query 'taskDefinition.containerDefinitions[?name==`shortener`].image | [0]' --output text)"
               IMAGE_DIGEST="${image##*@}"
             fi
             if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -355,8 +355,8 @@ jobs:
       - name: Verify DR pilot-light state
         if: inputs.operation == 'deploy'
         run: |
-          desired="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
-          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          desired="$(aws ecs describe-services --region eu-west-1 --cluster pilotlight-dr --services pilotlight-dr --query 'services[0].desiredCount' --output text)"
+          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier pilotlight-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           test "$desired" = "0"
           test -n "$source" && test "$source" != "None"
 
@@ -371,7 +371,7 @@ jobs:
     timeout-minutes: 180
     environment:
       name: terraform-production
-      url: https://sentinel.sagaruprety.com.np
+      url: https://monitor.pilotlight.sagaruprety.com.np
     permissions:
       contents: read
       id-token: write
@@ -409,8 +409,8 @@ jobs:
         run: |
           service_arn="$(aws ecs describe-services \
             --region eu-west-1 \
-            --cluster sentinel-aws-dr-monitoring \
-            --services sentinel-aws-dr-monitoring \
+            --cluster pilotlight-monitoring \
+            --services pilotlight-monitoring \
             --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
           if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
             echo "existing=true" >> "$GITHUB_OUTPUT"
@@ -433,7 +433,7 @@ jobs:
       - name: Get monitoring ECR URL
         id: monitor-ecr
         run: |
-          repo_uri="$(aws ecr describe-repositories --region eu-west-1 --repository-names sentinel-aws-dr-monitoring --query 'repositories[0].repositoryUri' --output text)"
+          repo_uri="$(aws ecr describe-repositories --region eu-west-1 --repository-names pilotlight-monitoring --query 'repositories[0].repositoryUri' --output text)"
           echo "url=$repo_uri" >> "$GITHUB_OUTPUT"
 
       - name: Login to monitoring ECR
@@ -447,7 +447,7 @@ jobs:
           if [ -n "$PROVIDED_DIGEST" ]; then
             echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            docker build --platform linux/arm64 -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f app/Dockerfile app
+            docker build --platform linux/arm64 -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f apps/monitor/Dockerfile apps/monitor
             docker push "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}"
             digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -461,7 +461,7 @@ jobs:
         run: |
           digest="$MONITOR_DIGEST"
           if [ "$EXISTING" = "true" ] && [ -z "$digest" ] && [ -z "${{ inputs.monitor_image_digest }}" ]; then
-            task_definition="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-monitoring --services sentinel-aws-dr-monitoring --query 'services[0].taskDefinition' --output text)"
+            task_definition="$(aws ecs describe-services --region eu-west-1 --cluster pilotlight-monitoring --services pilotlight-monitoring --query 'services[0].taskDefinition' --output text)"
             image="$(aws ecs describe-task-definition --region eu-west-1 --task-definition "$task_definition" --query 'taskDefinition.containerDefinitions[0].image' --output text)"
             digest="${image##*@}"
           fi
@@ -487,8 +487,8 @@ jobs:
 
       - name: Verify isolated monitor
         run: |
-          aws ecs wait services-stable --region eu-west-1 --cluster sentinel-aws-dr-monitoring --services sentinel-aws-dr-monitoring
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://sentinel.sagaruprety.com.np/healthz
+          aws ecs wait services-stable --region eu-west-1 --cluster pilotlight-monitoring --services pilotlight-monitoring
+          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://monitor.pilotlight.sagaruprety.com.np/healthz
 
       - name: Configure AWS credentials for workload
         uses: aws-actions/configure-aws-credentials@v6
@@ -499,9 +499,9 @@ jobs:
 
       - name: Verify public Route 53 delegation
         run: |
-          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name sentinel.sagaruprety.com.np. --query "HostedZones[?Name=='sentinel.sagaruprety.com.np.'].Id | [0]" --output text)"
+          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name pilotlight.sagaruprety.com.np. --query "HostedZones[?Name=='pilotlight.sagaruprety.com.np.'].Id | [0]" --output text)"
           for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text); do
-            if ! dig +short NS sentinel.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
+            if ! dig +short NS pilotlight.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
               echo "Missing public delegation to $nameserver. Apply bootstrap and update Cloudflare before deployment." >&2
               exit 1
             fi
@@ -509,8 +509,8 @@ jobs:
 
       - name: Refuse deploy during failback topology
         run: |
-          prod_source="$(aws rds describe-db-instances --region eu-central-1 --db-instance-identifier sentinel-aws-dr-prod --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
-          dr_source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          prod_source="$(aws rds describe-db-instances --region eu-central-1 --db-instance-identifier pilotlight-prod --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
+          dr_source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier pilotlight-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
           if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
             echo "Database topology is in failback. Use recovery.yml instead of full-deploy." >&2
             exit 1
@@ -523,7 +523,7 @@ jobs:
       - name: Detect prod service state
         id: prod-state
         run: |
-          service_arn="$(aws ecs describe-services --region eu-central-1 --cluster sentinel-aws-dr-prod --services sentinel-aws-dr-prod --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
+          service_arn="$(aws ecs describe-services --region eu-central-1 --cluster pilotlight-prod --services pilotlight-prod --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
           if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
             echo "existing=true" >> "$GITHUB_OUTPUT"
           else
@@ -545,7 +545,7 @@ jobs:
       - name: Get prod ECR URL
         id: prod-ecr
         run: |
-          repo_uri="$(aws ecr describe-repositories --region eu-central-1 --repository-names sentinel-aws-dr-prod --query 'repositories[0].repositoryUri' --output text)"
+          repo_uri="$(aws ecr describe-repositories --region eu-central-1 --repository-names pilotlight-prod --query 'repositories[0].repositoryUri' --output text)"
           echo "url=$repo_uri" >> "$GITHUB_OUTPUT"
 
       - name: Login to prod ECR
@@ -559,7 +559,7 @@ jobs:
           if [ -n "$PROVIDED_DIGEST" ]; then
             echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            docker build --platform linux/arm64 -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f workload/Dockerfile workload
+            docker build --platform linux/arm64 -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f apps/url-shortener/Dockerfile apps/url-shortener
             docker push "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}"
             digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -573,10 +573,10 @@ jobs:
         run: |
           digest="$WORKLOAD_DIGEST"
           if [ "$EXISTING" = "true" ] && [ -z "$digest" ] && [ -z "${{ inputs.workload_image_digest }}" ]; then
-            task_definition="$(aws ecs describe-services --region eu-central-1 --cluster sentinel-aws-dr-prod --services sentinel-aws-dr-prod --query 'services[0].taskDefinition' --output text)"
+            task_definition="$(aws ecs describe-services --region eu-central-1 --cluster pilotlight-prod --services pilotlight-prod --query 'services[0].taskDefinition' --output text)"
             # JMESPath backticks are literals, not shell substitutions.
             # shellcheck disable=SC2016
-            image="$(aws ecs describe-task-definition --region eu-central-1 --task-definition "$task_definition" --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+            image="$(aws ecs describe-task-definition --region eu-central-1 --task-definition "$task_definition" --query 'taskDefinition.containerDefinitions[?name==`shortener`].image | [0]' --output text)"
             digest="${image##*@}"
           fi
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -617,8 +617,8 @@ jobs:
 
       - name: Verify DR pilot-light state
         run: |
-          desired="$(aws ecs describe-services --region eu-west-1 --cluster sentinel-aws-dr-dr --services sentinel-aws-dr-dr --query 'services[0].desiredCount' --output text)"
-          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
+          desired="$(aws ecs describe-services --region eu-west-1 --cluster pilotlight-dr --services pilotlight-dr --query 'services[0].desiredCount' --output text)"
+          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier pilotlight-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           test "$desired" = "0"
           test -n "$source" && test "$source" != "None"
 
@@ -633,7 +633,7 @@ jobs:
     timeout-minutes: 60
     environment:
       name: terraform-production
-      url: https://sentinel.sagaruprety.com.np
+      url: https://monitor.pilotlight.sagaruprety.com.np
     permissions:
       contents: read
       id-token: write
@@ -686,8 +686,8 @@ jobs:
       - name: Verify isolated monitor
         if: inputs.operation == 'monitor-deploy'
         run: |
-          aws ecs wait services-stable --region eu-west-1 --cluster sentinel-aws-dr-monitoring --services sentinel-aws-dr-monitoring
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://sentinel.sagaruprety.com.np/healthz
+          aws ecs wait services-stable --region eu-west-1 --cluster pilotlight-monitoring --services pilotlight-monitoring
+          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://monitor.pilotlight.sagaruprety.com.np/healthz
 
   destroy:
     name: Destroy all environments (DR, prod, monitoring)
@@ -724,7 +724,7 @@ jobs:
         run: |
           prod_source="$(aws rds describe-db-instances \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
           if [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; then
             echo "Prod is still a DR replica. Complete recovery.yml failback-reset before destroy." >&2

@@ -39,7 +39,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| <a name="input_db_name"></a> [db\_name](#input\_db\_name) | Name of the application database. | `string` | `"sentinel"` | no |
+| <a name="input_db_name"></a> [db\_name](#input\_db\_name) | Name of the application database. | `string` | `"pilotlight"` | no |
 | <a name="input_db_subnet_ids"></a> [db\_subnet\_ids](#input\_db\_subnet\_ids) | IDs of the isolated database subnets. | `list(string)` | n/a | yes |
 | <a name="input_ecs_security_group_id"></a> [ecs\_security\_group\_id](#input\_ecs\_security\_group\_id) | ID of the ECS security group granted access to the database. | `string` | n/a | yes |
 | <a name="input_engine_version"></a> [engine\_version](#input\_engine\_version) | PostgreSQL engine version resolved via aws\_rds\_engine\_version. | `string` | n/a | yes |
@@ -51,7 +51,7 @@ No modules.
 | <a name="input_password_wo_version"></a> [password\_wo\_version](#input\_password\_wo\_version) | Version counter for password\_wo rotation. Ignored when replicate\_source\_db\_arn is set. | `number` | `1` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
 | <a name="input_replicate_source_db_arn"></a> [replicate\_source\_db\_arn](#input\_replicate\_source\_db\_arn) | ARN of the source RDS instance to replicate. Set to create a cross-region read replica instead of a standalone instance. | `string` | `null` | no |
-| <a name="input_username"></a> [username](#input\_username) | Master database username. | `string` | `"sentinel"` | no |
+| <a name="input_username"></a> [username](#input\_username) | Master database username. | `string` | `"pilotlight"` | no |
 | <a name="input_vpc_id"></a> [vpc\_id](#input\_vpc\_id) | ID of the VPC. | `string` | n/a | yes |
 
 ## Outputs

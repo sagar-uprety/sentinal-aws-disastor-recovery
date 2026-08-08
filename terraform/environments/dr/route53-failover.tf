@@ -4,8 +4,8 @@
 # terraform/modules/route53-failover/README.md.
 # When ARC is off, a simple A alias routes the apex to prod ALB directly.
 
-data "aws_route53_zone" "sentinel" {
-  name         = "sentinel.sagaruprety.com.np."
+data "aws_route53_zone" "pilotlight" {
+  name         = "pilotlight.sagaruprety.com.np."
   private_zone = false
 }
 
@@ -45,7 +45,7 @@ module "route53_failover" {
   count  = var.create_arc ? 1 : 0
 
   project_name    = local.project_name
-  route53_zone_id = data.aws_route53_zone.sentinel.zone_id
+  route53_zone_id = data.aws_route53_zone.pilotlight.zone_id
   record_name     = local.app_hostname
 
   primary_alb_dns_name = data.aws_lb.prod.dns_name
@@ -59,22 +59,9 @@ module "route53_failover" {
 # ARC module (and its failover records) to be destroyed first — Route53
 # rejects a simple A record when set-identifier failover records exist
 # with the same name and type.
-moved {
-  from = aws_route53_record.apex
-  to   = aws_route53_record.legacy_monitor
-}
-
-removed {
-  from = aws_route53_record.legacy_monitor
-
-  lifecycle {
-    destroy = false
-  }
-}
-
 resource "aws_route53_record" "workload" {
   count   = var.create_arc ? 0 : 1
-  zone_id = data.aws_route53_zone.sentinel.zone_id
+  zone_id = data.aws_route53_zone.pilotlight.zone_id
   name    = local.app_hostname
   type    = "A"
 

@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"sentinel-aws-dr/workload/internal/httpapi"
-	"sentinel-aws-dr/workload/internal/links"
+	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/httpapi"
+	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/links"
 )
 
 type config struct {

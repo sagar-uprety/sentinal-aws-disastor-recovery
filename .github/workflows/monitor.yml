@@ -3,12 +3,12 @@ name: Monitor CI/CD
 on:
   pull_request:
     paths:
-      - "app/**"
+      - "apps/monitor/**"
       - ".github/workflows/monitor.yml"
   push:
     branches: [main]
     paths:
-      - "app/**"
+      - "apps/monitor/**"
       - ".github/workflows/monitor.yml"
   workflow_dispatch:
     inputs:
@@ -30,11 +30,11 @@ concurrency:
 
 env:
   AWS_REGION: eu-west-1
-  CONTAINER_NAME: sentinel-monitor
-  ECR_REPOSITORY: sentinel-aws-dr-monitoring
-  ECS_CLUSTER: sentinel-aws-dr-monitoring
-  ECS_SERVICE: sentinel-aws-dr-monitoring
-  MONITOR_URL: https://sentinel.sagaruprety.com.np
+  CONTAINER_NAME: monitor
+  ECR_REPOSITORY: pilotlight-monitoring
+  ECS_CLUSTER: pilotlight-monitoring
+  ECS_SERVICE: pilotlight-monitoring
+  MONITOR_URL: https://monitor.pilotlight.sagaruprety.com.np
 
 jobs:
   quality:
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: app
+        working-directory: apps/monitor
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -51,15 +51,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: app/go.mod
-          cache-dependency-path: app/go.sum
+          go-version-file: apps/monitor/go.mod
+          cache-dependency-path: apps/monitor/go.sum
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: apps/monitor/package-lock.json
 
       - name: Build frontend assets
         run: npm ci && npm run build
@@ -78,7 +78,7 @@ jobs:
       - name: Build ARM64 monitor image
         uses: docker/build-push-action@v6
         with:
-          context: ./app
+          context: ./apps/monitor
           platforms: linux/arm64
           push: false
           cache-from: type=gha,scope=monitor
@@ -125,7 +125,7 @@ jobs:
         id: build-image
         uses: docker/build-push-action@v6
         with:
-          context: ./app
+          context: ./apps/monitor
           platforms: linux/arm64
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

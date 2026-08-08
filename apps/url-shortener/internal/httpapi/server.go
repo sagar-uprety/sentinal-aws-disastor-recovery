@@ -13,7 +13,7 @@ import (
 	"regexp"
 	"strings"
 
-	"sentinel-aws-dr/workload/internal/links"
+	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/links"
 )
 
 const indexHTML = `<!doctype html>

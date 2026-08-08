@@ -7,11 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/drill-lib.sh"
 
 ARC_CONTROL_REGION="${ARC_CONTROL_REGION:-us-west-2}"
-ARC_CLUSTER_NAME="${ARC_CLUSTER_NAME:-sentinel-aws-dr-arc}"
-ARC_CONTROL_PANEL_NAME="${ARC_CONTROL_PANEL_NAME:-sentinel-aws-dr-arc}"
-STATUS_HOST="app.sentinel.sagaruprety.com.np"
-MONITOR_HOST="sentinel.sagaruprety.com.np"
-HOSTED_ZONE_NAME="sentinel.sagaruprety.com.np."
+ARC_CLUSTER_NAME="${ARC_CLUSTER_NAME:-pilotlight-arc}"
+ARC_CONTROL_PANEL_NAME="${ARC_CONTROL_PANEL_NAME:-pilotlight-arc}"
+STATUS_HOST="shortener.pilotlight.sagaruprety.com.np"
+MONITOR_HOST="monitor.pilotlight.sagaruprety.com.np"
+HOSTED_ZONE_NAME="pilotlight.sagaruprety.com.np."
 TARGET="${1:-}"
 
 case "$TARGET" in
@@ -37,7 +37,7 @@ dr)
   new_primary="Off"
   new_dr="On"
   target_region="eu-west-1"
-  target_alb="sentinel-aws-dr-dr-alb"
+  target_alb="pilotlight-dr-alb"
   verification_slug="$(current_event_ts pre_outage_link_slug)"
   initialize=false
   ;;
@@ -52,7 +52,7 @@ primary)
   new_primary="On"
   new_dr="Off"
   target_region="eu-central-1"
-  target_alb="sentinel-aws-dr-prod-alb"
+  target_alb="pilotlight-prod-alb"
   verification_slug="$(current_event_ts failback_dr_final_link_slug)"
   initialize=false
   ;;

@@ -7,13 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/drill-lib.sh"
 
 DR_REGION="eu-west-1"
-DR_CLUSTER="sentinel-aws-dr-dr"
-DR_SERVICE="sentinel-aws-dr-dr"
-DR_DB_ID="sentinel-aws-dr-dr"
-DR_ECS_ALARM_NAME="sentinel-aws-dr-dr-ecs-running-tasks"
-DR_ALB_ALARM_NAME="sentinel-aws-dr-dr-alb-healthy-hosts"
-WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
-MONITOR_HOST="sentinel.sagaruprety.com.np"
+DR_CLUSTER="pilotlight-dr"
+DR_SERVICE="pilotlight-dr"
+DR_DB_ID="pilotlight-dr"
+DR_ECS_ALARM_NAME="pilotlight-dr-ecs-running-tasks"
+DR_ALB_ALARM_NAME="pilotlight-dr-alb-healthy-hosts"
+WORKLOAD_HOST="shortener.pilotlight.sagaruprety.com.np"
+MONITOR_HOST="monitor.pilotlight.sagaruprety.com.np"
 RPO_TARGET_SECONDS="${RPO_TARGET_SECONDS:-60}"
 
 if [ "${CONFIRM_FAILOVER:-}" != "YES" ]; then
@@ -239,11 +239,11 @@ log_event "dr_task_alarm_activated"
 
 load_balancer_arn="$(aws elbv2 describe-load-balancers \
   --region "$DR_REGION" \
-  --names "sentinel-aws-dr-dr-alb" \
+  --names "pilotlight-dr-alb" \
   --query 'LoadBalancers[0].LoadBalancerArn' --output text)"
 target_group_arn="$(aws elbv2 describe-target-groups \
   --region "$DR_REGION" \
-  --names "sentinel-aws-dr-dr-tg" \
+  --names "pilotlight-dr-tg" \
   --query 'TargetGroups[0].TargetGroupArn' --output text)"
 load_balancer_suffix="${load_balancer_arn#*:loadbalancer/}"
 target_group_suffix="${target_group_arn##*:}"
@@ -283,7 +283,7 @@ log_event "dr_targets_healthy"
 
 dr_alb_dns="$(aws elbv2 describe-load-balancers \
   --region "$DR_REGION" \
-  --names "sentinel-aws-dr-dr-alb" \
+  --names "pilotlight-dr-alb" \
   --query 'LoadBalancers[0].DNSName' --output text)"
 require_current_event "primary_link_slugs_before_outage"
 primary_slugs_before_outage="$(current_event_ts primary_link_slugs_before_outage)"
