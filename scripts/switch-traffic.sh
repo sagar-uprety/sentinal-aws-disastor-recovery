@@ -142,7 +142,7 @@ if [ "$switch_succeeded" != true ]; then
   echo "ERROR: all ARC data-plane endpoints rejected the atomic switch." >&2
   exit 1
 fi
-log_event "traffic_switch_requested"
+log_event "traffic_switch_requested_${TARGET}"
 
 primary_state="$(arc_get_state "$primary_control_arn")"
 dr_state="$(arc_get_state "$dr_control_arn")"
@@ -197,7 +197,7 @@ log_event "traffic_verified"
 curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
 log_event "monitor_available_after_traffic_switch"
 echo "Traffic verified on $TARGET through authoritative Route 53 DNS, workload health, and link $verification_slug. Monitor remained available."
-if [ "$TARGET" = "PRIMARY" ]; then
+if [ "$TARGET" = "primary" ]; then
   cat <<'EOF'
 Dispatch the protected topology-reset workflow and follow both plan/apply job logs:
   gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm_failback=RESET_DR
