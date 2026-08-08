@@ -1,14 +1,17 @@
 data "aws_caller_identity" "current" {}
 
-# Transitional: trusts both the pre-rename and post-rename repo full-name
-# during the GitHub repo rename window, since this repo is on legacy mutable
-# OIDC sub claims (renamed after the token was minted, the sub value changes
-# to match). Drop the old entry once the rename is confirmed and CI has
-# authenticated successfully under the new name.
+# Transitional: trusts the pre-rename name, the post-rename name, and the
+# immutable owner/repo-ID form GitHub actually issues for this repo (per
+# `gh api repos/.../actions/oidc/customization/sub`, despite that endpoint
+# reporting use_immutable_subject=false) -- org/repo numeric IDs never change
+# across renames, so that entry alone would keep working going forward. Drop
+# the two plain-name entries once CI has authenticated successfully and one
+# has been confirmed unnecessary.
 locals {
   github_repo_full_names = [
     "sagar-uprety/sentinal-aws-disastor-recovery",
     "${var.github_org}/${var.github_repo}",
+    "sagar-uprety@51237312/aws-pilotlight-multi-region-dr@1297686451",
   ]
 }
 
