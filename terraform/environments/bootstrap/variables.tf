@@ -17,7 +17,7 @@ variable "github_org" {
 variable "github_repo" {
   description = "GitHub repository allowed to assume bootstrap OIDC roles."
   type        = string
-  default     = "sentinal-aws-disastor-recovery"
+  default     = "aws-pilotlight-multi-region-dr"
 }
 
 variable "state_bucket_name" {

@@ -68,11 +68,11 @@ variable "multi_az" {
 variable "db_name" {
   description = "Name of the application database."
   type        = string
-  default     = "sentinel"
+  default     = "pilotlight"
 }
 
 variable "username" {
   description = "Master database username."
   type        = string
-  default     = "sentinel"
+  default     = "pilotlight"
 }

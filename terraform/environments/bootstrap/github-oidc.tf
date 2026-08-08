@@ -1,5 +1,19 @@
 data "aws_caller_identity" "current" {}
 
+# Trusts the post-rename plain name and the immutable owner/repo-ID form
+# GitHub actually issues for this repo (per
+# `gh api repos/.../actions/oidc/customization/sub`, despite that endpoint
+# reporting use_immutable_subject=false) -- org/repo numeric IDs never change
+# across renames, so that entry alone keeps working going forward. The
+# pre-rename entry (sentinal-aws-disastor-recovery) was dropped once CI
+# authenticated successfully under the new name.
+locals {
+  github_repo_full_names = [
+    "${var.github_org}/${var.github_repo}",
+    "sagar-uprety@51237312/aws-pilotlight-multi-region-dr@1297686451",
+  ]
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
@@ -19,7 +33,7 @@ resource "aws_iam_role" "terraform_github_actions" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:terraform-production"
+          "token.actions.githubusercontent.com:sub" = [for repo in local.github_repo_full_names : "repo:${repo}:environment:terraform-production"]
         }
       }
     }]
@@ -39,7 +53,7 @@ resource "aws_iam_role" "terraform_github_plan" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:pull_request"
+          "token.actions.githubusercontent.com:sub" = [for repo in local.github_repo_full_names : "repo:${repo}:pull_request"]
         }
       }
     }]

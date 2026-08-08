@@ -77,8 +77,8 @@ module "ecs" {
   # Set var.image_digest to the immutable digest pushed to ECR in phase 2.
   image_uri                 = var.deploy_service ? "${module.ecr.repository_url}@${var.image_digest}" : "skip"
   db_endpoint               = var.deploy_service ? module.rds.endpoint : "skip"
-  db_name                   = "sentinel"
-  db_user                   = "sentinel"
+  db_name                   = "pilotlight"
+  db_user                   = "pilotlight"
   db_password_ssm_arn       = aws_ssm_parameter.database_password_prod.arn
   link_create_token_ssm_arn = aws_ssm_parameter.link_create_token_prod.arn
 
@@ -140,8 +140,8 @@ module "rds" {
   password_wo         = ephemeral.random_password.database.result
   password_wo_version = var.credential_version
 
-  db_name  = "sentinel"
-  username = "sentinel"
+  db_name  = "pilotlight"
+  username = "pilotlight"
 }
 
 resource "aws_ssm_parameter" "database_password_prod" {

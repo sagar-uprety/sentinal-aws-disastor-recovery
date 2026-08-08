@@ -1,13 +1,13 @@
 # Failover Runbook
 
-AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model for the URL-shortener workload: eu-west-1 database replica, workload VPC, ALB, ECS service definition, ECR image, and SSM parameters exist before drill, while workload ECS desired count remains 0. Isolated monitor uses separate state and infrastructure and remains outside workload operations. ARC routing controls are provisioned on demand via `create_arc=true` to avoid idle cost.
+AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Pilotlight follows that model for the URL-shortener workload: eu-west-1 database replica, workload VPC, ALB, ECS service definition, ECR image, and SSM parameters exist before drill, while workload ECS desired count remains 0. Isolated monitor uses separate state and infrastructure and remains outside workload operations. ARC routing controls are provisioned on demand via `create_arc=true` to avoid idle cost.
 
 Historical scripts completed a live M6 drill on 2026-07-22 against the former coupled architecture; those measurements remain historical and are not conflated with M7 below. M7's isolated two-plane architecture completed its own full live drill on 2026-08-08 (see Measurement Semantics).
 
 ## Preconditions
 
-- Isolated monitor serves `https://sentinel.sagaruprety.com.np` from separate eu-west-1 state, VPC, ECS service, ALB, ECR repository, and DynamoDB table.
-- Primary workload serves `https://app.sentinel.sagaruprety.com.np` with two healthy ECS targets; `/healthz` verifies PostgreSQL readiness.
+- Isolated monitor serves `https://monitor.pilotlight.sagaruprety.com.np` from separate eu-west-1 state, VPC, ECS service, ALB, ECR repository, and DynamoDB table.
+- Primary workload serves `https://shortener.pilotlight.sagaruprety.com.np` with two healthy ECS targets; `/healthz` verifies PostgreSQL readiness.
 - DR RDS is an available read replica and DR ECS desired count is 0.
 - The immutable image digest exists in eu-west-1 ECR.
 - Regional database-password and link-creation-token SSM SecureString metadata and versions are current. Terraform generates both secrets through ephemeral values and write-only arguments.
@@ -51,7 +51,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
    CONFIRM_TRAFFIC_SWITCH=DR DRILL_LOG=./drill-events.log scripts/switch-traffic.sh dr
    ```
 
-   Script discovers ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies resulting states. It records completion only after authoritative Route53 DNS, workload health, and expected short link prove eu-west-1 serves `app.sentinel.sagaruprety.com.np`. It separately verifies monitor health. This demo discovers identifiers through AWS control-plane APIs immediately before switching; production runbook should retain five data-plane endpoints and control ARNs out of band.
+   Script discovers ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies resulting states. It records completion only after authoritative Route53 DNS, workload health, and expected short link prove eu-west-1 serves `shortener.pilotlight.sagaruprety.com.np`. It separately verifies monitor health. This demo discovers identifiers through AWS control-plane APIs immediately before switching; production runbook should retain five data-plane endpoints and control ARNs out of band.
 
    Retain refreshed monitor topology after switch. It must show eu-west-1 workload compute and database state while monitor remains served from isolated plane.
 
@@ -68,12 +68,12 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
    ```bash
    aws rds modify-db-instance \
      --region eu-west-1 \
-     --db-instance-identifier sentinel-aws-dr-dr \
+     --db-instance-identifier pilotlight-dr \
      --multi-az \
      --apply-immediately
    aws rds wait db-instance-available \
      --region eu-west-1 \
-     --db-instance-identifier sentinel-aws-dr-dr
+     --db-instance-identifier pilotlight-dr
    ```
 
 ## Measurement Semantics

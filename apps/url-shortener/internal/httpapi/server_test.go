@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"sentinel-aws-dr/workload/internal/links"
+	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/links"
 )
 
 type fakeStore struct {

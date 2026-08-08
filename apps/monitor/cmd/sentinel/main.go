@@ -16,9 +16,9 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
-	"sentinel-aws-dr/app/internal/monitor"
-	"sentinel-aws-dr/app/internal/store"
-	"sentinel-aws-dr/app/internal/topology"
+	"aws-pilotlight-multi-region-dr/apps/monitor/internal/monitor"
+	"aws-pilotlight-multi-region-dr/apps/monitor/internal/store"
+	"aws-pilotlight-multi-region-dr/apps/monitor/internal/topology"
 )
 
 type config struct {

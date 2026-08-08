@@ -1,5 +1,5 @@
 output "alb_dns_name" {
-  description = "Public ALB DNS name for the DR Sentinel status page."
+  description = "Public ALB DNS name for the DR URL-shortener workload."
   value       = module.alb.alb_dns_name
 }
 

@@ -4,7 +4,7 @@ Private Docker registry with immutable tags and automatic lifecycle cleanup.
 
 ## Design Intent
 
-The repository stores the Sentinel container image. `IMMUTABLE` tag mutability prevents accidental overwrites, and the lifecycle policy keeps only the last 10 images. Scan-on-push is enabled for vulnerability visibility. `force_delete = true` allows teardown without manual image cleanup.
+The repository stores the container image for one Pilotlight service (monitor or URL-shortener workload). `IMMUTABLE` tag mutability prevents accidental overwrites, and the lifecycle policy keeps only the last 10 images. Scan-on-push is enabled for vulnerability visibility. `force_delete = true` allows teardown without manual image cleanup.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

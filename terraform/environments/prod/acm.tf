@@ -1,9 +1,9 @@
 locals {
-  app_hostname = "app.sentinel.sagaruprety.com.np"
+  app_hostname = "shortener.pilotlight.sagaruprety.com.np"
 }
 
-data "aws_route53_zone" "sentinel" {
-  name         = "sentinel.sagaruprety.com.np."
+data "aws_route53_zone" "pilotlight" {
+  name         = "pilotlight.sagaruprety.com.np."
   private_zone = false
 }
 
@@ -14,19 +14,6 @@ resource "aws_acm_certificate" "primary" {
 
   lifecycle {
     create_before_destroy = true
-  }
-}
-
-moved {
-  from = aws_route53_record.certificate_validation["sentinel.sagaruprety.com.np"]
-  to   = aws_route53_record.legacy_monitor_certificate_validation
-}
-
-removed {
-  from = aws_route53_record.legacy_monitor_certificate_validation
-
-  lifecycle {
-    destroy = false
   }
 }
 
@@ -44,26 +31,10 @@ resource "aws_route53_record" "workload_certificate_validation" {
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.sentinel.zone_id
+  zone_id         = data.aws_route53_zone.pilotlight.zone_id
 }
 
 resource "aws_acm_certificate_validation" "primary" {
   certificate_arn         = aws_acm_certificate.primary.arn
   validation_record_fqdns = [for record in aws_route53_record.workload_certificate_validation : record.fqdn]
-}
-
-removed {
-  from = aws_acm_certificate.dr
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = aws_acm_certificate_validation.dr
-
-  lifecycle {
-    destroy = false
-  }
 }

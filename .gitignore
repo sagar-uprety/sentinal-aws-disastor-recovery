@@ -53,8 +53,8 @@ terraform.rc
 # planout
 
 # Go
-app/sentinel
-workload/shortener
+apps/monitor/sentinel
+apps/url-shortener/shortener
 *.exe
 *.exe~
 *.dll
@@ -71,9 +71,9 @@ workload/shortener
 vendor/
 
 # Node dependencies used to build static Tailwind CSS
-app/node_modules/
-app/static/uPlot.iife.min.js
-app/static/uPlot.min.css
+apps/monitor/node_modules/
+apps/monitor/static/uPlot.iife.min.js
+apps/monitor/static/uPlot.min.css
 
 # Local env secrets
 .env

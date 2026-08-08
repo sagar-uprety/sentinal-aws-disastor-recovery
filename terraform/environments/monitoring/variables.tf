@@ -19,7 +19,7 @@ variable "github_org" {
 variable "github_repo" {
   description = "GitHub repository trusted to deploy the monitor."
   type        = string
-  default     = "sentinal-aws-disastor-recovery"
+  default     = "aws-pilotlight-multi-region-dr"
 }
 
 variable "image_digest" {

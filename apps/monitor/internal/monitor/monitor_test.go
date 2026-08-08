@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"sentinel-aws-dr/app/internal/store"
+	"aws-pilotlight-multi-region-dr/apps/monitor/internal/store"
 )
 
 type fakeStore struct {

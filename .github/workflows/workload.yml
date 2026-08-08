@@ -3,12 +3,12 @@ name: Workload CI/CD
 on:
   pull_request:
     paths:
-      - "workload/**"
+      - "apps/url-shortener/**"
       - ".github/workflows/workload.yml"
   push:
     branches: [main]
     paths:
-      - "workload/**"
+      - "apps/url-shortener/**"
       - ".github/workflows/workload.yml"
   workflow_dispatch:
     inputs:
@@ -30,14 +30,14 @@ concurrency:
 
 env:
   AWS_REGION: eu-central-1
-  CONTAINER_NAME: sentinel
+  CONTAINER_NAME: shortener
   DR_AWS_REGION: eu-west-1
-  DR_ECS_CLUSTER: sentinel-aws-dr-dr
-  DR_ECS_SERVICE: sentinel-aws-dr-dr
-  ECR_REPOSITORY: sentinel-aws-dr-prod
-  ECS_CLUSTER: sentinel-aws-dr-prod
-  ECS_SERVICE: sentinel-aws-dr-prod
-  WORKLOAD_URL: https://app.sentinel.sagaruprety.com.np
+  DR_ECS_CLUSTER: pilotlight-dr
+  DR_ECS_SERVICE: pilotlight-dr
+  ECR_REPOSITORY: pilotlight-prod
+  ECS_CLUSTER: pilotlight-prod
+  ECS_SERVICE: pilotlight-prod
+  WORKLOAD_URL: https://shortener.pilotlight.sagaruprety.com.np
 
 jobs:
   quality:
@@ -46,7 +46,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: workload
+        working-directory: apps/url-shortener
     services:
       postgres:
         image: postgres:18-alpine
@@ -70,8 +70,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: workload/go.mod
-          cache-dependency-path: workload/go.sum
+          go-version-file: apps/url-shortener/go.mod
+          cache-dependency-path: apps/url-shortener/go.sum
 
       - name: Run Go vet
         run: go vet ./...
@@ -90,11 +90,11 @@ jobs:
       - name: Build ARM64 container image
         uses: docker/build-push-action@v6
         with:
-          context: ./workload
+          context: ./apps/url-shortener
           platforms: linux/arm64
           push: false
-          cache-from: type=gha,scope=workload
-          cache-to: type=gha,mode=max,scope=workload
+          cache-from: type=gha,scope=shortener
+          cache-to: type=gha,mode=max,scope=shortener
 
   deploy:
     name: Deploy URL-shortener workload
@@ -140,12 +140,12 @@ jobs:
         id: build-image
         uses: docker/build-push-action@v6
         with:
-          context: ./workload
+          context: ./apps/url-shortener
           platforms: linux/arm64
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          cache-from: type=gha,scope=workload
-          cache-to: type=gha,mode=max,scope=workload
+          cache-from: type=gha,scope=shortener
+          cache-to: type=gha,mode=max,scope=shortener
 
       - name: Report workload image digest
         env:

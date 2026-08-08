@@ -1,6 +1,6 @@
 # Cloudflare MCP Setup
 
-Added for the M4 Route53 delegation task: creating the `sentinel.sagaruprety.com.np`
+Added for the M4 Route53 delegation task: creating the `pilotlight.sagaruprety.com.np`
 hosted zone in Route53 requires adding NS delegation records to the existing
 Cloudflare-managed `sagaruprety.com.np` zone, which lives outside AWS.
 
@@ -41,16 +41,27 @@ Check connection status any time with `claude mcp list`.
 
 ## What it's used for
 
-Adding the NS delegation records so `sentinel.sagaruprety.com.np` resolves
+Adding the NS delegation records so `pilotlight.sagaruprety.com.np` resolves
 through Route53 instead of Cloudflare:
 
-1. Route53 creates the `sentinel.sagaruprety.com.np` hosted zone (Terraform)
+1. Route53 creates the `pilotlight.sagaruprety.com.np` hosted zone (Terraform)
    and returns its 4 NS nameservers.
-2. Via this MCP connection: add an `NS` record for `sentinel` in the
+2. Via this MCP connection: add an `NS` record for `pilotlight` in the
    `sagaruprety.com.np` Cloudflare zone, pointing at those 4 nameservers.
-3. Verify with `dig NS sentinel.sagaruprety.com.np` (expect the Route53
-   nameservers) and `dig A sentinel.sagaruprety.com.np` (expect it to
+3. Verify with `dig NS pilotlight.sagaruprety.com.np` (expect the Route53
+   nameservers) and `dig A pilotlight.sagaruprety.com.np` (expect it to
    resolve through Route53, not Cloudflare).
+
+## 2026-08-08 update
+
+During the Sentinel -> Pilotlight rebrand, the Cloudflare MCP connection active
+in that session only granted `dns_records:read` on this zone -- write attempts
+failed with an authentication error. The 4 NS records for
+`pilotlight.sagaruprety.com.np` were added manually through the Cloudflare
+dashboard instead, following the same pattern above. If a future session hits
+the same limitation, re-run `claude mcp login cloudflare` and confirm the
+consent screen actually grants DNS **edit**, not just read, before assuming
+the MCP path will work.
 
 ## Removing it later
 
