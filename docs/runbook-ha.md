@@ -28,8 +28,10 @@ Expected: only workload tasks currently placed in that AZ stop. Keep monitor ope
 ## RDS Multi-AZ Failover
 
 ```bash
-CONFIRM_HA=YES scripts/simulate-ha.sh db
+CONFIRM_HA=YES CONFIRM_HA_DB_FAILOVER=YES scripts/simulate-ha.sh db
 ```
+
+This forces a real Multi-AZ failover on the production database, materially higher blast radius than the task/AZ drills above, so it requires its own confirmation on top of `CONFIRM_HA`.
 
 Expected: workload `/healthz` can become unavailable briefly during failover while monitor `/healthz` remains available. Retain monitor topology before and after script, showing workload database writer and managed-standby AZs exchanged, status `available`, and workload still in eu-central-1. Script creates a known short link, samples workload health every five seconds, requires RDS and workload health to recover, requires writer AZ to change, and verifies link still exists.
 

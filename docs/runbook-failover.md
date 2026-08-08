@@ -2,7 +2,7 @@
 
 AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Sentinel follows that model for the URL-shortener workload: eu-west-1 database replica, workload VPC, ALB, ECS service definition, ECR image, and SSM parameters exist before drill, while workload ECS desired count remains 0. Isolated monitor uses separate state and infrastructure and remains outside workload operations. ARC routing controls are provisioned on demand via `create_arc=true` to avoid idle cost.
 
-Historical scripts completed a live M6 drill on 2026-07-22. Those measurements describe former coupled architecture and remain historical. M7 repository changes have not been deployed or exercised live.
+Historical scripts completed a live M6 drill on 2026-07-22 against the former coupled architecture; those measurements remain historical and are not conflated with M7 below. M7's isolated two-plane architecture completed its own full live drill on 2026-08-08 (see Measurement Semantics).
 
 ## Preconditions
 
@@ -12,9 +12,10 @@ Historical scripts completed a live M6 drill on 2026-07-22. Those measurements d
 - The immutable image digest exists in eu-west-1 ECR.
 - Regional database-password and link-creation-token SSM SecureString metadata and versions are current. Terraform generates both secrets through ephemeral values and write-only arguments.
 - Protected GitHub environments define `AWS_TERRAFORM_ROLE_ARN`, `AWS_ROLE_ARN`, and `AWS_MONITOR_ROLE_ARN`.
-- **Before a drill, provision ARC:** set `create_arc = true` in the DR Terraform configuration and deploy:
+- **Before a drill, provision ARC.** `terraform.yml`'s `deploy` operation does not expose `create_arc` as a dispatchable input, so this cannot currently be done through CI; apply the DR root locally with the override instead:
   ```bash
-  gh workflow run terraform.yml --ref main -f operation=deploy -f target=dr
+  cd terraform/environments/dr
+  terraform apply -input=false -auto-approve -var=create_arc=true
   ```
   Then initialize controls:
   ```bash
@@ -23,7 +24,7 @@ Historical scripts completed a live M6 drill on 2026-07-22. Those measurements d
   ARC controls must be primary `On`, DR `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
 - Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, ARC, and monitor-table DynamoDB operations. This project does not provision a separate local recovery role.
-- **After drill, tear down ARC** to save cost: set `create_arc = false` and deploy again.
+- **After drill, tear down ARC** to save cost: `terraform apply -var=create_arc=false` in `terraform/environments/dr`, same as above. In practice this often happens automatically: any later `recovery.yml` apply against the DR root runs with default variables (`create_arc=false`), so the first failback apply after a drill will destroy ARC as a side effect even without this explicit step. Confirm actual state either way with `aws route53-recovery-control-config list-clusters --region us-west-2`.
 
 ## Drill Sequence
 
@@ -82,7 +83,9 @@ Replica-promotion RPO target is 60 seconds. `simulate-disaster.sh` creates a nor
 
 `failover.sh` also records the latest fresh CloudWatch `ReplicaLag` maximum before promotion. AWS documents `ReplicaLag=0` as synchronized and `-1` as inactive or unknown. The script refuses a drill promotion when evidence is missing, stale, or above 60 seconds unless the operator explicitly sets `ALLOW_RPO_TARGET_MISS=YES` to preserve and report a deliberate target miss.
 
-Historical M6 result: user-visible outage confirmation through authoritative DNS and public DR `/topology` verification was 538 seconds. `failover_invoked` through fresh DR write verification was 457 seconds; invocation through public verification was 516 seconds. Row-based observed RPO was 0 seconds, with fresh pre-promotion `ReplicaLag` of 12 seconds. These values do not validate M7.
+Historical M6 result (former coupled architecture): user-visible outage confirmation through authoritative DNS and public DR `/topology` verification was 538 seconds. `failover_invoked` through fresh DR write verification was 457 seconds; invocation through public verification was 516 seconds. Row-based observed RPO was 0 seconds, with fresh pre-promotion `ReplicaLag` of 12 seconds. These values describe the former architecture and are not M7 evidence.
+
+M7 result (isolated two-plane architecture, live 2026-08-08): end-to-end RTO (`outage_confirmed` through `traffic_verified`) was 666 seconds, against the 30-minute target. RPO was 26.0 seconds of measured CloudWatch `ReplicaLag`, against the 60-second target; every link present on primary before the outage, not a sample of one, was verified present in DR after promotion. Full breakdown and bug findings from this drill are in `docs/milestone-7-evidence.md`.
 
 ## Failback And Topology Reset
 
