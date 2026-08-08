@@ -30,14 +30,14 @@ concurrency:
 
 env:
   AWS_REGION: eu-central-1
-  CONTAINER_NAME: sentinel
+  CONTAINER_NAME: shortener
   DR_AWS_REGION: eu-west-1
-  DR_ECS_CLUSTER: sentinel-aws-dr-dr
-  DR_ECS_SERVICE: sentinel-aws-dr-dr
-  ECR_REPOSITORY: sentinel-aws-dr-prod
-  ECS_CLUSTER: sentinel-aws-dr-prod
-  ECS_SERVICE: sentinel-aws-dr-prod
-  WORKLOAD_URL: https://app.sentinel.sagaruprety.com.np
+  DR_ECS_CLUSTER: pilotlight-dr
+  DR_ECS_SERVICE: pilotlight-dr
+  ECR_REPOSITORY: pilotlight-prod
+  ECS_CLUSTER: pilotlight-prod
+  ECS_SERVICE: pilotlight-prod
+  WORKLOAD_URL: https://shortener.pilotlight.sagaruprety.com.np
 
 jobs:
   quality:

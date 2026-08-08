@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly PROJECT_NAME="${PROJECT_NAME:-sentinel-aws-dr}"
+readonly PROJECT_NAME="${PROJECT_NAME:-pilotlight}"
 readonly PRIMARY_REGION="${PRIMARY_REGION:-eu-central-1}"
 readonly DR_REGION="${DR_REGION:-eu-west-1}"
 readonly ECR_REPOSITORY="${PROJECT_NAME}-prod"

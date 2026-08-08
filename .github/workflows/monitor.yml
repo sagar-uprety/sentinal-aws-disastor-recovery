@@ -30,11 +30,11 @@ concurrency:
 
 env:
   AWS_REGION: eu-west-1
-  CONTAINER_NAME: sentinel-monitor
-  ECR_REPOSITORY: sentinel-aws-dr-monitoring
-  ECS_CLUSTER: sentinel-aws-dr-monitoring
-  ECS_SERVICE: sentinel-aws-dr-monitoring
-  MONITOR_URL: https://sentinel.sagaruprety.com.np
+  CONTAINER_NAME: monitor
+  ECR_REPOSITORY: pilotlight-monitoring
+  ECS_CLUSTER: pilotlight-monitoring
+  ECS_SERVICE: pilotlight-monitoring
+  MONITOR_URL: https://monitor.pilotlight.sagaruprety.com.np
 
 jobs:
   quality:

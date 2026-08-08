@@ -31,7 +31,7 @@ Reference architecture basis: AWS whitepaper "Disaster Recovery of Workloads on 
 
     | Key | Value |
     |---|---|
-    | `Project` | `sentinel-aws-dr` |
+    | `Project` | `pilotlight` |
     | `ManagedBy` | `terraform` |
     | `Environment` | `prod` or `dr` (set per-environment) |
 
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS checks (
 CREATE INDEX IF NOT EXISTS idx_checks_target_time ON checks (target_url, checked_at DESC);
 ```
 
-Deliberate omission, document in app/README.md: checks.target_url has no foreign key to targets. At this scale, orphan rows are harmless, and denormalizing the URL keeps history readable even if a target is removed. State this as a conscious trade-off.
+Deliberate omission, document in apps/monitor/README.md: checks.target_url has no foreign key to targets. At this scale, orphan rows are harmless, and denormalizing the URL keeps history readable even if a target is removed. State this as a conscious trade-off.
 
 M7 replaces the monitor's workload PostgreSQL dependency with an on-demand DynamoDB table owned by the monitoring root. Runtime configuration includes the canonical workload URL, explicit prod and DR resource identifiers, check interval, port, and AWS Regions. The monitor receives only required read actions for ECS and RDS topology plus read/write access to its own DynamoDB table. ARC switching and authoritative Route53 verification remain operator-script responsibilities.
 
@@ -117,7 +117,7 @@ Version policy:
 
 ### 4.1 Primary region (eu-central-1)
 - VPC `10.0.0.0/24` across eu-central-1a and eu-central-1b. Allocate two public `/27` subnets for ALB and public ingress, two private application `/27` subnets for ECS, and two isolated database `/28` subnets for RDS. A `/27` has 27 AWS-usable addresses and a `/28` has 11, enough for two steady ECS tasks, deployment overlap, ALB nodes, Regional NAT attachments, and RDS failover with substantial headroom. Reserve the remaining addresses for growth. The DR VPC uses non-overlapping `10.1.0.0/24`; document the address calculation in the module README.
-- Workload ALB in public subnets, HTTPS :443 with a DNS-validated regional ACM certificate. HTTP :80 redirects permanently to HTTPS. `sagaruprety.com.np` remains authoritative in Cloudflare. The persistent Route53 zone remains `sentinel.sagaruprety.com.np`. Publish the isolated monitor at the zone apex and the ARC-controlled workload at `app.sentinel.sagaruprety.com.np`. Each regional workload ALB needs its own ACM certificate because ACM certificates are regional for ALB listeners.
+- Workload ALB in public subnets, HTTPS :443 with a DNS-validated regional ACM certificate. HTTP :80 redirects permanently to HTTPS. `sagaruprety.com.np` remains authoritative in Cloudflare. The persistent Route53 zone is `pilotlight.sagaruprety.com.np`. Publish the isolated monitor at `monitor.pilotlight.sagaruprety.com.np` and the ARC-controlled workload at `shortener.pilotlight.sagaruprety.com.np`, both as sibling subdomains of the delegated zone. Each regional workload ALB needs its own ACM certificate because ACM certificates are regional for ALB listeners.
 - ECS Fargate cluster. One service, desired_count = 2 in demo mode, 1 in idle-testing mode. Tasks in private subnets. CPU 256, memory 512. Fargate does not support placement strategies or constraints; AZ spread across the two private subnets is automatic and best-effort, verified with evidence in M2 rather than configured.
 - Pin an explicit supported Fargate Linux platform version in Terraform and record it in the module README; do not rely silently on a changing `LATEST` value.
 - Egress for image pull, logs, SSM retrieval, and reliable replacement-task startup uses one Regional NAT Gateway configured for both AZs plus the free S3 gateway endpoint. Regional NAT is part of every applied prod and DR environment, not a feature flag. AWS bills one NAT Gateway-hour per supported AZ, so this has roughly the fixed hourly cost of one zonal NAT per AZ, not one zonal NAT total. It avoids the single-NAT AZ dependency and simplifies routing. Confirm Regional NAT availability in Frankfurt and Ireland before implementation; fallback is one zonal NAT per AZ, never one shared zonal NAT.
@@ -140,7 +140,7 @@ Version policy:
 
 - Run the monitoring service as a separate always-on ECS service in eu-west-1 with its own VPC, ALB, security groups, persistence, ECR repository, Terraform root/state, and deployment workflow.
 - The monitoring service is not part of prod or DR workload modules, ARC records, failover scripts, failback scripts, HA injection, or workload destroy operations.
-- Monitor `https://app.sentinel.sagaruprety.com.np/healthz` over HTTPS. Read regional workload state through narrowly scoped AWS API permissions rather than public prod and DR origin hostnames.
+- Monitor `https://shortener.pilotlight.sagaruprety.com.np/healthz` over HTTPS. Read regional workload state through narrowly scoped AWS API permissions rather than public prod and DR origin hostnames.
 - Monitoring-plane failure is outside workload-drill scope. Route53 health checks and CloudWatch alarms remain independent evidence if the monitor itself is unavailable.
 
 Apply prod before DR because the replica, backup replication, and ECR replication depend on primary resource identifiers. Keep environment state separate. DR discovers prod resources through AWS data sources (not remote state), so DR plans and recovery operations do not depend on prod's state file availability. Destroy DR before prod. Promotion changes replica topology and CLI scaling changes ECS desired count, so the runbook must reconcile configuration and Terraform state after every drill.
@@ -148,7 +148,7 @@ Apply prod before DR because the replica, backup replication, and ECR replicatio
 ### 4.3 Failover automation
 
 Recovery objectives, defined before testing:
-- End-to-end regional recovery target RTO: 30 minutes from the first confirmed user-visible primary outage until `app.sentinel.sagaruprety.com.np` serves verified traffic backed by writable DR data. Record detection, declaration, promotion, task startup, health verification, and routing as separate phases. Also report operator-invocation-to-recovery automation duration, but do not substitute it for end-to-end RTO.
+- End-to-end regional recovery target RTO: 30 minutes from the first confirmed user-visible primary outage until `shortener.pilotlight.sagaruprety.com.np` serves verified traffic backed by writable DR data. Record detection, declaration, promotion, task startup, health verification, and routing as separate phases. Also report operator-invocation-to-recovery automation duration, but do not substitute it for end-to-end RTO.
 - Replica-promotion path target RPO: 60 seconds at demo load, measured by whether the prod-created link is present after promotion and supported by fresh pre-promotion `ReplicaLag` evidence.
 - PITR corruption path target RPO: no more than the service-supported restore granularity; measure it during the drill rather than assuming a value.
 
@@ -156,7 +156,7 @@ Recovery is operator-gated at each irreversible boundary. DNS must never route u
 - `scripts/simulate-disaster.sh`: requires `CONFIRM_DISASTER=YES`, creates and records a normal short link in prod, verifies DR is an available read replica with ECS at zero, scales primary ECS to 0, and records the outage only after the workload ALB returns 503 with zero healthy targets. It verifies the isolated monitor remains healthy, restores the original primary count if outage confirmation fails, and does not alter traffic routing.
 - `scripts/failover.sh`: requires a current `outage_confirmed` event plus `CONFIRM_FAILOVER=YES`, validates the replica, immutable regional ECR digest, regional SSM parameter, and fresh `ReplicaLag` evidence, promotes the replica, verifies it is standalone, registers the DR task definition, scales ECS to 2 tasks across two AZs, requires two healthy ALB targets, verifies the prod-created link, creates a DR link, and verifies monitor health. It deliberately does not switch traffic.
 - `scripts/switch-traffic.sh`: is the separate final operator gate. It requires verified DR readiness, discovers the pre-created ARC cluster and routing controls, checks expected initial control states, atomically changes primary Off and DR On through one of ARC's regional data-plane endpoints, then records completion only after authoritative Route53 DNS, workload health, and expected-link verification prove public workload traffic is served by eu-west-1. It separately verifies monitor health.
-- Traffic switching uses an operator-gated Route53 Application Recovery Controller routing control connected to `app.sentinel.sagaruprety.com.np` records. Provision ARC routing-control cluster only for drill; its published rate was $2.50 per cluster-hour when this plan was revised, but verify current pricing before apply. Include charge in session evidence. Project owner controls teardown after evidence capture. Fallback: deliberate Route53 record update after readiness verification, clearly identified as less resilient control-plane operation. Automatic primary-health-check DNS failover to an unready DR ALB is forbidden.
+- Traffic switching uses an operator-gated Route53 Application Recovery Controller routing control connected to `shortener.pilotlight.sagaruprety.com.np` records. Provision ARC routing-control cluster only for drill; its published rate was $2.50 per cluster-hour when this plan was revised, but verify current pricing before apply. Include charge in session evidence. Project owner controls teardown after evidence capture. Fallback: deliberate Route53 record update after readiness verification, clearly identified as less resilient control-plane operation. Automatic primary-health-check DNS failover to an unready DR ALB is forbidden.
 - `scripts/failback.sh`: guards operational failback phases while topology-changing Terraform plans run through protected manual GitHub Actions dispatches. It creates and later deletes the temporary safety snapshot, verifies reverse-replica source and lag, promotes and hardens prod, requires the DR-created link before switching back, then verifies restored primary-to-DR replication and DR desired count 0. Local scripts assume the operator's active AWS credentials already have required permissions; no dedicated local recovery role is provisioned.
 - `scripts/measure.sh`: isolates the latest `drill_started` segment so two drills cannot mix events, reports each recovery phase, measures RTO through authoritative workload DNS and link verification, and reports prod-link recovery timestamps with pre-promotion `ReplicaLag` as supporting AWS control-plane evidence.
 - Every script records changed resources. After the drill, dispatch the guarded recovery workflow and inspect its saved topology plans before approving apply or destroy. Never use `terraform apply -refresh-only` as a substitute for the declared primary and replica roles.
@@ -181,7 +181,7 @@ Every project service is chosen intentionally. Here is why each paid service is 
 
 ### 4.5 Route53
 - Keep health checks for detection and evidence, with a deliberate `failure_threshold` that avoids reacting to a single transient failure. Do not attach automatic failover routing that sends users to DR while its desired count is zero. The final measured drill must use an operator-gated Route53 ARC routing control after `failover.sh` verifies the promoted database, healthy DR targets, and successful writes. A scripted Route53 record update remains an emergency fallback only and must be documented as a less resilient control-plane operation, not presented as equivalent evidence.
-- The registered parent domain `sagaruprety.com.np` remains on Cloudflare. Terraform creates the `sentinel.sagaruprety.com.np` Route53 public hosted zone. Add its returned NS records to Cloudflare once, then verify delegation with `dig NS sentinel.sagaruprety.com.np`. Route53 publishes monitor at zone apex and ARC-controlled workload at `app.sentinel.sagaruprety.com.np` without moving parent domain away from Cloudflare.
+- The registered parent domain `sagaruprety.com.np` remains on Cloudflare. Terraform creates the `pilotlight.sagaruprety.com.np` Route53 public hosted zone. Add its returned NS records to Cloudflare once, then verify delegation with `dig NS pilotlight.sagaruprety.com.np`. Route53 publishes monitor at `monitor.pilotlight.sagaruprety.com.np` and ARC-controlled workload at `shortener.pilotlight.sagaruprety.com.np` without moving parent domain away from Cloudflare.
 
 ### 4.6 Monitoring
 - CloudWatch alarms: ALB 5xx count, ALB healthy host count < 1, ECS running task count < desired, RDS CPU > 80, RDS free storage low. All alarms notify one SNS topic with email subscription. The DR task-count alarm expects zero while pilot light is inactive; `failover.sh` changes it to two after scaling DR, and Terraform reconciliation restores zero after the drill.
@@ -214,18 +214,19 @@ All ten rows are mandatory; none are documentation-only. Do not simulate an AWS 
 ## 5. Repository Layout
 
 ```
-aws-resilient-status-page/
-├── app/                         # isolated monitoring service
-│   ├── Dockerfile
-│   ├── main.go (or app/ package layout)
-│   ├── targets.json
-│   ├── static/index.html
-│   └── README.md
-├── workload/                    # URL-shortener drill workload
-│   ├── Dockerfile
-│   ├── cmd/shortener/
-│   ├── internal/
-│   └── README.md
+aws-pilotlight-multi-region-dr/
+├── apps/
+│   ├── monitor/                 # isolated monitoring service
+│   │   ├── Dockerfile
+│   │   ├── cmd/sentinel/
+│   │   ├── internal/
+│   │   ├── static/index.html
+│   │   └── README.md
+│   └── url-shortener/           # URL-shortener drill workload
+│       ├── Dockerfile
+│       ├── cmd/shortener/
+│       ├── internal/
+│       └── README.md
 ├── terraform/
 │   ├── modules/
 │   │   ├── vpc/
@@ -254,7 +255,7 @@ aws-resilient-status-page/
 │   ├── workload.yml          # URL-shortener CI/CD across prod and DR
 │   ├── recovery.yml          # protected failback topology plan/apply operations
 │   └── terraform.yml         # quality, speculative plan comments, and protected manual deploy/destroy
-├── docker-compose.yml        # local dev stack: app and postgres
+├── docker-compose.yml        # local dev stack: monitor, shortener, and postgres
 ├── docs/
 │   ├── aws-dr-architecture.drawio # canonical editable architecture diagram
 │   ├── postmortem.md         # written after the first real drill
@@ -476,9 +477,35 @@ Acceptance criteria:
 - [ ] Optional second full regional drill for repeatability evidence.
 - [ ] **DESTROY:** workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap and isolated monitoring plane preserved unless separately approved for destruction.
 
+### Milestone 9: Rebrand to Pilotlight
+
+**Intent:** "Sentinel" described a single self-monitoring status page; after the M7 split into an isolated monitor plane and a separate URL-shortener workload, `app/`/`workload/` as directory names and "Sentinel" as the project name no longer said what the project actually is. Renamed the project to Pilotlight (matching the AWS pilot-light DR pattern the architecture implements), restructured the app directories, and renamed the GitHub repo, AWS resource-naming prefix, and DNS structure to match. Executed 2026-08-08, entirely after the M7 live drill, while prod/dr/monitoring held zero live resources (only `bootstrap` was live), which meant the Terraform naming rewrite carried no RDS/ECS recreation risk.
+
+Tasks:
+- [x] `app/` -> `apps/monitor/`, `workload/` -> `apps/url-shortener/` (`git mv`, history preserved). Go module paths -> `aws-pilotlight-multi-region-dr/apps/monitor` and `.../apps/url-shortener`, all 11 self-import lines updated. CI path triggers, Docker build contexts, `docker-compose.yml` (also renamed services `app`->`monitor`, `workload`->`shortener`), and `.pre-commit-config.yaml` (including the `../.golangci.yml` -> `../../.golangci.yml` depth fix) updated to match. Verified with `go build/vet/test` in both modules, a full `docker compose up` smoke test, and pre-commit hooks including `actionlint`.
+- [x] Terraform naming rewrite: `project_name` `sentinel-aws-dr` -> `pilotlight` across bootstrap/prod/dr/monitoring; new hostnames `monitor.pilotlight.sagaruprety.com.np` and `shortener.pilotlight.sagaruprety.com.np` (sibling subdomains of a new delegated zone, replacing the old scheme where the monitor sat at the zone apex); every `aws_route53_zone`/ACM/Route53-record reference repointed; container names `sentinel`->`shortener` (ecs-service) and `sentinel-monitor`->`monitor` (monitor-service); RDS `db_name`/`username` `sentinel`->`pilotlight`; stale `moved`/`removed` migration shims deleted (state confirmed empty first). `terraform fmt/validate/tflint/checkov` clean across all four environments; `terraform plan` confirmed internal consistency before any apply (prod: 72 to add / 0 change / 0 destroy; monitoring: 58/0/0; dr correctly blocked only on prod/bootstrap resources that didn't exist yet).
+- [x] Live guarded sequence, each step confirmed individually: bootstrap apply replaced the Route53 zone (`sentinel.sagaruprety.com.np` -> `pilotlight.sagaruprety.com.np`, new zone ID `Z09144192K0FMSLMDXII9`) and both OIDC IAM roles (new ARNs) under a transitional dual-trust policy; GitHub repo renamed to `sagar-uprety/aws-pilotlight-multi-region-dr` (`gh repo rename`, local remote auto-updated); Cloudflare NS delegation added for the new zone. One real bug found live: the OIDC trust policy's plain old-name/new-name entries both failed `AssumeRoleWithWebIdentity` — `gh api repos/.../actions/oidc/customization/sub` showed this repo actually issues the immutable owner/repo-ID subject-claim form (`repo:sagar-uprety@51237312/aws-pilotlight-multi-region-dr@1297686451`) despite reporting `use_immutable_subject:false`. Added that value to the trust policy (in-place update, no role replacement) and CI authenticated successfully on PR #38 (run `31274285254`). A final apply then dropped the pre-rename entry, keeping only the new plain name and the rename-proof immutable-ID form; CI re-verified green afterward (run `31274655623`).
+- [x] `AWS_TERRAFORM_ROLE_ARN`/`AWS_TERRAFORM_PLAN_ROLE_ARN` GitHub Actions repo variables updated to the new role ARNs. `AWS_ROLE_ARN`/`AWS_MONITOR_ROLE_ARN` intentionally left pointing at already-nonexistent prod/monitoring roles — those environments are destroyed, so the variables get corrected naturally on the next fresh deploy rather than being hand-edited to a not-yet-created ARN now.
+- [x] CI workflow env blocks (`monitor.yml`, `workload.yml`, `terraform.yml`, `recovery.yml`), all identifier-bearing variables in the 7 drill/failover scripts (`failback.sh`, `failover.sh`, `simulate-disaster.sh`, `simulate-ha.sh`, `switch-traffic.sh`, `cleanup-workload-artifacts.sh`, `drill-lib.sh`), and current docs (`README.md`, this plan's current-spec sections, `docs/runbook-failover.md`, `docs/runbook-ha.md`, `docs/cloudflare-mcp-setup.md`) updated to the new names and hostnames. One real bug caught mid-edit: a blanket string replace would have turned the Route53 zone-lookup/NS-delegation-check lines (which need the bare zone name) into the monitor's subdomain hostname; fixed to reference `pilotlight.sagaruprety.com.np` specifically in both `terraform.yml` and `switch-traffic.sh`'s `HOSTED_ZONE_NAME`.
+- [x] `docs/cloudflare-mcp-setup.md` updated with what actually happened: the session's Cloudflare MCP connection only granted `dns_records:read`, not edit; the write attempt failed with an authentication error, and the 4 NS records were added manually through the Cloudflare dashboard instead of via MCP as the doc originally assumed.
+- [x] All `docs/milestone-*-evidence.md`, `docs/milestone-6-aws-audit.md`, `docs/postmortem.md`'s historical snapshot ID, and `docs/evidence/m6/*` left untouched — historical evidence stays accurate to what was true when it was recorded, even though it now describes pre-rename names.
+
+Explicitly not renamed / deferred:
+- Terraform environment directory names (`terraform/environments/{prod,dr,bootstrap,monitoring}`) — not part of the app/workload confusion, out of scope.
+- S3 state bucket name (`sagar-demos-terraform-state`) — pinned by a separate literal variable, unaffected by the `project_name` rename, left as-is by design (real migration risk, zero visible benefit).
+- DynamoDB lock table — unexpectedly swept into the rename anyway (`sentinel-aws-dr-terraform-lock` -> `pilotlight-terraform-lock`) as a side effect of `project_name`, contrary to the original intent to leave bootstrap backend internals alone. Confirmed harmless (transient empty lock table, nothing was mid-lock) and left renamed by owner decision rather than reverted with another destroy/recreate.
+- `docs/aws-dr-architecture.drawio` — stays deferred per the existing M7 instruction; not touched by this rebrand.
+- A fresh deploy of prod/dr/monitoring under the new names — natural next action, left for whenever the next drill is triggered via the existing `full-deploy`/`monitor.yml`/`workload.yml` paths, not part of this rebrand's scope.
+
+Acceptance criteria:
+- [x] `apps/monitor` and `apps/url-shortener` build, vet, and test clean; `docker compose up` proves the monitor reaches the workload via its new compose hostname.
+- [x] `terraform fmt/validate/tflint/checkov` pass in all four environments; `terraform plan` shows a clean fresh-create plan for prod and monitoring, and dr blocked only by expected not-yet-existing dependencies, all under the new naming.
+- [x] Live: new Route53 zone created and delegated, GitHub repo renamed, CI authenticates end to end (3 workflows green across the final commit), DNS resolves publicly and authoritatively for the new zone.
+- [x] Grep sweep for `sentinel`/`sentinal-aws-disastor-recovery` across the repo returns zero hits outside `docs/milestone-*-evidence.md`, `docs/milestone-6-aws-audit.md`, `docs/postmortem.md`, and `docs/evidence/m6/`.
+
 ## 7. Timeline
 
-M0-M6 were completed as the original coupled architecture. M7 is a separate re-architecture phase with repository implementation, isolated monitoring deployment, workload migration, and one fresh drill. M8 contains optional cleanup and improvement work. Preserve historical estimates and evidence rather than rewriting them as if the two-plane design existed during M6.
+M0-M6 were completed as the original coupled architecture. M7 is a separate re-architecture phase with repository implementation, isolated monitoring deployment, workload migration, and one fresh drill. M8 contains optional cleanup and improvement work. M9 is the Sentinel -> Pilotlight rebrand, executed after M7's live drill. Preserve historical estimates and evidence rather than rewriting them as if the two-plane design or Pilotlight naming existed during M6 or M7.
 
 ## 8. CV Bullet (final, revise only after Milestone 7)
 

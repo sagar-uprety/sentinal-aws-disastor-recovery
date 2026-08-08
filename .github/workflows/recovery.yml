@@ -114,14 +114,14 @@ jobs:
             --db-snapshot-identifier "$SNAPSHOT_ID" \
             --query 'DBSnapshots[0].[Status,DBInstanceIdentifier,Encrypted,SnapshotCreateTime]' --output text)"
           snapshot_age=$(( $(date -u +%s) - $(date -u -d "$snapshot_created" +%s) ))
-          if [ "$snapshot_status" != "available" ] || [ "$snapshot_source" != "sentinel-aws-dr-dr" ] || [ "$snapshot_encrypted" != "True" ] || [ "$snapshot_age" -gt 21600 ] || [[ "$SNAPSHOT_ID" != sentinel-aws-dr-dr-pre-failback-* ]]; then
+          if [ "$snapshot_status" != "available" ] || [ "$snapshot_source" != "pilotlight-dr" ] || [ "$snapshot_encrypted" != "True" ] || [ "$snapshot_age" -gt 21600 ] || [[ "$SNAPSHOT_ID" != pilotlight-dr-pre-failback-* ]]; then
             echo "Safety snapshot must be a fresh encrypted snapshot of the active DR writer." >&2
             exit 1
           fi
 
           read -r dr_status dr_source dr_arn dr_multi_az <<<"$(aws rds describe-db-instances \
             --region eu-west-1 \
-            --db-instance-identifier sentinel-aws-dr-dr \
+            --db-instance-identifier pilotlight-dr \
             --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,DBInstanceArn,MultiAZ]' \
             --output text)"
           if [ "$dr_status" != "available" ] || { [ -n "$dr_source" ] && [ "$dr_source" != "None" ]; } || [ "$dr_multi_az" != "True" ]; then
@@ -138,15 +138,15 @@ jobs:
         run: |
           task_definition="$(aws ecs describe-services \
             --region eu-west-1 \
-            --cluster sentinel-aws-dr-dr \
-            --services sentinel-aws-dr-dr \
+            --cluster pilotlight-dr \
+            --services pilotlight-dr \
             --query 'services[0].taskDefinition' --output text)"
           # JMESPath backticks are literals, not shell substitutions.
           # shellcheck disable=SC2016
           image="$(aws ecs describe-task-definition \
             --region eu-west-1 \
             --task-definition "$task_definition" \
-            --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+            --query 'taskDefinition.containerDefinitions[?name==`shortener`].image | [0]' --output text)"
           image_digest="${image##*@}"
           [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
@@ -211,13 +211,13 @@ jobs:
             --query 'DBSnapshots[0].[Status,DBInstanceIdentifier,Encrypted,SnapshotCreateTime]' --output text)"
           snapshot_age=$(( $(date -u +%s) - $(date -u -d "$snapshot_created" +%s) ))
           test "$snapshot_status" = "available"
-          test "$snapshot_source" = "sentinel-aws-dr-dr"
+          test "$snapshot_source" = "pilotlight-dr"
           test "$snapshot_encrypted" = "True"
           test "$snapshot_age" -le 21600
-          [[ "$SNAPSHOT_ID" == sentinel-aws-dr-dr-pre-failback-* ]]
+          [[ "$SNAPSHOT_ID" == pilotlight-dr-pre-failback-* ]]
           read -r dr_status dr_source dr_multi_az <<<"$(aws rds describe-db-instances \
             --region eu-west-1 \
-            --db-instance-identifier sentinel-aws-dr-dr \
+            --db-instance-identifier pilotlight-dr \
             --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
           test "$dr_status" = "available"
           { [ -z "$dr_source" ] || [ "$dr_source" = "None" ]; }
@@ -243,17 +243,17 @@ jobs:
 
       - name: Verify primary reverse replica
         run: |
-          aws rds wait db-instance-available --region eu-central-1 --db-instance-identifier sentinel-aws-dr-prod
+          aws rds wait db-instance-available --region eu-central-1 --db-instance-identifier pilotlight-prod
           source="$(aws rds describe-db-instances \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           desired="$(aws ecs describe-services \
             --region eu-central-1 \
-            --cluster sentinel-aws-dr-prod \
-            --services sentinel-aws-dr-prod \
+            --cluster pilotlight-prod \
+            --services pilotlight-prod \
             --query 'services[0].desiredCount' --output text)"
-          [[ "$source" == *"sentinel-aws-dr-dr"* ]]
+          [[ "$source" == *"pilotlight-dr"* ]]
           test "$desired" = "0"
 
   failback-reset-plan:
@@ -285,13 +285,13 @@ jobs:
 
       - name: Verify traffic and primary readiness
         run: |
-          curl --fail --show-error --silent https://app.sentinel.sagaruprety.com.np/healthz >/dev/null
-          topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
+          curl --fail --show-error --silent https://shortener.pilotlight.sagaruprety.com.np/healthz >/dev/null
+          topology="$(curl --fail --show-error --silent https://monitor.pilotlight.sagaruprety.com.np/topology)"
           jq -e 'any(.regions[]; .region == "eu-central-1" and .database.available == true and .database.multi_az == true)' >/dev/null <<<"$topology"
 
           read -r status source <<<"$(aws rds describe-db-instances \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
           if [ "$status" != "available" ] || { [ -n "$source" ] && [ "$source" != "None" ]; }; then
             echo "Primary must be an available standalone writer before DR reset." >&2
@@ -306,15 +306,15 @@ jobs:
         run: |
           task_definition="$(aws ecs describe-services \
             --region eu-central-1 \
-            --cluster sentinel-aws-dr-prod \
-            --services sentinel-aws-dr-prod \
+            --cluster pilotlight-prod \
+            --services pilotlight-prod \
             --query 'services[0].taskDefinition' --output text)"
           # JMESPath backticks are literals, not shell substitutions.
           # shellcheck disable=SC2016
           image="$(aws ecs describe-task-definition \
             --region eu-central-1 \
             --task-definition "$task_definition" \
-            --query 'taskDefinition.containerDefinitions[?name==`sentinel`].image | [0]' --output text)"
+            --query 'taskDefinition.containerDefinitions[?name==`shortener`].image | [0]' --output text)"
           image_digest="${image##*@}"
           [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
@@ -392,12 +392,12 @@ jobs:
 
       - name: Recheck primary traffic and readiness
         run: |
-          curl --fail --show-error --silent https://app.sentinel.sagaruprety.com.np/healthz >/dev/null
-          topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology)"
+          curl --fail --show-error --silent https://shortener.pilotlight.sagaruprety.com.np/healthz >/dev/null
+          topology="$(curl --fail --show-error --silent https://monitor.pilotlight.sagaruprety.com.np/topology)"
           jq -e 'any(.regions[]; .region == "eu-central-1" and .database.available == true and .database.multi_az == true)' >/dev/null <<<"$topology"
           read -r status source <<<"$(aws rds describe-db-instances \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
           test "$status" = "available"
           { [ -z "$source" ] || [ "$source" = "None" ]; }
@@ -436,17 +436,17 @@ jobs:
 
       - name: Verify restored pilot light
         run: |
-          aws rds wait db-instance-available --region eu-west-1 --db-instance-identifier sentinel-aws-dr-dr
+          aws rds wait db-instance-available --region eu-west-1 --db-instance-identifier pilotlight-dr
           source="$(aws rds describe-db-instances \
             --region eu-west-1 \
-            --db-instance-identifier sentinel-aws-dr-dr \
+            --db-instance-identifier pilotlight-dr \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           desired="$(aws ecs describe-services \
             --region eu-west-1 \
-            --cluster sentinel-aws-dr-dr \
-            --services sentinel-aws-dr-dr \
+            --cluster pilotlight-dr \
+            --services pilotlight-dr \
             --query 'services[0].desiredCount' --output text)"
-          [[ "$source" == *"sentinel-aws-dr-prod"* ]]
+          [[ "$source" == *"pilotlight-prod"* ]]
           test "$desired" = "0"
 
   credential-repair:
@@ -474,21 +474,21 @@ jobs:
         run: |
           read -r prod_status prod_source prod_multi_az <<<"$(aws rds describe-db-instances \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
           dr_source="$(aws rds describe-db-instances \
             --region eu-west-1 \
-            --db-instance-identifier sentinel-aws-dr-dr \
+            --db-instance-identifier pilotlight-dr \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           read -r dr_desired dr_running <<<"$(aws ecs describe-services \
             --region eu-west-1 \
-            --cluster sentinel-aws-dr-dr \
-            --services sentinel-aws-dr-dr \
+            --cluster pilotlight-dr \
+            --services pilotlight-dr \
             --query 'services[0].[desiredCount,runningCount]' --output text)"
           test "$prod_status" = "available"
           { [ -z "$prod_source" ] || [ "$prod_source" = "None" ]; }
           test "$prod_multi_az" = "True"
-          [[ "$dr_source" == *"sentinel-aws-dr-prod"* ]]
+          [[ "$dr_source" == *"pilotlight-prod"* ]]
           test "$dr_desired" = "0"
           test "$dr_running" = "0"
 
@@ -496,37 +496,37 @@ jobs:
         run: |
           db_password="$(aws ssm get-parameter \
             --region eu-central-1 \
-            --name /sentinel-aws-dr/prod/database/password \
+            --name /pilotlight/prod/database/password \
             --with-decryption \
             --query 'Parameter.Value' --output text)"
           trap 'unset db_password' EXIT
           aws rds modify-db-instance \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod \
+            --db-instance-identifier pilotlight-prod \
             --master-user-password "$db_password" \
             --apply-immediately >/dev/null
           unset db_password
           aws rds wait db-instance-available \
             --region eu-central-1 \
-            --db-instance-identifier sentinel-aws-dr-prod
+            --db-instance-identifier pilotlight-prod
 
       - name: Restart prod tasks with reconciled credential
         run: |
           aws ecs update-service \
             --region eu-central-1 \
-            --cluster sentinel-aws-dr-prod \
-            --service sentinel-aws-dr-prod \
+            --cluster pilotlight-prod \
+            --service pilotlight-prod \
             --force-new-deployment >/dev/null
           aws ecs wait services-stable \
             --region eu-central-1 \
-            --cluster sentinel-aws-dr-prod \
-            --services sentinel-aws-dr-prod
+            --cluster pilotlight-prod \
+            --services pilotlight-prod
 
       - name: Verify restored public health
         run: |
           for _ in {1..60}; do
-            topology="$(curl --fail --show-error --silent https://sentinel.sagaruprety.com.np/topology || true)"
-            workload_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://app.sentinel.sagaruprety.com.np/healthz || true)"
+            topology="$(curl --fail --show-error --silent https://monitor.pilotlight.sagaruprety.com.np/topology || true)"
+            workload_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://shortener.pilotlight.sagaruprety.com.np/healthz || true)"
             if [ "$workload_status" = "200" ] && jq -e 'any(.regions[]; .region == "eu-central-1" and .compute.desired == 2 and .compute.running == 2 and (.compute.availability_zones | length) == 2 and .database.available == true and .database.multi_az == true)' >/dev/null <<<"$topology"; then
               exit 0
             fi

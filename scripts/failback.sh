@@ -9,14 +9,14 @@ source "$SCRIPT_DIR/drill-lib.sh"
 
 PROD_REGION="eu-central-1"
 DR_REGION="eu-west-1"
-PROD_DB_ID="sentinel-aws-dr-prod"
-DR_DB_ID="sentinel-aws-dr-dr"
-PROD_CLUSTER="sentinel-aws-dr-prod"
-PROD_SERVICE="sentinel-aws-dr-prod"
-DR_CLUSTER="sentinel-aws-dr-dr"
-DR_SERVICE="sentinel-aws-dr-dr"
-WORKLOAD_HOST="app.sentinel.sagaruprety.com.np"
-MONITOR_HOST="sentinel.sagaruprety.com.np"
+PROD_DB_ID="pilotlight-prod"
+DR_DB_ID="pilotlight-dr"
+PROD_CLUSTER="pilotlight-prod"
+PROD_SERVICE="pilotlight-prod"
+DR_CLUSTER="pilotlight-dr"
+DR_SERVICE="pilotlight-dr"
+WORKLOAD_HOST="shortener.pilotlight.sagaruprety.com.np"
+MONITOR_HOST="monitor.pilotlight.sagaruprety.com.np"
 FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-300}"
 
 latest_replica_lag_json() {
@@ -60,7 +60,7 @@ require_dr_writes_frozen() {
     --query 'services[0].[desiredCount,runningCount]' --output text)"
   target_group_arn="$(aws elbv2 describe-target-groups \
     --region "$DR_REGION" \
-    --names "sentinel-aws-dr-dr-tg" \
+    --names "pilotlight-dr-tg" \
     --query 'TargetGroups[0].TargetGroupArn' --output text)"
   healthy="$(aws elbv2 describe-target-health \
     --region "$DR_REGION" \
@@ -145,11 +145,11 @@ freeze-writes)
 
   dr_alb_dns="$(aws elbv2 describe-load-balancers \
     --region "$DR_REGION" \
-    --names "sentinel-aws-dr-dr-alb" \
+    --names "pilotlight-dr-alb" \
     --query 'LoadBalancers[0].DNSName' --output text)"
   target_group_arn="$(aws elbv2 describe-target-groups \
     --region "$DR_REGION" \
-    --names "sentinel-aws-dr-dr-tg" \
+    --names "pilotlight-dr-tg" \
     --query 'TargetGroups[0].TargetGroupArn' --output text)"
   require_current_event "dr_link_slug"
   final_link_slug="$(current_event_ts dr_link_slug)"
@@ -341,7 +341,7 @@ ready)
 
   alb_dns="$(aws elbv2 describe-load-balancers \
     --region "$PROD_REGION" \
-    --names "sentinel-aws-dr-prod-alb" \
+    --names "pilotlight-prod-alb" \
     --query 'LoadBalancers[0].DNSName' --output text)"
   if ! require_short_link_direct "$WORKLOAD_HOST" "$alb_dns" "$known_link_slug"; then
     echo "ERROR: promoted prod does not contain DR-created link $known_link_slug." >&2

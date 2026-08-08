@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 DRILL_LOG="${DRILL_LOG:-./drill-events.log}"
-LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/sentinel-aws-dr/prod/link-create-token}"
+LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/pilotlight/prod/link-create-token}"
 
 log_event() {
   local timestamp
