@@ -473,7 +473,6 @@ Acceptance criteria:
 
 - [ ] Cost Explorer finalization: record actual AWS session cost and duration in README.
 - [ ] Architecture PNG export from `docs/aws-dr-architecture.drawio`.
-- [ ] Replace `PowerUserAccess` with a CloudTrail-derived least-privilege IAM policy using IAM Access Analyzer. Requires creating a CloudTrail trail first.
 - [ ] Optional second full regional drill for repeatability evidence.
 - [ ] **DESTROY:** workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap and isolated monitoring plane preserved unless separately approved for destruction.
 
