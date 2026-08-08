@@ -119,7 +119,7 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([
     {
-      name  = "sentinel"
+      name  = "shortener"
       image = var.image_uri
       portMappings = [
         {
@@ -149,7 +149,7 @@ resource "aws_ecs_task_definition" "app" {
         options = {
           "awslogs-group"         = "/ecs/${var.project_name}-${var.environment}"
           "awslogs-region"        = data.aws_region.current.region
-          "awslogs-stream-prefix" = "sentinel"
+          "awslogs-stream-prefix" = "shortener"
         }
       }
     }
@@ -180,7 +180,7 @@ resource "aws_ecs_service" "app" {
 
   load_balancer {
     target_group_arn = var.target_group_arn
-    container_name   = "sentinel"
+    container_name   = "shortener"
     container_port   = var.container_port
   }
 

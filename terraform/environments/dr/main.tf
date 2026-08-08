@@ -95,8 +95,8 @@ module "ecs" {
   # the prod environment) mirrors the image into this region.
   image_uri                 = "${local.ecr_repository_url}@${local.prod_image_digest}"
   db_endpoint               = module.rds.endpoint
-  db_name                   = "sentinel"
-  db_user                   = "sentinel"
+  db_name                   = "pilotlight"
+  db_user                   = "pilotlight"
   db_password_ssm_arn       = data.aws_ssm_parameter.database_password_dr.arn
   link_create_token_ssm_arn = data.aws_ssm_parameter.link_create_token_dr.arn
 
@@ -132,8 +132,8 @@ module "rds" {
   replicate_source_db_arn = data.aws_db_instance.prod.db_instance_arn
   kms_key_id              = data.aws_kms_key.rds.arn
 
-  db_name  = "sentinel"
-  username = "sentinel"
+  db_name  = "pilotlight"
+  username = "pilotlight"
 }
 
 # ECR replication (configured in the prod environment) mirrors the
@@ -144,6 +144,6 @@ data "aws_ecr_repository" "app" {
 
 locals {
   ecr_repository_url = data.aws_ecr_repository.app.repository_url
-  prod_container     = one([for container in jsondecode(nonsensitive(data.aws_ecs_task_definition.prod.container_definitions)) : container if container.name == "sentinel"])
+  prod_container     = one([for container in jsondecode(nonsensitive(data.aws_ecs_task_definition.prod.container_definitions)) : container if container.name == "shortener"])
   prod_image_digest  = split("@", local.prod_container.image)[1]
 }

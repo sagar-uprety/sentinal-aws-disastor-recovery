@@ -119,7 +119,7 @@ resource "aws_ecs_task_definition" "main" {
   }
 
   container_definitions = jsonencode([{
-    name      = "sentinel-monitor"
+    name      = "monitor"
     image     = var.image_uri
     essential = true
     portMappings = [{
@@ -177,7 +177,7 @@ resource "aws_ecs_service" "main" {
 
   load_balancer {
     target_group_arn = var.target_group_arn
-    container_name   = "sentinel-monitor"
+    container_name   = "monitor"
     container_port   = var.container_port
   }
 

@@ -2,7 +2,7 @@ provider "aws" {
   region = "eu-west-1"
   default_tags {
     tags = {
-      Project     = "sentinel-aws-dr"
+      Project     = "pilotlight"
       ManagedBy   = "terraform"
       Environment = "dr"
     }

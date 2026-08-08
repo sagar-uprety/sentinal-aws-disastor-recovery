@@ -1,6 +1,6 @@
 # Monitor Service Module
 
-Runs the isolated Sentinel monitoring application on ECS Fargate with monitor-owned persistence and read-only workload topology access.
+Runs the isolated Pilotlight monitor on ECS Fargate with monitor-owned persistence and read-only workload topology access.
 
 ## Design Intent
 

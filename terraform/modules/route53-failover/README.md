@@ -53,7 +53,7 @@ No modules.
 | <a name="input_primary_alb_zone_id"></a> [primary\_alb\_zone\_id](#input\_primary\_alb\_zone\_id) | Canonical hosted zone ID of the primary (prod) ALB. | `string` | n/a | yes |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
 | <a name="input_record_name"></a> [record\_name](#input\_record\_name) | Fully qualified record name where the failover pair publishes the application. | `string` | n/a | yes |
-| <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Hosted zone ID of the delegated sentinel.sagaruprety.com.np zone. | `string` | n/a | yes |
+| <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Hosted zone ID of the delegated pilotlight.sagaruprety.com.np zone. | `string` | n/a | yes |
 
 ## Outputs
 

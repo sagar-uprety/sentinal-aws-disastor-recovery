@@ -60,5 +60,5 @@ variable "github_org" {
 variable "github_repo" {
   description = "GitHub repository name, for the OIDC trust policy."
   type        = string
-  default     = "sentinal-aws-disastor-recovery"
+  default     = "aws-pilotlight-multi-region-dr"
 }
