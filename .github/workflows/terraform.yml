@@ -54,6 +54,11 @@ on:
         description: Monitor image SHA256 digest. Optional for full-deploy; built from source if not provided.
         required: false
         type: string
+      create_arc:
+        description: Provision (true) or tear down (false) the DR root's ARC cluster/controls. Applies only to deploy and full-deploy.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -335,7 +340,7 @@ jobs:
       - name: Plan DR pilot light
         if: inputs.operation == 'deploy'
         working-directory: terraform/environments/dr
-        run: terraform plan -input=false -lock-timeout=5m -out=dr.tfplan
+        run: terraform plan -input=false -lock-timeout=5m -var=create_arc=${{ inputs.create_arc }} -out=dr.tfplan
 
       - name: Show DR pilot-light plan
         if: inputs.operation == 'deploy'
@@ -600,7 +605,7 @@ jobs:
 
       - name: Plan DR pilot light
         working-directory: terraform/environments/dr
-        run: terraform plan -input=false -lock-timeout=5m -out=dr.tfplan
+        run: terraform plan -input=false -lock-timeout=5m -var=create_arc=${{ inputs.create_arc }} -out=dr.tfplan
 
       - name: Show DR pilot-light plan
         working-directory: terraform/environments/dr
