@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"sentinel-aws-dr/app/internal/store"
-	"sentinel-aws-dr/app/internal/topology"
+	"aws-pilotlight-multi-region-dr/apps/monitor/internal/store"
+	"aws-pilotlight-multi-region-dr/apps/monitor/internal/topology"
 )
 
 func HandleHealthz(dataStore store.Store) http.HandlerFunc {

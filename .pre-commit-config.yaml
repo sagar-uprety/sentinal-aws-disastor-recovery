@@ -51,10 +51,11 @@ repos:
     rev: v2.12.2
     hooks:
       - id: golangci-lint-full
-        entry: bash -c 'cd app && golangci-lint run --fix --config=../.golangci.yml'
+        name: golangci-lint monitor
+        entry: bash -c 'cd apps/monitor && golangci-lint run --fix --config=../../.golangci.yml'
       - id: golangci-lint-full
-        name: golangci-lint workload
-        entry: bash -c 'cd workload && golangci-lint run --fix --config=../.golangci.yml'
+        name: golangci-lint shortener
+        entry: bash -c 'cd apps/url-shortener && golangci-lint run --fix --config=../../.golangci.yml'
 
   - repo: local
     hooks:
@@ -67,65 +68,65 @@ repos:
       - id: go-vet
         name: go vet
         description: Static analysis for Go
-        entry: bash -c 'cd app && go vet ./...'
+        entry: bash -c 'cd apps/monitor && go vet ./...'
         language: system
         types: [go]
         pass_filenames: false
-      - id: workload-go-vet
-        name: workload go vet
-        entry: bash -c 'cd workload && go vet ./...'
+      - id: shortener-go-vet
+        name: shortener go vet
+        entry: bash -c 'cd apps/url-shortener && go vet ./...'
         language: system
         types: [go]
         pass_filenames: false
       - id: go-test
         name: go test
         description: Run Go tests
-        entry: bash -c 'cd app && go test ./...'
+        entry: bash -c 'cd apps/monitor && go test ./...'
         language: system
         types: [go]
         pass_filenames: false
-      - id: workload-go-test
-        name: workload go test
-        entry: bash -c 'cd workload && go test ./...'
+      - id: shortener-go-test
+        name: shortener go test
+        entry: bash -c 'cd apps/url-shortener && go test ./...'
         language: system
         types: [go]
         pass_filenames: false
       - id: go-race
         name: go test -race
         description: Race detection
-        entry: bash -c 'cd app && go test -race ./...'
+        entry: bash -c 'cd apps/monitor && go test -race ./...'
         language: system
         types: [go]
         pass_filenames: false
-      - id: workload-go-race
-        name: workload go test -race
-        entry: bash -c 'cd workload && go test -race ./...'
+      - id: shortener-go-race
+        name: shortener go test -race
+        entry: bash -c 'cd apps/url-shortener && go test -race ./...'
         language: system
         types: [go]
         pass_filenames: false
       - id: go-mod-tidy
         name: go mod tidy
         description: Clean up go.mod/go.sum
-        entry: bash -c 'cd app && go mod tidy'
+        entry: bash -c 'cd apps/monitor && go mod tidy'
         language: system
         files: go\.mod$
         pass_filenames: false
-      - id: workload-go-mod-tidy
-        name: workload go mod tidy
-        entry: bash -c 'cd workload && go mod tidy'
+      - id: shortener-go-mod-tidy
+        name: shortener go mod tidy
+        entry: bash -c 'cd apps/url-shortener && go mod tidy'
         language: system
-        files: ^workload/go\.mod$
+        files: ^apps/url-shortener/go\.mod$
         pass_filenames: false
       - id: govulncheck
         name: govulncheck
         description: Check for known vulnerabilities
-        entry: bash -c 'cd app && govulncheck ./...'
+        entry: bash -c 'cd apps/monitor && govulncheck ./...'
         language: system
         types: [go]
         pass_filenames: false
-      - id: workload-govulncheck
-        name: workload govulncheck
-        entry: bash -c 'cd workload && govulncheck ./...'
+      - id: shortener-govulncheck
+        name: shortener govulncheck
+        entry: bash -c 'cd apps/url-shortener && govulncheck ./...'
         language: system
         types: [go]
         pass_filenames: false

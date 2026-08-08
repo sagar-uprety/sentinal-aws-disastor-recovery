@@ -1,4 +1,4 @@
-module sentinel-aws-dr/app
+module aws-pilotlight-multi-region-dr/apps/monitor
 
 go 1.26
 
