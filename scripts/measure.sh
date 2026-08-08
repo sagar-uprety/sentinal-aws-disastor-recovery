@@ -41,7 +41,7 @@ duration() {
   printf '%s' "$(( $(to_epoch "$2") - $(to_epoch "$1") ))"
 }
 
-for event in disaster_declared outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy pre_outage_link_verified_in_dr dr_write_verified traffic_switch_requested traffic_verified_dr primary_link_created_at replica_lag_seconds replica_lag_timestamp; do
+for event in disaster_declared outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy pre_outage_link_verified_in_dr dr_write_verified traffic_switch_requested_dr traffic_verified_dr primary_link_created_at replica_lag_seconds replica_lag_timestamp; do
   require_event "$event"
 done
 
@@ -53,7 +53,7 @@ stable_ts="$(event_ts dr_service_stable)"
 healthy_ts="$(event_ts dr_targets_healthy)"
 link_verified_ts="$(event_ts pre_outage_link_verified_in_dr)"
 write_ts="$(event_ts dr_write_verified)"
-switch_requested_ts="$(event_ts traffic_switch_requested)"
+switch_requested_ts="$(event_ts traffic_switch_requested_dr)"
 verified_ts="$(event_ts traffic_verified_dr)"
 primary_link_created_at="$(event_ts primary_link_created_at)"
 replica_lag="$(event_ts replica_lag_seconds)"
