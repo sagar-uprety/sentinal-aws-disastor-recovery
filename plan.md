@@ -457,7 +457,7 @@ Tasks:
 - [x] `monitor.yml` and `workload.yml` independently publish and deploy images. Both run to completion on 2026-08-08 (runs 31221676825, 31221678424), deploying live and verified.
 - [x] Drill scripts and runbooks use prod-created and DR-created links for failover and failback evidence. Fresh live drill evidence now exists: every link present on primary before the outage verified present in DR after promotion, and the DR-created link verified present on restored prod after failback.
 - [~] README, runbooks, cost text, least-privilege description, and M7 evidence template describe two-plane design. `docs/runbook-failover.md` and `docs/runbook-ha.md` rewritten with fresh M7 numbers and a real doc-vs-code drift fix (`runbook-ha.md`'s Multi-AZ drill command was missing the `CONFIRM_HA_DB_FAILOVER` gate added this session); `docs/milestone-7-evidence.md` filled in. README, cost text, and least-privilege description are not yet rewritten.
-- [ ] Canonical architecture diagram update is deferred by owner instruction. It remains non-complete and existing diagram must not be presented as current M7 architecture.
+- [x] Canonical architecture diagram updated during the M9 rebrand (2026-08-08). `docs/aws-dr-architecture.drawio` now shows the two-plane split: the isolated monitor is drawn as its own separate box outside both region groups (own VPC 10.2.0.0/24, ALB, ECS task, DynamoDB, regional services), with dashed blue read-only-polling edges into the prod and DR region boxes and its own direct Route53 alias (`monitor.pilotlight.sagaruprety.com.np`, always active, no ARC) -- not nested inside either region, deliberately kept visually separate so the diagram's focus stays on the pilot-light story. Title, Route53 zone label, and both workload alias edges (`shortener.pilotlight.sagaruprety.com.np`) updated to the current Pilotlight naming and DNS structure.
 - [x] Run a fresh HA and regional drill with the monitor continuously available. Done 2026-08-08: 3 HA drills, 1 regional failover, 1 failback, all live, all measured (see status note above). Historical M6 results remain labeled historical and are not conflated with this fresh evidence.
 
 Acceptance criteria:
@@ -472,7 +472,7 @@ Acceptance criteria:
 ### Milestone 8: Cleanup and future improvements (optional, does not block project completion)
 
 - [ ] Cost Explorer finalization: record actual AWS session cost and duration in README.
-- [ ] Architecture PNG export from `docs/aws-dr-architecture.drawio`.
+- [x] Architecture PNG export from `docs/aws-dr-architecture.drawio`. `docs/aws-dr-architecture.drawio.png` exported with the diagram XML embedded (still editable by reopening the PNG in draw.io), generated via the draw.io Desktop CLI (2026-08-08, alongside the M9 diagram update above).
 - [ ] Optional second full regional drill for repeatability evidence.
 - [ ] **DESTROY:** workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap and isolated monitoring plane preserved unless separately approved for destruction.
 
@@ -493,7 +493,7 @@ Explicitly not renamed / deferred:
 - Terraform environment directory names (`terraform/environments/{prod,dr,bootstrap,monitoring}`) — not part of the app/workload confusion, out of scope.
 - S3 state bucket name (`sagar-demos-terraform-state`) — pinned by a separate literal variable, unaffected by the `project_name` rename, left as-is by design (real migration risk, zero visible benefit).
 - DynamoDB lock table — unexpectedly swept into the rename anyway (`sentinel-aws-dr-terraform-lock` -> `pilotlight-terraform-lock`) as a side effect of `project_name`, contrary to the original intent to leave bootstrap backend internals alone. Confirmed harmless (transient empty lock table, nothing was mid-lock) and left renamed by owner decision rather than reverted with another destroy/recreate.
-- `docs/aws-dr-architecture.drawio` — stays deferred per the existing M7 instruction; not touched by this rebrand.
+- `docs/aws-dr-architecture.drawio` — was deferred through the initial rebrand commits above, then updated in a follow-up pass the same day (M7 acceptance criteria) once the two-plane layout was worked out; see that entry for what changed.
 - A fresh deploy of prod/dr/monitoring under the new names — natural next action, left for whenever the next drill is triggered via the existing `full-deploy`/`monitor.yml`/`workload.yml` paths, not part of this rebrand's scope.
 
 Acceptance criteria:
