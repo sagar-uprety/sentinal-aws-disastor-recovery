@@ -1,5 +1,17 @@
 data "aws_caller_identity" "current" {}
 
+# Transitional: trusts both the pre-rename and post-rename repo full-name
+# during the GitHub repo rename window, since this repo is on legacy mutable
+# OIDC sub claims (renamed after the token was minted, the sub value changes
+# to match). Drop the old entry once the rename is confirmed and CI has
+# authenticated successfully under the new name.
+locals {
+  github_repo_full_names = [
+    "sagar-uprety/sentinal-aws-disastor-recovery",
+    "${var.github_org}/${var.github_repo}",
+  ]
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
@@ -19,7 +31,7 @@ resource "aws_iam_role" "terraform_github_actions" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:terraform-production"
+          "token.actions.githubusercontent.com:sub" = [for repo in local.github_repo_full_names : "repo:${repo}:environment:terraform-production"]
         }
       }
     }]
@@ -39,7 +51,7 @@ resource "aws_iam_role" "terraform_github_plan" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:pull_request"
+          "token.actions.githubusercontent.com:sub" = [for repo in local.github_repo_full_names : "repo:${repo}:pull_request"]
         }
       }
     }]
