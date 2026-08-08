@@ -12,10 +12,9 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 - The immutable image digest exists in eu-west-1 ECR.
 - Regional database-password and link-creation-token SSM SecureString metadata and versions are current. Terraform generates both secrets through ephemeral values and write-only arguments.
 - Protected GitHub environments define `AWS_TERRAFORM_ROLE_ARN`, `AWS_ROLE_ARN`, and `AWS_MONITOR_ROLE_ARN`.
-- **Before a drill, provision ARC.** `terraform.yml`'s `deploy` operation does not expose `create_arc` as a dispatchable input, so this cannot currently be done through CI; apply the DR root locally with the override instead:
+- **Before a drill, provision ARC** through CI:
   ```bash
-  cd terraform/environments/dr
-  terraform apply -input=false -auto-approve -var=create_arc=true
+  gh workflow run terraform.yml --ref main -f operation=deploy -f target=dr -f create_arc=true
   ```
   Then initialize controls:
   ```bash
@@ -24,7 +23,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
   ARC controls must be primary `On`, DR `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
 - Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, ARC, and monitor-table DynamoDB operations. This project does not provision a separate local recovery role.
-- **After drill, tear down ARC** to save cost: `terraform apply -var=create_arc=false` in `terraform/environments/dr`, same as above. In practice this often happens automatically: any later `recovery.yml` apply against the DR root runs with default variables (`create_arc=false`), so the first failback apply after a drill will destroy ARC as a side effect even without this explicit step. Confirm actual state either way with `aws route53-recovery-control-config list-clusters --region us-west-2`.
+- **After drill, tear down ARC** to save cost: `gh workflow run terraform.yml --ref main -f operation=deploy -f target=dr -f create_arc=false`. In practice this often happens automatically: any later `recovery.yml` apply against the DR root runs with default variables (`create_arc=false`), so the first failback apply after a drill will destroy ARC as a side effect even without this explicit step. Confirm actual state either way with `aws route53-recovery-control-config list-clusters --region us-west-2`.
 
 ## Drill Sequence
 
