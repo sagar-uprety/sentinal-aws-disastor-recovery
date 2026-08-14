@@ -11,6 +11,7 @@ import (
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 )
 
+// canned ECS responses: one service at 2/2, two tasks split across two AZs (deliberately out of order to check the sort).
 type fakeECS struct{}
 
 func (fakeECS) DescribeServices(context.Context, *ecs.DescribeServicesInput, ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error) {
@@ -26,6 +27,7 @@ func (fakeECS) DescribeTasks(context.Context, *ecs.DescribeTasksInput, ...func(*
 	}}, nil
 }
 
+// canned RDS response; replica toggles whether the instance reports a replication source (drives the writer/read-replica role split).
 type fakeRDS struct{ replica bool }
 
 func (f fakeRDS) DescribeDBInstances(context.Context, *rds.DescribeDBInstancesInput, ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
@@ -39,6 +41,7 @@ func (f fakeRDS) DescribeDBInstances(context.Context, *rds.DescribeDBInstancesIn
 	return &rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{instance}}, nil
 }
 
+// builds a Service directly from fake region readers (bypassing New/AWS config) to check per-region compute+database aggregation.
 func TestSnapshotQueriesExplicitRegions(t *testing.T) {
 	service := &Service{regions: []regionReader{
 		{config: RegionConfig{Region: "eu-west-1", ECSCluster: "prod", ECSService: "workload", DatabaseIdentifier: "prod-db"}, ecsClient: fakeECS{}, rdsClient: fakeRDS{}},
@@ -57,6 +60,7 @@ func TestSnapshotQueriesExplicitRegions(t *testing.T) {
 	}
 }
 
+// a nil region config list must still produce an empty (never nil) Regions slice, so callers can safely range over it.
 func TestSnapshotWithoutConfiguredAWS(t *testing.T) {
 	snapshot := New(context.Background(), nil).Snapshot(context.Background())
 	if snapshot.Regions == nil || len(snapshot.Regions) != 0 {
