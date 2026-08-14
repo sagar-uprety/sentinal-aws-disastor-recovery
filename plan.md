@@ -471,7 +471,6 @@ Acceptance criteria:
 
 ### Milestone 8: Cleanup and future improvements (optional, does not block project completion)
 
-- [ ] Cost Explorer finalization: record actual AWS session cost and duration in README.
 - [x] Architecture PNG export from `docs/aws-dr-architecture.drawio`. `docs/aws-dr-architecture.drawio.png` exported with the diagram XML embedded (still editable by reopening the PNG in draw.io), generated via the draw.io Desktop CLI (2026-08-08, alongside the M9 diagram update above).
 - [ ] Optional second full regional drill for repeatability evidence.
 - [ ] **DESTROY:** workload teardown, DR before prod. Requires explicit two-stage user confirmation. Bootstrap and isolated monitoring plane preserved unless separately approved for destruction.
