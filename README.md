@@ -6,22 +6,24 @@ The monitor dashboard is served at `https://monitor.pilotlight.sagaruprety.com.n
 
 ## Status
 
-Milestones 0 through 6 are complete for the historical self-monitoring architecture. Milestone 7 repository implementation is in progress and has not been deployed or verified live. Current code defines an isolated monitor at `monitor.pilotlight.sagaruprety.com.np` in eu-west-1 and a URL shortener at `shortener.pilotlight.sagaruprety.com.np` across the existing prod and DR environments. Key measured historical results from the live drill on 2026-07-22:
+Milestones 0 through 7 are complete. M0-M6 built and live-drilled the historical self-monitoring architecture; M7 split it into an isolated monitor plane (`monitor.pilotlight.sagaruprety.com.np`, eu-west-1) observing a separate URL shortener (`shortener.pilotlight.sagaruprety.com.np`, prod eu-central-1 / DR pilot-light eu-west-1), then live-drilled the new two-plane architecture end to end on 2026-08-08. Two real bugs found during that drill (a monitor checker connection-reuse issue across DNS cutover, and a `measure.sh` event-name collision) were fixed and redeployed live; see [docs/milestone-7-evidence.md](docs/milestone-7-evidence.md) for the full account. Measured M7 results:
 
-- **RTO:** 538s (8m58s) against a 30-minute target
-- **RPO:** 0s row-based observation with 12s pre-promotion `ReplicaLag`
-- **Failback duration:** 840s (14m) from write freeze through verified prod traffic
-- **ECS task replacement:** 61s
-- **AZ capacity recovery:** 69s
-- **RDS Multi-AZ failover:** 432s
+- **RTO:** 666s (11m6s) against a 30-minute target
+- **RPO:** 26.0s, real CloudWatch `ReplicaLag` (target 60s)
+- **Failback duration:** 851s (14m11s) from write freeze through verified prod traffic
+- **HA: ECS task replacement:** 42s
+- **HA: AZ capacity recovery:** 55s
+- **HA: RDS Multi-AZ failover:** 412s
 
-All historical evidence is retained in `docs/milestone-6-evidence.md`, `docs/postmortem.md`, and `docs/evidence/m6/`. These values do not yet validate the new two-plane architecture. Milestone 8 contains optional cleanup, cost reporting, and destroy work.
+Every link present on primary before the outage was verified present in DR after promotion, and a DR-created link was verified present on prod after failback.
 
-See [plan.md](plan.md) for milestones and [docs/milestone-7-evidence.md](docs/milestone-7-evidence.md) for pending two-plane validation gates.
+Historical M0-M6 results (self-monitoring architecture, superseded by the M7 split) remain retained as evidence in `docs/milestone-6-evidence.md`, `docs/postmortem.md`, and `docs/evidence/m6/`, and are not conflated with the M7 numbers above.
+
+Workload, DR, and monitoring infrastructure are ephemeral by design (see Hard Rule 4 in [plan.md](plan.md)) and are currently destroyed after the M7 drill; only `bootstrap` (state backend, OIDC roles, delegated Route53 zone) is live. The two-plane isolation described below is proven both structurally (DR's Terraform data sources reference only prod, never monitoring; monitoring's Terraform config has no workload data sources at all) and by empty-state `terraform plan`/`terraform plan -destroy` runs on 2026-08-14 confirming zero cross-plane resources in any state file. See [plan.md](plan.md) for milestones and [docs/milestone-7-evidence.md](docs/milestone-7-evidence.md) for full M7 evidence.
 
 ## Two-Plane Architecture
 
-Repository code currently defines, but has not deployed:
+Deployed and live-drilled 2026-08-08 (currently torn down between drills, per the ephemeral-infrastructure design above):
 
 - An isolated monitor in eu-west-1 with separate Terraform state, VPC, ECS service, ALB, ECR repository, and on-demand DynamoDB table.
 - A monitor task that checks `https://shortener.pilotlight.sagaruprety.com.np/healthz` and reads explicit prod and DR ECS and RDS state through read-only AWS APIs.
@@ -59,7 +61,17 @@ Configure protected GitHub environments `terraform-production` and `production`,
 
 Bootstrap persists the Terraform state backend, GitHub OIDC roles, and delegated Route53 zone so nameservers remain stable while workload environments are repeatedly created and destroyed. Its Terraform role deliberately starts with AWS `PowerUserAccess` plus exact workload IAM role management, exact `iam:PassRole` targets, and protected-environment OIDC trust. After the full M6 deploy/destroy exercise, CloudTrail-backed IAM Access Analyzer output must be reviewed and tested before replacing `PowerUserAccess` with the observed least-privilege service policy.
 
-Use [docs/runbook-failover.md](docs/runbook-failover.md) for recovery steps. Existing diagram remains historical; its M7 update is deferred by owner instruction and is not complete. Deployment and teardown ordering is defined in `plan.md` and automated by `.github/workflows/terraform.yml`.
+Use [docs/runbook-failover.md](docs/runbook-failover.md) for recovery steps. `docs/aws-dr-architecture.drawio` was updated for the two-plane split (isolated monitor drawn as its own box outside both region groups, dashed read-only polling edges into prod/DR, current Pilotlight DNS naming); see `docs/aws-dr-architecture.drawio.png` for an exported, still-editable copy. Deployment and teardown ordering is defined in `plan.md` and automated by `.github/workflows/terraform.yml`.
+
+### Cost
+
+The NAT gateway, ALB, ECS Fargate, RDS Multi-AZ, and SSM Parameter Store are the paid services this project deliberately uses; see plan.md section 4.4 for why each one is necessary and what would break without it. Optional VPC interface endpoints (ECR API/DKR, CloudWatch Logs, SSM) stay disabled by default because their fixed hourly cost is likely greater than the NAT processing they'd save at this traffic level. Actual per-session AWS cost is measured from Cost Explorer after a session, not estimated in advance; a final reported figure is Milestone 8 scope and is not yet recorded. Local `infracost scan` runs as a required pre-commit check before every deploy.
+
+### Least-privilege IAM
+
+- **Bootstrap's** Terraform role deliberately starts from `PowerUserAccess` (see above) pending a CloudTrail-derived least-privilege policy, tracked outside M7/M8.
+- **The monitor's** ECS task role holds only read-only `Describe*`/`List*`/`Get*` actions against ECS/RDS (wildcard resources only where those APIs require it, documented in `terraform/modules/monitor-service/main.tf`), plus scoped `dynamodb:PutItem`/`Query` on its own table ARN. It has no ECS, RDS, ARC, Route53, or Terraform mutation permissions.
+- **The workload's** ECS task execution role is scoped to the one SSM parameter ARN it needs (regional database password / operator token); it has no visibility into the monitor's DynamoDB table or IAM role.
 
 Normal Terraform deployment and teardown run through manually dispatched `.github/workflows/terraform.yml`; pushes run validation only so monitor and workload migrations cannot race their infrastructure foundations. Monitor and workload releases are also manual dispatches after their initial foundations exist. Both failback topology-reset stages run through the separately protected `.github/workflows/recovery.yml`. Time-sensitive promotion, traffic switching, and verification remain local scripts and assume the active AWS CLI credentials already have the required permissions; no separate local recovery role is provisioned.
 
@@ -73,7 +85,7 @@ For a deployment from empty monitor and workload state after bootstrap:
 6. Copy workload `sha256:...` digest and dispatch `terraform.yml` with `operation=deploy` and that `image_digest`. Terraform creates prod workload service, then DR pilot light from replicated image.
 7. Use `monitor.yml` and `workload.yml` independently for later releases.
 
-For the one-time M7 migration from the retained M6 workload, omit workload `foundation`: deploy the monitor through steps 1-3, dispatch `workload.yml` with `mode=publish-only` against the existing prod ECR repository, then dispatch Terraform `operation=deploy` with that workload digest. Prod creates the new token and URL-shortener task definition before the dependent DR plan runs. The DR state migration forgets its historical monitor-apex record without deleting the record now owned by monitoring.
+**Historical note:** the one-time M7 migration from the retained M6 workload used a variant of this sequence, omitting workload `foundation` and reusing the existing prod ECR repository, since prod already existed from M6. That path no longer applies now that workload/monitoring state is empty; use steps 1-7 above for any future deploy.
 
 Before the first monitoring foundation, bootstrap IAM needs one reviewed update because the existing Terraform OIDC role cannot grant itself access to new monitoring role names. Run `scripts/bootstrap.sh plan`, review the saved plan, then request explicit approval before `CONFIRM_BOOTSTRAP=APPLY_BOOTSTRAP scripts/bootstrap.sh apply`. Do not apply bootstrap changes through an unreviewed direct command.
 
