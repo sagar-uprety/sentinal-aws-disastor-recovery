@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"math"
-	"sort"
 	"sync"
 	"time"
 )
@@ -50,6 +49,7 @@ func (m *Memory) LatestStatuses(_ context.Context, since time.Time) ([]TargetSta
 	return []TargetStatus{statusFromChecks(latest, up, total)}, nil
 }
 
+// scans newest-first for the target's most recent `limit` checks; already in descending CheckedAt order, no further sort needed.
 func (m *Memory) History(_ context.Context, target string, limit int) ([]Check, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -59,7 +59,6 @@ func (m *Memory) History(_ context.Context, target string, limit int) ([]Check, 
 			result = append(result, m.checks[i])
 		}
 	}
-	sort.SliceStable(result, func(i, j int) bool { return result[i].CheckedAt.After(result[j].CheckedAt) })
 	return result, nil
 }
 
