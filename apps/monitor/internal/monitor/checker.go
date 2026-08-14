@@ -17,6 +17,7 @@ type Checker struct {
 	interval time.Duration
 }
 
+// builds a Checker with keep-alives disabled so DNS is re-resolved on every check (see Transport comment below).
 func NewChecker(dataStore store.Store, target string, interval, timeout time.Duration) *Checker {
 	return &Checker{
 		store: dataStore, target: target, interval: interval, now: time.Now,
@@ -35,6 +36,7 @@ func NewChecker(dataStore store.Store, target string, interval, timeout time.Dur
 	}
 }
 
+// runs an immediate check, then repeats on the configured interval until ctx is canceled.
 func (c *Checker) Run(ctx context.Context) {
 	slog.Info("checker started", "target", c.target, "interval_seconds", c.interval.Seconds())
 	c.runOnce(ctx)
@@ -51,6 +53,7 @@ func (c *Checker) Run(ctx context.Context) {
 	}
 }
 
+// performs one health check and persists the result; a store failure is logged, not returned (checker must keep running).
 func (c *Checker) runOnce(ctx context.Context) {
 	result := httpCheck(ctx, c.client, c.target)
 	attrs := []any{"target", result.url, "status_code", result.statusCode, "response_ms", result.responseMs, "is_up", result.isUp}
@@ -74,6 +77,7 @@ type checkResult struct {
 	isUp       bool
 }
 
+// issues a single GET, timing it regardless of outcome; isUp is true only for 2xx/3xx responses.
 func httpCheck(ctx context.Context, client *http.Client, url string) checkResult {
 	start := time.Now()
 	result := checkResult{url: url}

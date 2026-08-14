@@ -11,6 +11,7 @@ import (
 	"aws-pilotlight-multi-region-dr/apps/monitor/internal/topology"
 )
 
+// reports 503 when the store backend is unreachable; used by ECS/ALB health checks.
 func HandleHealthz(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := dataStore.Health(r.Context()); err != nil {
@@ -22,6 +23,7 @@ func HandleHealthz(dataStore store.Store) http.HandlerFunc {
 	}
 }
 
+// lists every target the checker currently tracks.
 func HandleTargets(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		targets, err := dataStore.ListTargets(r.Context())
@@ -37,6 +39,7 @@ func HandleTargets(dataStore store.Store) http.HandlerFunc {
 	}
 }
 
+// returns each target's latest check plus its uptime over the trailing 24h.
 func HandleStatus(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		statuses, err := dataStore.LatestStatuses(r.Context(), time.Now().UTC().Add(-24*time.Hour))
@@ -52,6 +55,7 @@ func HandleStatus(dataStore store.Store) http.HandlerFunc {
 	}
 }
 
+// returns recent checks for one target, requiring ?target and capping ?limit to protect the store.
 func HandleHistory(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("target")
@@ -60,6 +64,7 @@ func HandleHistory(dataStore store.Store) http.HandlerFunc {
 			return
 		}
 		limit := 100
+		// silently falls back to the 100 default on an invalid or out-of-range limit rather than erroring.
 		if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 500 {
 			limit = value
 		}
@@ -76,12 +81,14 @@ func HandleHistory(dataStore store.Store) http.HandlerFunc {
 	}
 }
 
+// serves the current prod/DR ECS+RDS topology snapshot.
 func HandleTopology(service *topology.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, service.Snapshot(r.Context()))
 	}
 }
 
+// writes value as a JSON response body with the given status code.
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

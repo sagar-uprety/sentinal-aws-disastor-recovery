@@ -7,12 +7,14 @@ import (
 	"time"
 )
 
+// in-process Store for local dev; process-lifetime only, no persistence or eviction.
 type Memory struct {
 	target Target
 	checks []Check
 	mu     sync.RWMutex
 }
 
+// starts empty, tracking a single fixed target URL.
 func NewMemory(targetURL string) *Memory {
 	return &Memory{target: Target{URL: targetURL}}
 }
@@ -28,6 +30,7 @@ func (m *Memory) RecordCheck(_ context.Context, check Check) error {
 	return nil
 }
 
+// walks checks newest-first and stops at the first one older than since, since checks is append-only and time-ordered.
 func (m *Memory) LatestStatuses(_ context.Context, since time.Time) ([]TargetStatus, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -64,9 +67,11 @@ func (m *Memory) History(_ context.Context, target string, limit int) ([]Check, 
 
 func (m *Memory) Health(context.Context) error { return nil }
 
+// builds a TargetStatus from the newest check plus an up/total sample count, rounding uptime to one decimal place.
 func statusFromChecks(latest Check, up, total int) TargetStatus {
 	uptime := 0.0
 	if total > 0 {
+		// x1000 then /10 rounds to one decimal without a float formatting call.
 		uptime = math.Round((1000*float64(up))/float64(total)) / 10
 	}
 	return TargetStatus{

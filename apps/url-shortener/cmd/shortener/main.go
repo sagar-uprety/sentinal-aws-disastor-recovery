@@ -24,6 +24,7 @@ type config struct {
 	port        int
 }
 
+// reads and validates all runtime configuration from environment variables.
 func loadConfig() (config, error) {
 	port, err := strconv.Atoi(envOrDefault("PORT", "8080"))
 	if err != nil || port < 1 || port > 65535 {
@@ -40,6 +41,7 @@ func loadConfig() (config, error) {
 	return config{databaseURL: databaseURL, createToken: token, port: port}, nil
 }
 
+// accepts either a single DATABASE_URL (local-dev convenience) or the five individual DB_* vars ECS injects in prod/DR, never both.
 func databaseConnectionURL() (string, error) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	dbValues := map[string]string{
@@ -73,6 +75,7 @@ func databaseConnectionURL() (string, error) {
 		Host:   net.JoinHostPort(dbValues["DB_HOST"], dbValues["DB_PORT"]),
 		Path:   dbValues["DB_NAME"],
 	}
+	// RDS requires TLS; url.URL has no dedicated query field, so this is set after construction.
 	parsed.RawQuery = "sslmode=require"
 	return parsed.String(), nil
 }
@@ -84,6 +87,7 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// sets up structured JSON logging, then delegates to run and exits non-zero on failure.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(); err != nil {
@@ -92,6 +96,7 @@ func main() {
 	}
 }
 
+// opens the database, runs migrations, then serves HTTP until a shutdown signal is received.
 func run() error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -119,6 +124,7 @@ func run() error {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
+	// gives an in-flight request up to 10s to finish before the process exits on SIGINT/SIGTERM.
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
