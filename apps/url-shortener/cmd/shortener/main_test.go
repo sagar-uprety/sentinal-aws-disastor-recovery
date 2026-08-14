@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// resets every config-relevant env var so tests don't leak state between each other; t.Setenv auto-restores the original value after the test.
 func clearEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{"DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "LINK_CREATE_TOKEN", "PORT"} {
@@ -35,6 +36,7 @@ func TestLoadConfigRejectsShortToken(t *testing.T) {
 	}
 }
 
+// the '@' and '/' in the password must come out percent-encoded in the assembled URL, or the DSN would be unparsable/wrong.
 func TestDatabaseConnectionURLFromParts(t *testing.T) {
 	clearEnvironment(t)
 	t.Setenv("DB_HOST", "database")

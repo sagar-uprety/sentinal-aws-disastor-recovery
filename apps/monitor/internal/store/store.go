@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// how long a DynamoDB-backed store keeps a check row before its TTL expires it.
 const Retention = 30 * 24 * time.Hour
 
 type Target struct {
@@ -29,9 +30,11 @@ type TargetStatus struct {
 	IsUp           bool      `json:"is_up"`
 }
 
+// backs the checker/HTTP handlers; implemented by both the in-memory and DynamoDB stores.
 type Store interface {
 	ListTargets(context.Context) ([]Target, error)
 	RecordCheck(context.Context, Check) error
+	// computes uptime using only checks at or after the given cutoff time.
 	LatestStatuses(context.Context, time.Time) ([]TargetStatus, error)
 	History(context.Context, string, int) ([]Check, error)
 	Health(context.Context) error

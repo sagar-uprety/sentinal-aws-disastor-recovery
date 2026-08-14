@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// real Postgres integration test; skipped by default (e.g. plain `go test ./...`) unless TEST_DATABASE_URL points at a live database.
 func TestStoreLifecycle(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -17,6 +18,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("open store: %v", openErr)
 	}
+	// drops the table so a re-run starts clean, since Migrate only ever creates it if missing.
 	t.Cleanup(func() {
 		if _, err := store.db.ExecContext(ctx, `DROP TABLE IF EXISTS links`); err != nil {
 			t.Errorf("drop links table: %v", err)

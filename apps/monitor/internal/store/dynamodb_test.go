@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
+// captures the inputs DynamoDB store methods send and returns canned items, so tests assert on the query shape without a real table.
 type fakeDynamoDB struct {
 	putInput   *dynamodb.PutItemInput
 	queryInput *dynamodb.QueryInput
@@ -57,6 +58,7 @@ func TestDynamoDBHistoryUsesDescendingQuery(t *testing.T) {
 	}
 }
 
+// both fixture checks fall inside the 24h window (one up, one down), so the resulting 50% uptime proves both were counted.
 func TestDynamoDBLatestStatusQueriesTimeRange(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	items := make([]map[string]types.AttributeValue, 0, 2)
