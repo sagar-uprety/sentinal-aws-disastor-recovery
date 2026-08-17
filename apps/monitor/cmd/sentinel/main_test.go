@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// resets every config-relevant env var so tests don't leak state between each other; t.Setenv auto-restores the original value after the test.
 func clearEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{

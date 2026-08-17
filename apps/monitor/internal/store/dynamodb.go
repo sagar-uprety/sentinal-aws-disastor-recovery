@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
+// narrow subset of the AWS SDK client this store needs; lets tests substitute a fake.
 type dynamodbAPI interface {
 	DescribeTable(context.Context, *dynamodb.DescribeTableInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
 	PutItem(context.Context, *dynamodb.PutItemInput, ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
@@ -24,6 +25,7 @@ type DynamoDB struct {
 	target Target
 }
 
+// on-wire shape of a check row: single-table pk/sk keys plus a TTL attribute DynamoDB uses to expire old rows.
 type checkItem struct {
 	PK string `dynamodbav:"pk"`
 	SK string `dynamodbav:"sk"`
@@ -31,6 +33,7 @@ type checkItem struct {
 	ExpiresAt int64 `dynamodbav:"expires_at"`
 }
 
+// wires a DynamoDB-backed Store for one fixed target URL against the given table.
 func NewDynamoDB(client dynamodbAPI, table, targetURL string) *DynamoDB {
 	return &DynamoDB{client: client, table: table, target: Target{URL: targetURL}, now: time.Now}
 }
@@ -56,6 +59,7 @@ func (d *DynamoDB) RecordCheck(ctx context.Context, check Check) error {
 	return nil
 }
 
+// queries checks since the cutoff for uptime; if none fall in that window it falls back to the single most recent check (0/0 uptime) so status still shows "last seen" instead of nothing.
 func (d *DynamoDB) LatestStatuses(ctx context.Context, since time.Time) ([]TargetStatus, error) {
 	checks, err := d.query(ctx, d.target.URL, since, d.now().UTC().Add(time.Second), 0)
 	if err != nil {
@@ -89,6 +93,7 @@ func (d *DynamoDB) Health(ctx context.Context) error {
 	return nil
 }
 
+// queries newest-first by sort key; a zero from/to means "no time bound", a positive limit means "single page, no pagination".
 func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time, limit int32) ([]Check, error) {
 	values := map[string]types.AttributeValue{":pk": &types.AttributeValueMemberS{Value: targetPK(target)}}
 	condition := "pk = :pk"
@@ -108,6 +113,7 @@ func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time,
 	}
 
 	checks := make([]Check, 0)
+	// bounded History calls fetch one page directly; unbounded LatestStatuses calls page through everything in the window.
 	if limit > 0 {
 		page, err := d.client.Query(ctx, input)
 		if err != nil {
@@ -139,6 +145,8 @@ func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time,
 	return checks, nil
 }
 
+// partition key groups all of one target's checks together.
 func targetPK(target string) string { return "TARGET#" + target }
 
+// sort key is time-ordered (RFC3339Nano), so a Query naturally returns checks in chronological order.
 func checkSK(checkedAt time.Time) string { return "CHECK#" + checkedAt.UTC().Format(time.RFC3339Nano) }

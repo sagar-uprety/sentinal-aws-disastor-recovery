@@ -16,6 +16,7 @@ import (
 	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/links"
 )
 
+// single-file UI (inline CSS/JS, no build step) served at GET /; talks to the JSON API below via fetch.
 const indexHTML = `<!doctype html>
 	<html lang="en">
 	<head>
@@ -71,6 +72,7 @@ const indexHTML = `<!doctype html>
 
 var slugPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 
+// narrow persistence dependency the server needs; implemented by links.Store, letting tests substitute a fake.
 type store interface {
 	Ping(context.Context) error
 	Create(context.Context, string, string) (links.Link, error)
@@ -83,6 +85,7 @@ type server struct {
 	token string
 }
 
+// builds the full HTTP handler: health, link CRUD/redirect, and the static index page.
 func New(store store, token string) http.Handler {
 	s := &server{store: store, token: token}
 	mux := http.NewServeMux()
@@ -94,6 +97,7 @@ func New(store store, token string) http.Handler {
 	return mux
 }
 
+// reports 503 when the database is unreachable; used by ECS/ALB health checks.
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
@@ -102,6 +106,7 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// creates a short link behind the operator token; rejects malformed slugs/URLs and duplicate slugs.
 func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r.Header.Get("Authorization")) {
 		writeError(w, http.StatusUnauthorized, "valid operator token required")
@@ -117,6 +122,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	// a second Decode call that doesn't hit io.EOF means there was trailing content after the first JSON value.
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "body must contain one JSON object")
 		return
@@ -142,6 +148,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, link)
 }
 
+// returns the 50 most recently created links.
 func (s *server) list(w http.ResponseWriter, r *http.Request) {
 	result, err := s.store.List(r.Context(), 50)
 	if err != nil {
@@ -152,6 +159,7 @@ func (s *server) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// resolves a slug and 302s to its destination; 404s on an unknown slug.
 func (s *server) redirect(w http.ResponseWriter, r *http.Request) {
 	link, err := s.store.Get(r.Context(), r.PathValue("slug"))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -166,6 +174,7 @@ func (s *server) redirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, link.DestinationURL, http.StatusFound)
 }
 
+// serves the single-page UI.
 func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -174,6 +183,7 @@ func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// checks the bearer token in constant time to avoid leaking its value through response-time differences.
 func (s *server) authorized(header string) bool {
 	provided, ok := strings.CutPrefix(header, "Bearer ")
 	if !ok || len(provided) != len(s.token) {
@@ -182,6 +192,7 @@ func (s *server) authorized(header string) bool {
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) == 1
 }
 
+// rejects anything but a canonical http/https URL with no embedded credentials.
 func validDestination(raw string) bool {
 	parsed, err := url.ParseRequestURI(raw)
 	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil
@@ -191,6 +202,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+// writes value as a JSON response body with the given status code.
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

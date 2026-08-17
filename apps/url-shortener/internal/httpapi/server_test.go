@@ -13,6 +13,7 @@ import (
 	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/links"
 )
 
+// in-memory stand-in for the store interface, keyed by slug; lets handler tests run without Postgres.
 type fakeStore struct {
 	items map[string]links.Link
 }
@@ -84,6 +85,7 @@ func TestCreateRequiresToken(t *testing.T) {
 	}
 }
 
+// both cases must fail validation before ever reaching the store: a slug with a space, and a non-http(s) destination scheme.
 func TestCreateValidatesInput(t *testing.T) {
 	handler := New(newFakeStore(), "operator-secret")
 	tests := []struct {

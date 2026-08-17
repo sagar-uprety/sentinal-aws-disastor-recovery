@@ -12,6 +12,7 @@ import (
 	"aws-pilotlight-multi-region-dr/apps/monitor/internal/store"
 )
 
+// in-memory stand-in for store.Store; records what handlers/checker do to it without touching DynamoDB.
 type fakeStore struct {
 	health   error
 	targets  []store.Target
@@ -56,6 +57,7 @@ func TestHTTPCheckClassifiesResponses(t *testing.T) {
 	}
 }
 
+// client timeout (1ms) is far shorter than the server's fixed 100ms delay, so this reliably times out rather than racing.
 func TestHTTPCheckTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(100 * time.Millisecond)
@@ -73,6 +75,7 @@ func TestCheckerRecordsConfiguredTarget(t *testing.T) {
 	defer server.Close()
 	dataStore := &fakeStore{}
 	checker := NewChecker(dataStore, server.URL, time.Minute, time.Second)
+	// overrides the checker's clock so CheckedAt is deterministic instead of time.Now().
 	wantTime := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	checker.now = func() time.Time { return wantTime }
 	checker.runOnce(context.Background())
@@ -81,6 +84,7 @@ func TestCheckerRecordsConfiguredTarget(t *testing.T) {
 	}
 }
 
+// smoke-tests every read handler against one shared fake store: each must return 200 with a valid JSON body.
 func TestHandlers(t *testing.T) {
 	now := time.Now().UTC()
 	dataStore := &fakeStore{

@@ -32,6 +32,7 @@ type config struct {
 	httpTimeout      time.Duration
 }
 
+// reads and validates all runtime configuration from environment variables.
 func loadConfig() (config, error) {
 	port, err := positiveInt("PORT", 8080)
 	if err != nil || port > 65535 {
@@ -60,6 +61,7 @@ func loadConfig() (config, error) {
 	}, nil
 }
 
+// builds the PROD/DR region list from PREFIX_-scoped env vars, requiring all four per region or none.
 func topologyConfig() ([]topology.RegionConfig, error) {
 	prefixes := []string{"PROD", "DR"}
 	regions := make([]topology.RegionConfig, 0, len(prefixes))
@@ -90,6 +92,7 @@ func topologyConfig() ([]topology.RegionConfig, error) {
 	return regions, nil
 }
 
+// parses an env var as a positive integer, falling back to the given default when unset.
 func positiveInt(name string, fallback int) (int, error) {
 	value, err := strconv.Atoi(envOrDefault(name, strconv.Itoa(fallback)))
 	if err != nil || value < 1 {
@@ -98,6 +101,7 @@ func positiveInt(name string, fallback int) (int, error) {
 	return value, nil
 }
 
+// rejects anything but a canonical http/https URL with no embedded credentials or fragment.
 func validateTarget(raw string) error {
 	parsed, err := url.ParseRequestURI(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
@@ -106,8 +110,7 @@ func validateTarget(raw string) error {
 	return nil
 }
 
-// loadTopologyService replays TOPOLOGY_MOCK_FILE when set, since real AWS
-// ECS/RDS topology cannot exist in local development. Never set outside docker-compose.
+// replays TOPOLOGY_MOCK_FILE when set, since real AWS ECS/RDS topology cannot exist locally; never set outside docker-compose.
 func loadTopologyService(ctx context.Context, cfg *config) (*topology.Service, error) {
 	if cfg.topologyMockFile == "" {
 		return topology.New(ctx, cfg.regions), nil
@@ -130,6 +133,7 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// sets up structured JSON logging, then delegates to run and exits non-zero on failure.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	if err := run(); err != nil {
@@ -138,6 +142,7 @@ func main() {
 	}
 }
 
+// wires the store, background checker, topology service, and HTTP server, then blocks until shutdown.
 func run() error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -146,6 +151,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// defaults to in-memory storage for local dev; switches to DynamoDB only when a table is configured (real deploys).
 	var dataStore store.Store = store.NewMemory(cfg.monitoredURL)
 	storeKind := "memory"
 	if cfg.dynamoTable != "" {
@@ -183,6 +189,7 @@ func run() error {
 	return nil
 }
 
+// blocks until SIGINT/SIGTERM, then cancels the app context and gives the HTTP server 10s to drain.
 func shutdownOnSignal(server *http.Server, cancel context.CancelFunc) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)

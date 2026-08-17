@@ -116,6 +116,8 @@ resource "aws_s3_bucket_logging" "state" {
   target_prefix = "state-bucket-access-logs/"
 }
 
+# Not read by any backend "s3" block (those use native S3 locking via
+# use_lockfile = true); kept only as a documented compatibility fallback.
 resource "aws_dynamodb_table" "lock" {
   #checkov:skip=CKV_AWS_119:uses the AWS-owned default key (free) rather than a customer-managed key
   name         = "${var.project_name}-terraform-lock"
