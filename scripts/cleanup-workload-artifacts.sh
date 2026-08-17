@@ -14,6 +14,11 @@ if [[ "${CONFIRM_CLEANUP:-}" != "YES" ]]; then
   exit 1
 fi
 
+# ECS control-plane mutations throttle quickly under a tight loop; adaptive
+# retry mode backs off automatically instead of failing after 2 attempts.
+export AWS_RETRY_MODE="adaptive"
+export AWS_MAX_ATTEMPTS="10"
+
 if aws ecr describe-repositories \
   --region "$DR_REGION" \
   --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
@@ -62,35 +67,117 @@ for _ in {1..60}; do
   sleep 5
 done
 
-log_groups=(
-  "$PRIMARY_REGION:/aws/ecs/containerinsights/${PROJECT_NAME}-prod/performance"
-  "$PRIMARY_REGION:/aws/rds/instance/${PROJECT_NAME}-prod/postgresql"
-  "$DR_REGION:/aws/ecs/containerinsights/${PROJECT_NAME}-dr/performance"
-  "$DR_REGION:/aws/rds/instance/${PROJECT_NAME}-dr/postgresql"
+# ECS deregisters the latest revision on `terraform destroy` but never deletes
+# any revision (deregister only marks INACTIVE); every deploy also leaves prior
+# revisions untracked by Terraform state. Purge all revisions of every family
+# under this project explicitly, in both regions.
+for region in "$PRIMARY_REGION" "$DR_REGION"; do
+  families="$(aws ecs list-task-definition-families \
+    --region "$region" \
+    --family-prefix "$PROJECT_NAME" \
+    --status ALL \
+    --query "families" \
+    --output text)"
+  [[ -z "$families" || "$families" == "None" ]] && continue
+  read -r -a family_list <<<"$families"
+  for family in "${family_list[@]}"; do
+    revision_arns="$(aws ecs list-task-definitions \
+      --region "$region" \
+      --family-prefix "$family" \
+      --status ACTIVE \
+      --query "taskDefinitionArns" \
+      --output text) $(aws ecs list-task-definitions \
+      --region "$region" \
+      --family-prefix "$family" \
+      --status INACTIVE \
+      --query "taskDefinitionArns" \
+      --output text)"
+    revision_arns="${revision_arns//None/}"
+    [[ -z "${revision_arns// /}" ]] && continue
+    read -r -a revisions <<<"$revision_arns"
+    for revision_arn in "${revisions[@]}"; do
+      aws ecs deregister-task-definition \
+        --region "$region" \
+        --task-definition "$revision_arn" >/dev/null
+      sleep 0.2
+    done
+    for ((i = 0; i < ${#revisions[@]}; i += 10)); do
+      aws ecs delete-task-definitions \
+        --region "$region" \
+        --task-definitions "${revisions[@]:i:10}" >/dev/null
+    done
+  done
+done
+
+remaining_task_definitions=0
+for region in "$PRIMARY_REGION" "$DR_REGION"; do
+  for status in ACTIVE INACTIVE; do
+    count="$(aws ecs list-task-definitions \
+      --region "$region" \
+      --family-prefix "$PROJECT_NAME" \
+      --status "$status" \
+      --query "length(taskDefinitionArns)" \
+      --output text)"
+    remaining_task_definitions=$((remaining_task_definitions + count))
+  done
+done
+if [[ "$remaining_task_definitions" != "0" ]]; then
+  echo "Task definition cleanup verification failed." >&2
+  exit 1
+fi
+
+# Discover by prefix rather than hardcoded per-env names, so extra services
+# (monitoring, grafana, otel-collector, ...) don't silently escape cleanup.
+log_group_prefixes=(
+  "$PRIMARY_REGION:/aws/ecs/containerinsights/${PROJECT_NAME}-"
+  "$PRIMARY_REGION:/aws/rds/instance/${PROJECT_NAME}-"
+  "$DR_REGION:/aws/ecs/containerinsights/${PROJECT_NAME}-"
+  "$DR_REGION:/aws/rds/instance/${PROJECT_NAME}-"
 )
-for regional_log_group in "${log_groups[@]}"; do
-  region="${regional_log_group%%:*}"
-  log_group_name="${regional_log_group#*:}"
+for regional_prefix in "${log_group_prefixes[@]}"; do
+  region="${regional_prefix%%:*}"
+  prefix="${regional_prefix#*:}"
+  names="$(aws logs describe-log-groups \
+    --region "$region" \
+    --log-group-name-prefix "$prefix" \
+    --query "logGroups[].logGroupName" \
+    --output text)"
+  [[ -z "$names" || "$names" == "None" ]] && continue
+  read -r -a group_names <<<"$names"
+  for name in "${group_names[@]}"; do
+    aws logs delete-log-group --region "$region" --log-group-name "$name"
+  done
+done
+
+# RDS Enhanced Monitoring writes to a single account-wide "RDSOSMetrics" log
+# group per region, not a project-scoped name. Safe to remove here only
+# because this account hosts no other RDS workloads.
+for region in "$PRIMARY_REGION" "$DR_REGION"; do
   exists="$(aws logs describe-log-groups \
     --region "$region" \
-    --log-group-name-prefix "$log_group_name" \
-    --query "length(logGroups[?logGroupName == '$log_group_name'])" \
+    --log-group-name-prefix "RDSOSMetrics" \
+    --query "length(logGroups[?logGroupName == 'RDSOSMetrics'])" \
     --output text)"
   if [[ "$exists" != "0" ]]; then
-    aws logs delete-log-group \
-      --region "$region" \
-      --log-group-name "$log_group_name"
-  fi
-  remaining_log_group="$(aws logs describe-log-groups \
-    --region "$region" \
-    --log-group-name-prefix "$log_group_name" \
-    --query "length(logGroups[?logGroupName == '$log_group_name'])" \
-    --output text)"
-  if [[ "$remaining_log_group" != "0" ]]; then
-    echo "Log group cleanup verification failed for $log_group_name." >&2
-    exit 1
+    aws logs delete-log-group --region "$region" --log-group-name "RDSOSMetrics"
   fi
 done
+
+remaining_log_groups=0
+for region in "$PRIMARY_REGION" "$DR_REGION"; do
+  for prefix in "/aws/ecs/containerinsights/${PROJECT_NAME}-" "/aws/rds/instance/${PROJECT_NAME}-" "RDSOSMetrics"; do
+    count="$(aws logs describe-log-groups \
+      --region "$region" \
+      --log-group-name-prefix "$prefix" \
+      --query "length(logGroups)" \
+      --output text)"
+    remaining_log_groups=$((remaining_log_groups + count))
+  done
+done
+if [[ "$remaining_log_groups" != "0" ]]; then
+  echo "Log group cleanup verification failed." >&2
+  exit 1
+fi
 
 remaining_repository="$(aws ecr describe-repositories \
   --region "$DR_REGION" \

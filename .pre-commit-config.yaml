@@ -139,13 +139,10 @@ repos:
 
   - repo: local
     hooks:
-      - id: infracost-scan
-        name: Infracost scan
-        description: Check terraform infrastructure cost
-        entry: bash -o pipefail -c 'infracost scan terraform/ --currency EUR 2>&1 | awk "/Monthly cost:/"'
-        language: system
-        pass_filenames: false
-        always_run: false
-        files: \.(tf|tfvars)$
-        stages: [manual]
-        verbose: true
+      - id: no-em-en-dash
+        name: No em or en dashes
+        description: Blocks em dash and en dash characters; use commas, periods, or parentheses instead
+        entry: '(—|–)'
+        language: pygrep
+        types: [text]
+        exclude: '^(disaster-recovery-workloads-on-aws\.md|\.pre-commit-config\.yaml)$'

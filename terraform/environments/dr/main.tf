@@ -30,7 +30,7 @@ data "aws_kms_key" "rds" {
   key_id = "alias/aws/rds"
 }
 
-# Prod resources discovered from AWS APIs — no remote-state dependency.
+# Prod resources discovered from AWS APIs, no remote-state dependency.
 data "aws_db_instance" "prod" {
   provider               = aws.prod
   db_instance_identifier = "${local.project_name}-prod"
@@ -67,8 +67,7 @@ module "vpc" {
   vpc_cidr           = local.vpc_cidr
   availability_zones = local.azs
 
-  create_s3_endpoint         = true
-  create_interface_endpoints = false
+  create_s3_endpoint = true
 }
 
 module "alb" {
@@ -142,6 +141,8 @@ data "aws_ecr_repository" "app" {
   name = "${local.project_name}-prod"
 }
 
+# The digest is pulled from prod's live task definition JSON rather than a
+# Terraform output, since DR deliberately has no remote-state dependency on prod.
 locals {
   ecr_repository_url = data.aws_ecr_repository.app.repository_url
   prod_container     = one([for container in jsondecode(nonsensitive(data.aws_ecs_task_definition.prod.container_definitions)) : container if container.name == "shortener"])
