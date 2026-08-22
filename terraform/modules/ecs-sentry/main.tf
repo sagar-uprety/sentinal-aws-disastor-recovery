@@ -107,6 +107,10 @@ resource "aws_cloudwatch_log_group" "main" {
 resource "aws_ecs_task_definition" "main" {
   count = var.deploy_service ? 1 : 0
 
+  # Application CI/CD registers new revisions directly; without this, an unrelated
+  # apply would re-register a stale revision from the SSM digest at bootstrap time.
+  track_latest = true
+
   family                   = "${var.project_name}-${var.environment}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]

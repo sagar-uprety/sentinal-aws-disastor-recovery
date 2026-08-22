@@ -28,10 +28,10 @@ env:
   # Matches monitoring/locals.tf: isolated from both drill regions (primary eu-central-1, secondary eu-west-1).
   AWS_REGION: ${{ vars.SENTRY_REGION }}
   CONTAINER_NAME: sentry
-  ECR_REPOSITORY: pilotlight-monitoring
-  ECS_CLUSTER: pilotlight-monitoring
-  ECS_SERVICE: pilotlight-monitoring
-  IMAGE_DIGEST_PARAMETER: /pilotlight/monitoring/image-digest
+  ECR_REPOSITORY: ${{ vars.PROJECT_NAME }}-monitoring
+  ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-monitoring
+  ECS_SERVICE: ${{ vars.PROJECT_NAME }}-monitoring
+  IMAGE_DIGEST_PARAMETER: /${{ vars.PROJECT_NAME }}/monitoring/image-digest
   SENTRY_URL: ${{ vars.SENTRY_URL }}
 
 jobs:
@@ -143,7 +143,9 @@ jobs:
 
       # Terraform seeds this parameter with a placeholder on the first deploy_service=false
       # apply; overwriting it with a real digest here is what lets deploy_service=true pass.
-      - name: Publish sentry image digest
+      # publish-only has no deploy/health step to gate on, so it publishes immediately.
+      - name: Publish sentry image digest (publish-only)
+        if: inputs.mode == 'publish-only'
         env:
           IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
         run: |
@@ -180,3 +182,15 @@ jobs:
       - name: Verify public sentry health
         if: inputs.mode == 'deploy'
         run: curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors "$SENTRY_URL/healthz"
+
+      # Published only once sentry is confirmed healthy, so a failed deploy never leaves a
+      # broken digest for a future terraform apply to redeploy.
+      - name: Publish sentry image digest (deploy)
+        if: inputs.mode == 'deploy'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: |
+          aws ssm put-parameter --name "$IMAGE_DIGEST_PARAMETER" \
+            --type String --value "$IMAGE_DIGEST" --overwrite >/dev/null
+          echo "## Published sentry image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ECR_REPOSITORY@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
