@@ -25,7 +25,7 @@ skip-check:
   - CKV_AWS_157 # RDS instance is multi-AZ
 
   # --- S3: the only buckets here are the Terraform state and the ALB log sink ---
-  - CKV_AWS_144 # Cross-region replication: state is regenerable, ALB logs are not DR-critical
+  - CKV_AWS_144 # Cross-region replication: state is regenerable, ALB logs are not secondary-critical
   - CKV_AWS_18 # Access logging: needs a second bucket plus its own lifecycle, and the ALB bucket is itself the log destination
   - CKV2_AWS_62 # Event notifications: nothing consumes bucket events, so this would be a no-op resource
 
@@ -56,7 +56,7 @@ skip-check:
   - CKV_GHA_7 # Workflow is not using user-controlled inputs
 
   # --- SSM: image-digest placeholder parameters ---
-  # prod/main.tf and monitoring/main.tf each seed an aws_ssm_parameter.image_digest as a
+  # primary/main.tf and monitoring/main.tf each seed an aws_ssm_parameter.image_digest as a
   # plain String so the foundation apply can run before any image exists; CI overwrites it
   # with a real digest afterward. A digest is public image metadata, not a secret, so
   # SecureString+KMS here is unwarranted cost. Inline #checkov:skip doesn't reliably

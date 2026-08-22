@@ -36,26 +36,26 @@ on:
           - destroy
       target:
         description: >-
-          Root module to act on. Environments apply one per run, in order monitoring, prod, dr.
-          Ignored by destroy, which always runs dr, prod, monitoring.
+          Root module to act on. Environments apply one per run, in order monitoring, primary, secondary.
+          Ignored by destroy, which always runs secondary, primary, monitoring.
         required: true
-        default: prod
+        default: primary
         type: choice
         options:
-          - prod
-          - dr
+          - primary
+          - secondary
           - monitoring
       deploy_service:
         description: >-
           Create the ECS service. Set false for the foundation phase that provisions the ECR
-          repository before any image exists. Ignored by dr.
+          repository before any image exists. Ignored by secondary.
         required: false
         default: true
         type: boolean
       create_arc:
         description: >-
-          Provision (true) or tear down (false) the dr root's ARC cluster and controls.
-          Applies only to target=dr.
+          Provision (true) or tear down (false) the secondary root's ARC cluster and controls.
+          Applies only to target=secondary.
         required: false
         default: false
         type: boolean
@@ -73,11 +73,11 @@ env:
   TERRAFORM_VERSION: ${{ vars.TERRAFORM_VERSION }}
   PROJECT_NAME: ${{ vars.PROJECT_NAME }}
   BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
-  MONITOR_URL: ${{ vars.MONITOR_URL }}
+  SENTRY_URL: ${{ vars.SENTRY_URL }}
   WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
-  PROD_REGION: ${{ vars.PROD_REGION }}
-  DR_REGION: ${{ vars.DR_REGION }}
-  MONITOR_REGION: ${{ vars.MONITOR_REGION }}
+  PRIMARY_REGION: ${{ vars.PRIMARY_REGION }}
+  SECONDARY_REGION: ${{ vars.SECONDARY_REGION }}
+  SENTRY_REGION: ${{ vars.SENTRY_REGION }}
 
 jobs:
   quality:
@@ -104,8 +104,8 @@ jobs:
           roots=(
             terraform/environments/bootstrap
             terraform/environments/monitoring
-            terraform/environments/prod
-            terraform/environments/dr
+            terraform/environments/primary
+            terraform/environments/secondary
           )
           for root in "${roots[@]}"; do
             data_dir="$RUNNER_TEMP/tf-data-${root##*/}"
@@ -160,7 +160,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(github.event_name == 'pull_request' && '["monitoring","prod","dr"]' || format('["{0}"]', inputs.target)) }}
+        target: ${{ fromJSON(github.event_name == 'pull_request' && '["monitoring","primary","secondary"]' || format('["{0}"]', inputs.target)) }}
     permissions:
       contents: read
       id-token: write
@@ -234,8 +234,8 @@ jobs:
       cancel-in-progress: false
     environment:
       name: terraform-production
-      # dr never serves public traffic (pilot light), so it gets no URL rather than a wrong one.
-      url: ${{ inputs.target == 'monitoring' && vars.MONITOR_URL || inputs.target == 'prod' && vars.WORKLOAD_URL || '' }}
+      # secondary never serves public traffic (pilot light), so it gets no URL rather than a wrong one.
+      url: ${{ inputs.target == 'monitoring' && vars.SENTRY_URL || inputs.target == 'primary' && vars.WORKLOAD_URL || '' }}
     permissions:
       contents: read
       id-token: write
@@ -257,11 +257,11 @@ jobs:
 
       # Both environments that publish public hostnames depend on apex delegation resolving.
       - name: Verify public Route 53 delegation
-        if: inputs.target != 'dr'
+        if: inputs.target != 'secondary'
         run: scripts/ci/guard-topology.sh route53-delegation
 
       - name: Refuse apply during failback topology
-        if: inputs.target == 'prod' || inputs.target == 'dr'
+        if: inputs.target == 'primary' || inputs.target == 'secondary'
         run: scripts/ci/guard-topology.sh no-failback
 
       - name: Initialize state
@@ -287,28 +287,28 @@ jobs:
         working-directory: ${{ env.TF_ROOT }}
         run: terraform apply -input=false -lock-timeout=5m tfplan
 
-      - name: Verify dr pilot-light state
-        if: inputs.target == 'dr'
-        run: scripts/ci/guard-topology.sh dr-pilot-light
+      - name: Verify secondary pilot-light state
+        if: inputs.target == 'secondary'
+        run: scripts/ci/guard-topology.sh secondary-pilot-light
 
-      - name: Verify isolated monitor
+      - name: Verify isolated sentry
         if: inputs.target == 'monitoring' && inputs.deploy_service
         run: |
-          aws ecs wait services-stable --region "$MONITOR_REGION" \
+          aws ecs wait services-stable --region "$SENTRY_REGION" \
             --cluster "$PROJECT_NAME-monitoring" --services "$PROJECT_NAME-monitoring"
           curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
-            "$MONITOR_URL/healthz"
+            "$SENTRY_URL/healthz"
 
       - name: Verify public workload health
-        if: inputs.target == 'prod' && inputs.deploy_service
+        if: inputs.target == 'primary' && inputs.deploy_service
         run: |
-          aws ecs wait services-stable --region "$PROD_REGION" \
-            --cluster "$PROJECT_NAME-prod" --services "$PROJECT_NAME-prod"
+          aws ecs wait services-stable --region "$PRIMARY_REGION" \
+            --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary"
           curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
             "$WORKLOAD_URL/healthz"
 
   destroy:
-    name: Destroy all environments (dr, prod, monitoring)
+    name: Destroy all environments (secondary, primary, monitoring)
     needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' &&
@@ -334,17 +334,17 @@ jobs:
         with:
           terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          aws-region: ${{ env.PROD_REGION }}
+          aws-region: ${{ env.PRIMARY_REGION }}
           session-name: terraform-destroy-${{ github.run_id }}
 
       - name: Refuse destruction during reverse replication
         run: scripts/ci/guard-topology.sh no-reverse-replication
 
-      # dr before prod because the dr database replicates from prod, and prod before
+      # secondary before primary because the secondary database replicates from primary, and primary before
       # monitoring because monitoring only observes the other two.
-      - name: Destroy dr then prod
+      - name: Destroy secondary then primary
         run: |
-          for root in terraform/environments/dr terraform/environments/prod; do
+          for root in terraform/environments/secondary terraform/environments/primary; do
             terraform -chdir="$root" init -input=false
             terraform -chdir="$root" plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
             terraform -chdir="$root" show -no-color destroy.tfplan
@@ -360,8 +360,8 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-destroy-monitor-${{ github.run_id }}
-          aws-region: ${{ env.MONITOR_REGION }}
+          role-session-name: terraform-destroy-sentry-${{ github.run_id }}
+          aws-region: ${{ env.SENTRY_REGION }}
 
       - name: Destroy monitoring
         working-directory: terraform/environments/monitoring

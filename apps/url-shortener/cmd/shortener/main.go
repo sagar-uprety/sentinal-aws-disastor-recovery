@@ -41,7 +41,7 @@ func loadConfig() (config, error) {
 	return config{databaseURL: databaseURL, createToken: token, port: port}, nil
 }
 
-// accepts either a single DATABASE_URL (local-dev convenience) or the five individual DB_* vars ECS injects in prod/DR, never both.
+// accepts either a single DATABASE_URL (local-dev convenience) or the five individual DB_* vars ECS injects in primary/secondary, never both.
 func databaseConnectionURL() (string, error) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	// kept as an ordered slice rather than a map so the "missing" error below always lists variables in the same order.
@@ -110,7 +110,7 @@ func run() error {
 			slog.Error("close database failed", "error", closeErr)
 		}
 	}()
-	// migrations run on every boot so a freshly promoted DR replica reaches the expected schema without a manual step.
+	// migrations run on every boot so a freshly promoted secondary replica reaches the expected schema without a manual step.
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}

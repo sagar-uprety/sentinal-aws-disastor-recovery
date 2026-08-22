@@ -14,21 +14,21 @@ variable "record_name" {
 }
 
 variable "primary_alb_dns_name" {
-  description = "DNS name of the primary (prod) ALB."
+  description = "DNS name of the primary (primary) ALB."
   type        = string
 }
 
 variable "primary_alb_zone_id" {
-  description = "Canonical hosted zone ID of the primary (prod) ALB."
+  description = "Canonical hosted zone ID of the primary (primary) ALB."
   type        = string
 }
 
-variable "dr_alb_dns_name" {
-  description = "DNS name of the DR ALB."
+variable "secondary_alb_dns_name" {
+  description = "DNS name of the secondary ALB."
   type        = string
 }
 
-variable "dr_alb_zone_id" {
-  description = "Canonical hosted zone ID of the DR ALB."
+variable "secondary_alb_zone_id" {
+  description = "Canonical hosted zone ID of the secondary ALB."
   type        = string
 }

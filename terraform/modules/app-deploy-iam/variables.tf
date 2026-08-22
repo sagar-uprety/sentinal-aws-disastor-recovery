@@ -53,32 +53,32 @@ variable "ecs_task_role_arn" {
   type        = string
 }
 
-variable "dr_ecr_repository_arn" {
-  description = "ARN of the replicated DR ECR repository checked by deployments. Null when there's no DR pair."
+variable "secondary_ecr_repository_arn" {
+  description = "ARN of the replicated secondary ECR repository checked by deployments. Null without a secondary."
   type        = string
   default     = null
 }
 
-variable "dr_ecs_cluster_arn" {
-  description = "ARN of the DR ECS cluster updated by application deployments. Null for environments with no DR pair."
+variable "secondary_ecs_cluster_arn" {
+  description = "ARN of the secondary ECS cluster updated by application deployments. Null without a secondary."
   type        = string
   default     = null
 }
 
-variable "dr_ecs_service_arn" {
-  description = "ARN of the DR ECS service updated by application deployments. Null for environments with no DR pair."
+variable "secondary_ecs_service_arn" {
+  description = "ARN of the secondary ECS service updated by application deployments. Null without a secondary."
   type        = string
   default     = null
 }
 
-variable "dr_ecs_task_execution_role_arn" {
-  description = "ARN of the DR ECS task execution role passed when registering a task definition. Null with no DR pair."
+variable "secondary_ecs_task_execution_role_arn" {
+  description = "ARN of the secondary ECS task-execution role registered for task definitions. Null with no secondary."
   type        = string
   default     = null
 }
 
-variable "dr_ecs_task_role_arn" {
-  description = "ARN of the DR ECS task role passed when registering a task definition. Null with no DR pair."
+variable "secondary_ecs_task_role_arn" {
+  description = "ARN of the secondary ECS task role registered for task definitions. Null with no secondary."
   type        = string
   default     = null
 }

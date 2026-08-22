@@ -41,7 +41,7 @@ No modules.
 | <a name="input_manageable_role_suffixes"></a> [manageable\_role\_suffixes](#input\_manageable\_role\_suffixes) | Role suffixes (after "${project\_name}-{env}-") this CI role may create/update/delete. | `list(string)` | <pre>[<br/>  "github-actions",<br/>  "ecs-task-exec",<br/>  "ecs-task",<br/>  "vpc-flow-logs",<br/>  "rds-monitoring"<br/>]</pre> | no |
 | <a name="input_passable_role_suffixes"></a> [passable\_role\_suffixes](#input\_passable\_role\_suffixes) | Role suffixes (after "${project\_name}-{env}-") this CI role may PassRole to ECS. | `list(string)` | <pre>[<br/>  "ecs-task-exec",<br/>  "ecs-task",<br/>  "vpc-flow-logs",<br/>  "rds-monitoring"<br/>]</pre> | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
-| <a name="input_workload_environments"></a> [workload\_environments](#input\_workload\_environments) | Environment names whose IAM roles this CI role may manage. | `list(string)` | <pre>[<br/>  "prod",<br/>  "dr",<br/>  "monitoring"<br/>]</pre> | no |
+| <a name="input_workload_environments"></a> [workload\_environments](#input\_workload\_environments) | Environment names whose IAM roles this CI role may manage. | `list(string)` | <pre>[<br/>  "primary",<br/>  "secondary",<br/>  "monitoring"<br/>]</pre> | no |
 
 ## Outputs
 

@@ -12,7 +12,7 @@ Add terse, high-value comments to existing code without changing behavior. A com
 Ask the user only if genuinely ambiguous. Otherwise default to:
 
 - Production source files (not vendored/generated/third-party code).
-- Test files only if the user says "all code" / "tests too", or a prior turn in this session already covered prod code and the user is extending scope.
+- Test files only if the user says "all code" / "tests too", or a prior turn in this session already covered primary code and the user is extending scope.
 - One language/module at a time if the repo is polyglot; don't silently skip a language the user named.
 
 ## Rules for every comment
@@ -35,7 +35,7 @@ A `resource`/`data` block is the rough equivalent of a function here: most are s
 - **Provider aliases**, when it isn't obvious which account/region a `provider = aws.xxx` block targets or why cross-region/cross-account access is needed there.
 - **`moved` / `removed` blocks**: why a resource was renamed or relocated in state, since these have no effect on infrastructure and only make sense with that context.
 - **Magic numbers in infra math**: CIDR `newbits`/subnet math, retention periods, threshold values, timeouts, whenever the number encodes a real constraint (AZ count, address headroom, compliance window) rather than an arbitrary default.
-- **Cross-file/cross-module dependency ordering** that isn't visible from resource references alone: an explicit `depends_on`, a documented apply-order requirement (e.g. "DR depends on prod's ECR digest, apply prod first"), or a `data` source deliberately reading another environment's state/outputs instead of a variable.
+- **Cross-file/cross-module dependency ordering** that isn't visible from resource references alone: an explicit `depends_on`, a documented apply-order requirement (e.g. "Secondary depends on primary's ECR digest, apply primary first"), or a `data` source deliberately reading another environment's state/outputs instead of a variable.
 - **File-level intent**, one line at the top of a file, only when the file's role isn't obvious from its name (a `main.tf` needs nothing; a file like `route53-failover.tf` mixing detection-only health checks with ARC-gated ones can use one line distinguishing the two).
 - **Skip trivial `variable`/`output` blocks** whose `description` field already says what's needed. Don't add a comment that duplicates a `description` string.
 

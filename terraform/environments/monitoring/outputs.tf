@@ -4,21 +4,21 @@ output "alb_dns_name" {
 }
 
 output "dynamodb_table_name" {
-  description = "Name of the monitor-owned check-history table."
+  description = "Name of the sentry-owned check-history table."
   value       = aws_dynamodb_table.checks.name
 }
 
 output "ecr_repository_url" {
-  description = "ECR repository URL for monitor images."
+  description = "ECR repository URL for sentry images."
   value       = module.ecr.repository_url
 }
 
 output "github_actions_role_arn" {
-  description = "IAM role assumed by monitor deployments."
+  description = "IAM role assumed by sentry deployments."
   value       = module.github_oidc.role_arn
 }
 
-output "monitor_url" {
+output "sentry_url" {
   description = "Canonical isolated monitoring URL."
   value       = "https://${local.app_hostname}"
 }

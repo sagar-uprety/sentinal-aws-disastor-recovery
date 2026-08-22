@@ -4,7 +4,7 @@ Verified on 2026-07-11 against AWS account `926883320788`, region `eu-central-1`
 
 ## Resource Summary
 
-Phase 1 + Phase 2 applied successfully. 41 Terraform resources for the prod environment.
+Phase 1 + Phase 2 applied successfully. 41 Terraform resources for the primary environment.
 
 ## Post-Session Corrections
 
@@ -64,7 +64,7 @@ Chain verified: ALB(80 public) → ECS(8080 from ALB) → RDS(5432 from ECS).
 
 | Attribute | Value |
 |---|---|
-| Repository | sentinel-aws-dr-prod |
+| Repository | sentinel-aws-secondary-primary |
 | Tag mutability | IMMUTABLE |
 | Scan on push | true |
 | Lifecycle policy | Keep last 10 images |
@@ -97,9 +97,9 @@ Regional NAT Gateway (`availability_mode = "regional"`) spans both AZs automatic
 ## Tags
 
 All 41 taggable resources verified with required tags:
-- `Project` = `sentinel-aws-dr`
+- `Project` = `sentinel-aws-secondary`
 - `ManagedBy` = `terraform`
-- `Environment` = `prod`
+- `Environment` = `primary`
 
 No untaggable resource types found.
 

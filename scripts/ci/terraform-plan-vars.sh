@@ -7,8 +7,8 @@ build_plan_args() {
   local create_arc="${CREATE_ARC:-}"
   plan_args=()
   case "$TF_TARGET" in
-    prod) plan_args+=("-var=deploy_service=$deploy_service" "-var=multi_az=true") ;;
+    primary) plan_args+=("-var=deploy_service=$deploy_service" "-var=multi_az=true") ;;
     monitoring) plan_args+=("-var=deploy_service=$deploy_service") ;;
-    dr) [ -n "$create_arc" ] && plan_args+=("-var=create_arc=$create_arc") ;;
+    secondary) [ -n "$create_arc" ] && plan_args+=("-var=create_arc=$create_arc") ;;
   esac
 }

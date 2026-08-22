@@ -7,21 +7,21 @@ Verified on 2026-07-11 against AWS account `926883320788`.
 - Terraform CLI: 1.15.5
 - AWS provider: 6.54.0
 - Random provider: deferred until its first use in Milestone 2 to satisfy `terraform_unused_required_providers`
-- Bootstrap, prod, and DR require Terraform `>= 1.11, < 2.0`.
+- Bootstrap, primary, and secondary require Terraform `>= 1.11, < 2.0`.
 - `terraform fmt -check -recursive` passed.
-- `terraform validate` passed in bootstrap, prod, and DR.
-- `terraform plan -detailed-exitcode -input=false` returned no changes in bootstrap, prod, and DR after initialization and apply.
+- `terraform validate` passed in bootstrap, primary, and secondary.
+- `terraform plan -detailed-exitcode -input=false` returned no changes in bootstrap, primary, and secondary after initialization and apply.
 
 ## Remote State
 
 - State bucket: `sagar-demos-terraform-state`
 - Region: `eu-central-1`
-- Prod key: `sentinel/prod/terraform.tfstate`
-- DR key: `sentinel/dr/terraform.tfstate`
+- Primary key: `sentinel/primary/terraform.tfstate`
+- Secondary key: `sentinel/secondary/terraform.tfstate`
 - Active locking: native S3 lock files through `use_lockfile = true`
-- Compatibility lock table: `sentinel-aws-dr-terraform-lock`, status `ACTIVE`, billing mode `PAY_PER_REQUEST`
+- Compatibility lock table: `sentinel-aws-secondary-terraform-lock`, status `ACTIVE`, billing mode `PAY_PER_REQUEST`
 
-Terraform 1.15 deprecates DynamoDB backend locking. The table remains provisioned to satisfy the original bootstrap design, while prod and DR use native S3 locking.
+Terraform 1.15 deprecates DynamoDB backend locking. The table remains provisioned to satisfy the original bootstrap design, while primary and secondary use native S3 locking.
 
 ## Security Controls
 
@@ -32,7 +32,7 @@ Terraform 1.15 deprecates DynamoDB backend locking. The table remains provisione
 - Public ACLs ignored: true
 - Public buckets restricted: true
 - Bucket deletion protection: `force_destroy = false`
-- Bucket and lock table tags: `Project=sentinel-aws-dr`, `ManagedBy=terraform`, `Environment=prod`
+- Bucket and lock table tags: `Project=sentinel-aws-secondary`, `ManagedBy=terraform`, `Environment=primary`
 
 ## Budget Check
 

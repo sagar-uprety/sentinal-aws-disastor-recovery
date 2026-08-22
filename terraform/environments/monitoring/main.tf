@@ -26,10 +26,10 @@ module "ecr" {
 }
 
 # Terraform seeds this so the foundation phase can run before any image exists;
-# ecs-monitor.yml overwrites it after each push, hence ignore_changes on value.
+# ecs-sentry.yml overwrites it after each push, hence ignore_changes on value.
 resource "aws_ssm_parameter" "image_digest" {
   name        = "/${local.project_name}/${local.environment}/image-digest"
-  description = "Digest of the monitor image ecs-monitor.yml last published"
+  description = "Digest of the sentry image ecs-sentry.yml last published"
   type        = "String"
   tier        = "Standard"
   value       = "pending"
@@ -47,7 +47,7 @@ data "aws_ssm_parameter" "image_digest" {
   lifecycle {
     postcondition {
       condition     = can(regex("^sha256:[0-9a-f]{64}$", self.insecure_value))
-      error_message = "No monitor image published yet. Run ecs-monitor.yml publish-only before deploy_service=true."
+      error_message = "No sentry image published yet. Run ecs-sentry.yml publish-only before deploy_service=true."
     }
   }
 }
@@ -100,7 +100,7 @@ resource "aws_dynamodb_table" "checks" {
 }
 
 module "service" {
-  source = "../../modules/ecs-monitor"
+  source = "../../modules/ecs-sentry"
 
   alb_security_group_id = module.alb.security_group_id
   app_subnet_ids        = module.vpc.app_subnet_ids
@@ -120,18 +120,18 @@ module "service" {
   dynamodb_table_name = aws_dynamodb_table.checks.name
   monitored_url       = "https://${local.workload_hostname}/healthz"
 
-  prod_region              = "eu-central-1"
-  prod_ecs_cluster         = "${local.project_name}-prod"
-  prod_ecs_service         = "${local.project_name}-prod"
-  prod_database_identifier = "${local.project_name}-prod"
+  primary_region              = "eu-central-1"
+  primary_ecs_cluster         = "${local.project_name}-primary"
+  primary_ecs_service         = "${local.project_name}-primary"
+  primary_database_identifier = "${local.project_name}-primary"
 
-  dr_region              = "eu-west-1"
-  dr_ecs_cluster         = "${local.project_name}-dr"
-  dr_ecs_service         = "${local.project_name}-dr"
-  dr_database_identifier = "${local.project_name}-dr"
+  secondary_region              = "eu-west-1"
+  secondary_ecs_cluster         = "${local.project_name}-secondary"
+  secondary_ecs_service         = "${local.project_name}-secondary"
+  secondary_database_identifier = "${local.project_name}-secondary"
 }
 
-resource "aws_route53_record" "monitor" {
+resource "aws_route53_record" "sentry" {
   count = var.deploy_service ? 1 : 0
 
   allow_overwrite = true

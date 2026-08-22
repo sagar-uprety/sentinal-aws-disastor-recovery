@@ -12,7 +12,7 @@ Add terse, high-value comments to existing code without changing behavior. A com
 Ask the user only if genuinely ambiguous. Otherwise default to:
 
 - Production source files (not vendored/generated/third-party code).
-- Test files only if the user says "all code" / "tests too", or a prior turn in this session already covered prod code and the user is extending scope.
+- Test files only if the user says "all code" / "tests too", or a prior turn in this session already covered primary code and the user is extending scope.
 - One language/module at a time if the repo is polyglot; don't silently skip a language the user named.
 
 ## Rules for every comment

@@ -25,44 +25,44 @@ initialize)
   }
   initialize=true
   new_primary="On"
-  new_dr="Off"
+  new_secondary="Off"
   ;;
-dr)
-  # requires healthy, writable DR before moving public traffic away from prod.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "DR" ] || {
-    echo "error: set CONFIRM_TRAFFIC_SWITCH=DR to route traffic to DR" >&2
+secondary)
+  # requires healthy, writable secondary before moving public traffic away from primary.
+  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "SECONDARY" ] || {
+    echo "error: set CONFIRM_TRAFFIC_SWITCH=SECONDARY to route traffic to secondary" >&2
     exit 1
   }
-  require_current_event "dr_targets_healthy"
-  require_current_event "dr_write_verified"
+  require_current_event "secondary_targets_healthy"
+  require_current_event "secondary_write_verified"
   require_current_event "pre_outage_link_slug"
   expected_primary="On"
-  expected_dr="Off"
+  expected_secondary="Off"
   new_primary="Off"
-  new_dr="On"
-  target_region="$DR_REGION"
-  target_alb="${DR_RESOURCE_NAME}-alb"
+  new_secondary="On"
+  target_region="$SECONDARY_REGION"
+  target_alb="${SECONDARY_RESOURCE_NAME}-alb"
   verification_slug="$(current_event_ts pre_outage_link_slug)"
   initialize=false
   ;;
 primary)
-  # requires completed failback verification before returning traffic to prod.
+  # requires completed failback verification before returning traffic to primary.
   [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "PRIMARY" ] || {
     echo "error: set CONFIRM_TRAFFIC_SWITCH=PRIMARY after failback verification" >&2
     exit 1
   }
   require_current_event "failback_ready"
   expected_primary="Off"
-  expected_dr="On"
+  expected_secondary="On"
   new_primary="On"
-  new_dr="Off"
+  new_secondary="Off"
   target_region="$PRIMARY_REGION"
-  target_alb="${PROD_RESOURCE_NAME}-alb"
-  verification_slug="$(current_event_ts failback_dr_final_link_slug)"
+  target_alb="${PRIMARY_RESOURCE_NAME}-alb"
+  verification_slug="$(current_event_ts failback_secondary_final_link_slug)"
   initialize=false
   ;;
 *)
-  echo "usage: $0 {initialize|dr|primary}" >&2
+  echo "usage: $0 {initialize|secondary|primary}" >&2
   exit 1
   ;;
 esac
@@ -90,9 +90,9 @@ routing_controls="$(aws route53-recovery-control-config list-routing-controls \
   --region "$ARC_CONTROL_REGION" \
   --control-panel-arn "$control_panel_arn" --output json)"
 primary_control_arn="$(jq -r '.RoutingControls[] | select(.Name == "primary") | .RoutingControlArn' <<<"$routing_controls")"
-dr_control_arn="$(jq -r '.RoutingControls[] | select(.Name == "dr") | .RoutingControlArn' <<<"$routing_controls")"
-if [ -z "$primary_control_arn" ] || [ -z "$dr_control_arn" ]; then
-  echo "error: primary and DR routing controls were not found" >&2
+secondary_control_arn="$(jq -r '.RoutingControls[] | select(.Name == "secondary") | .RoutingControlArn' <<<"$routing_controls")"
+if [ -z "$primary_control_arn" ] || [ -z "$secondary_control_arn" ]; then
+  echo "error: primary and secondary routing controls were not found" >&2
   exit 1
 fi
 
@@ -126,9 +126,9 @@ arc_get_state() {
 
 # rejects stale or partially completed switches before changing routing state.
 primary_state="$(arc_get_state "$primary_control_arn")"
-dr_state="$(arc_get_state "$dr_control_arn")"
-if [ "$initialize" != true ] && { [ "$primary_state" != "$expected_primary" ] || [ "$dr_state" != "$expected_dr" ]; }; then
-  echo "error: ARC state is primary=$primary_state dr=$dr_state; expected $expected_primary/$expected_dr" >&2
+secondary_state="$(arc_get_state "$secondary_control_arn")"
+if [ "$initialize" != true ] && { [ "$primary_state" != "$expected_primary" ] || [ "$secondary_state" != "$expected_secondary" ]; }; then
+  echo "error: ARC state is primary=$primary_state secondary=$secondary_state; expected $expected_primary/$expected_secondary" >&2
   exit 1
 fi
 
@@ -142,7 +142,7 @@ for entry in "${arc_endpoints[@]}"; do
     update-routing-control-states \
     --update-routing-control-state-entries \
       "RoutingControlArn=$primary_control_arn,RoutingControlState=$new_primary" \
-      "RoutingControlArn=$dr_control_arn,RoutingControlState=$new_dr" \
+      "RoutingControlArn=$secondary_control_arn,RoutingControlState=$new_secondary" \
     >/dev/null 2>&1; then
     switch_succeeded=true
     break
@@ -156,16 +156,16 @@ log_event "traffic_switch_requested_${TARGET}"
 
 # confirms ARC reached requested state instead of trusting request acceptance.
 primary_state="$(arc_get_state "$primary_control_arn")"
-dr_state="$(arc_get_state "$dr_control_arn")"
-if [ "$primary_state" != "$new_primary" ] || [ "$dr_state" != "$new_dr" ]; then
-  echo "error: ARC did not reach requested state primary=$new_primary dr=$new_dr" >&2
+secondary_state="$(arc_get_state "$secondary_control_arn")"
+if [ "$primary_state" != "$new_primary" ] || [ "$secondary_state" != "$new_secondary" ]; then
+  echo "error: ARC did not reach requested state primary=$new_primary secondary=$new_secondary" >&2
   exit 1
 fi
 log_event "traffic_switched"
 
 if [ "$initialize" = true ]; then
   log_event "arc_initialized"
-  echo "ARC initialized: primary=On dr=Off."
+  echo "ARC initialized: primary=On secondary=Off."
   exit 0
 fi
 
@@ -207,12 +207,12 @@ if [ "$verified" != true ]; then
 fi
 log_event "traffic_verified_${TARGET}"
 log_event "traffic_verified"
-curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null
-log_event "monitor_available_after_traffic_switch"
-echo "Traffic verified on $TARGET through authoritative Route 53 DNS, workload health, and link $verification_slug. Monitor remained available."
+curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null
+log_event "sentry_available_after_traffic_switch"
+echo "Traffic verified on $TARGET through authoritative Route 53 DNS, workload health, and link $verification_slug. Sentry remained available."
 if [ "$TARGET" = "primary" ]; then
   cat <<'EOF'
 Dispatch the protected topology-reset workflow and follow both plan/apply job logs:
-  gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm_failback=RESET_DR
+  gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm_failback=RESET_SECONDARY
 EOF
 fi

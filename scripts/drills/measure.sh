@@ -49,7 +49,7 @@ duration() {
 }
 
 # requires every boundary used by RTO, automation, and RPO output.
-for event in disaster_declared outage_confirmed failover_invoked replica_promoted dr_service_stable dr_targets_healthy pre_outage_link_verified_in_dr dr_write_verified traffic_switch_requested_dr traffic_verified_dr primary_link_created_at replica_lag_seconds replica_lag_timestamp; do
+for event in disaster_declared outage_confirmed failover_invoked replica_promoted secondary_service_stable secondary_targets_healthy pre_outage_link_verified_in_secondary secondary_write_verified traffic_switch_requested_secondary traffic_verified_secondary primary_link_created_at replica_lag_seconds replica_lag_timestamp; do
   require_event "$event"
 done
 
@@ -57,12 +57,12 @@ disaster_ts="$(event_ts disaster_declared)"
 outage_ts="$(event_ts outage_confirmed)"
 invoked_ts="$(event_ts failover_invoked)"
 promoted_ts="$(event_ts replica_promoted)"
-stable_ts="$(event_ts dr_service_stable)"
-healthy_ts="$(event_ts dr_targets_healthy)"
-link_verified_ts="$(event_ts pre_outage_link_verified_in_dr)"
-write_ts="$(event_ts dr_write_verified)"
-switch_requested_ts="$(event_ts traffic_switch_requested_dr)"
-verified_ts="$(event_ts traffic_verified_dr)"
+stable_ts="$(event_ts secondary_service_stable)"
+healthy_ts="$(event_ts secondary_targets_healthy)"
+link_verified_ts="$(event_ts pre_outage_link_verified_in_secondary)"
+write_ts="$(event_ts secondary_write_verified)"
+switch_requested_ts="$(event_ts traffic_switch_requested_secondary)"
+verified_ts="$(event_ts traffic_verified_secondary)"
 primary_link_created_at="$(event_ts primary_link_created_at)"
 replica_lag="$(event_ts replica_lag_seconds)"
 replica_lag_timestamp="$(event_ts replica_lag_timestamp)"
@@ -77,12 +77,12 @@ Disaster declared:         $disaster_ts
 Outage confirmed:          $outage_ts
 Failover invoked:          $invoked_ts
 Replica promoted:          $promoted_ts
-DR service stable:         $stable_ts
+Secondary service stable:         $stable_ts
 Two ALB targets healthy:   $healthy_ts
-Pre-outage link verified in DR:$link_verified_ts
-Fresh DR write verified:   $write_ts
+Pre-outage link verified in secondary:$link_verified_ts
+Fresh secondary write verified:   $write_ts
 ARC switch requested:      $switch_requested_ts
-Public DR traffic verified:$verified_ts
+Public secondary traffic verified:$verified_ts
 
 Detection to invocation:   $(duration "$outage_ts" "$invoked_ts")s
 Replica promotion phase:   $(duration "$invoked_ts" "$promoted_ts")s
@@ -97,7 +97,7 @@ Automation duration:       ${automation_seconds}s
 === Replica-promotion RPO ===
 Pre-promotion ReplicaLag maximum (authoritative RPO): ${replica_lag}s
 ReplicaLag datapoint timestamp:                       $replica_lag_timestamp
-Prod-created link (created $primary_link_created_at) confirmed present in DR at $link_verified_ts.
+Primary-created link (created $primary_link_created_at) confirmed present in secondary at $link_verified_ts.
 This confirms the pre-outage write survived promotion; it is a pass/fail boundary
 check, not an elapsed-time measurement, since a replicated row's own timestamp
 is identical on both sides by definition. ReplicaLag above is the real measured

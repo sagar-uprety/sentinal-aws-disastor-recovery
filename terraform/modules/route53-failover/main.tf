@@ -18,8 +18,8 @@ resource "aws_route53recoverycontrolconfig_routing_control" "primary" {
   control_panel_arn = aws_route53recoverycontrolconfig_control_panel.main.arn
 }
 
-resource "aws_route53recoverycontrolconfig_routing_control" "dr" {
-  name              = "dr"
+resource "aws_route53recoverycontrolconfig_routing_control" "secondary" {
+  name              = "secondary"
   cluster_arn       = aws_route53recoverycontrolconfig_cluster.main.arn
   control_panel_arn = aws_route53recoverycontrolconfig_control_panel.main.arn
 }
@@ -32,7 +32,7 @@ resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_off" {
 
   asserted_controls = [
     aws_route53recoverycontrolconfig_routing_control.primary.arn,
-    aws_route53recoverycontrolconfig_routing_control.dr.arn,
+    aws_route53recoverycontrolconfig_routing_control.secondary.arn,
   ]
 
   rule_config {
@@ -50,7 +50,7 @@ resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_on" {
 
   asserted_controls = [
     aws_route53recoverycontrolconfig_routing_control.primary.arn,
-    aws_route53recoverycontrolconfig_routing_control.dr.arn,
+    aws_route53recoverycontrolconfig_routing_control.secondary.arn,
   ]
 
   # inverted negates the whole assertion: threshold=2 -> "fewer than 2 On" = at most 1.
@@ -72,12 +72,12 @@ resource "aws_route53_health_check" "primary" {
   }
 }
 
-resource "aws_route53_health_check" "dr" {
+resource "aws_route53_health_check" "secondary" {
   type                = "RECOVERY_CONTROL"
-  routing_control_arn = aws_route53recoverycontrolconfig_routing_control.dr.arn
+  routing_control_arn = aws_route53recoverycontrolconfig_routing_control.secondary.arn
 
   tags = {
-    Name = "${var.project_name}-dr-routing-control"
+    Name = "${var.project_name}-secondary-routing-control"
   }
 }
 
@@ -87,7 +87,7 @@ resource "aws_route53_record" "primary" {
   type    = "A"
 
   set_identifier = "primary"
-  # Route53's own failover engine reads this to decide primary vs dr
+  # Route53's own failover engine reads this to decide primary vs secondary
   health_check_id = aws_route53_health_check.primary.id
 
   failover_routing_policy {
@@ -101,21 +101,21 @@ resource "aws_route53_record" "primary" {
   }
 }
 
-resource "aws_route53_record" "dr" {
+resource "aws_route53_record" "secondary" {
   zone_id = var.route53_zone_id
   name    = var.record_name
   type    = "A"
 
-  set_identifier  = "dr"
-  health_check_id = aws_route53_health_check.dr.id
+  set_identifier  = "secondary"
+  health_check_id = aws_route53_health_check.secondary.id
 
   failover_routing_policy {
     type = "SECONDARY"
   }
 
   alias {
-    name                   = var.dr_alb_dns_name
-    zone_id                = var.dr_alb_zone_id
+    name                   = var.secondary_alb_dns_name
+    zone_id                = var.secondary_alb_zone_id
     evaluate_target_health = false
   }
 }
