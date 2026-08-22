@@ -110,7 +110,8 @@ jobs:
       needs.detect-changes.result == 'success' &&
       needs.detect-changes.outputs.plan_targets != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Covers a typical same-env apply holding the state lock, plus the plan itself.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -130,7 +131,7 @@ jobs:
         uses: ./.github/actions/terraform-setup
         with:
           terraform-version: ${{ env.TERRAFORM_VERSION }}
-          role-arn: ${{ github.event_name == 'pull_request' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-arn: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-plan-${{ github.run_id }}
 
@@ -148,7 +149,8 @@ jobs:
           source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
           build_plan_args
           # Each environment has separate state, so these locks still allow matrix plans to run together.
-          terraform plan -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}"
+          # Lock-timeout so a plan waits out a same-env apply instead of failing on lock contention.
+          terraform plan -input=false -lock-timeout=30m -out=tfplan "${plan_args[@]}"
           terraform show -no-color tfplan > plan.txt
 
       - name: Upload human-readable plan
@@ -158,20 +160,6 @@ jobs:
           path: ${{ env.TF_ROOT }}/plan.txt
           retention-days: 7
 
-      # No PR comment bot: the plan job shows as a check on the PR, and its "Details"
-      # link opens straight to this run summary.
-      - name: Publish plan summary
-        env:
-          PLAN_FILE: ${{ env.TF_ROOT }}/plan.txt
-        run: |
-          {
-            echo "## Terraform speculative plan ($TF_TARGET)"
-            echo
-            echo '```terraform'
-            tail -c 60000 "$PLAN_FILE"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
   apply:
     name: Apply ${{ inputs.target }}
     if: >-
@@ -180,9 +168,7 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
-    # primary/secondary share ECS resources with ecs-url-shortener.yml, while monitoring shares its ECS service
-    # and image-digest parameter with ecs-sentry.yml. GitHub preserves the running operation and
-    # newest pending operation; another queued operation cancels the older pending operation.
+    # Run one at a time: primary/secondary share ECS resources with ecs-url-shortener.yml, and monitoring shares its ECS service/image-digest param with ecs-sentry.yml.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false
