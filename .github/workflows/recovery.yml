@@ -23,6 +23,8 @@ on:
 permissions:
   contents: read
 
+# Recovery changes primary/secondary RDS topology, Terraform state, and ECS capacity;
+# serialize it with normal Terraform operations and workload deployments.
 concurrency:
   group: terraform-operations
   cancel-in-progress: false

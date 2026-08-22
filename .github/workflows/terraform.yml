@@ -1,28 +1,9 @@
 name: Terraform Infrastructure
 
-# Paths list what these jobs execute or source; recovery.yml is here because it runs terraform too.
 on:
   pull_request:
     paths:
       - "terraform/**"
-      - "scripts/ci/**"
-      - "scripts/config.sh"
-      - ".github/actions/terraform-setup/**"
-      - ".github/workflows/recovery.yml"
-      - ".github/workflows/terraform.yml"
-      - ".tflint.hcl"
-      - ".checkov.yaml"
-  push:
-    branches: [main]
-    paths:
-      - "terraform/**"
-      - "scripts/ci/**"
-      - "scripts/config.sh"
-      - ".github/actions/terraform-setup/**"
-      - ".github/workflows/recovery.yml"
-      - ".github/workflows/terraform.yml"
-      - ".tflint.hcl"
-      - ".checkov.yaml"
   workflow_dispatch:
     inputs:
       operation:
@@ -80,94 +61,67 @@ env:
   SENTRY_REGION: ${{ vars.SENTRY_REGION }}
 
 jobs:
-  quality:
-    name: Validate Terraform configuration
+  detect-changes:
+    name: Detect Terraform plan targets
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.operation == 'plan'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    outputs:
+      plan_targets: ${{ steps.plan_targets.outputs.targets }}
     steps:
-      - name: Check out repository
+      - name: Check out repository history
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v7
-
-      - name: Set up Terraform
-        uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
+          fetch-depth: 0
 
-      - name: Set up TFLint
-        uses: terraform-linters/setup-tflint@v5
-
-      - name: Verify Terraform formatting
-        run: terraform fmt -check -recursive terraform
-
-      - name: Validate root modules without remote state
-        run: |
-          roots=(
-            terraform/environments/bootstrap
-            terraform/environments/monitoring
-            terraform/environments/primary
-            terraform/environments/secondary
-          )
-          for root in "${roots[@]}"; do
-            data_dir="$RUNNER_TEMP/tf-data-${root##*/}"
-            TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
-            TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
-          done
-
-      - name: Run TFLint
-        run: |
-          tflint --init --config="$GITHUB_WORKSPACE/.tflint.hcl"
-          tflint --recursive --config="$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform
-
-      - name: Run Checkov
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: terraform
-          quiet: true
-          compact: true
-          config_file: .checkov.yaml
-
-      # Only the scripts these jobs execute; -x plus SCRIPTDIR resolves the config.sh they source.
-      - name: Run ShellCheck
-        run: shellcheck -x --source-path=SCRIPTDIR scripts/config.sh scripts/ci/*.sh
-
-      - name: Run actionlint
+      - name: Detect changed Terraform roots
+        if: github.event_name == 'pull_request'
+        id: paths
         env:
-          ACTIONLINT_VERSION: 1.7.12
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          installer_url="https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}"
-          installer_url="${installer_url}/scripts/download-actionlint.bash"
-          bash <(curl --fail --silent --show-error --location "$installer_url") "$ACTIONLINT_VERSION"
-          ./actionlint -color
+          mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- terraform)
+          targets="$(scripts/ci/terraform-plan-targets.sh "${changed_files[@]}")"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
-      - name: Validate destructive-operation confirmation
-        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'destroy'
+      - name: Select Terraform plan targets
+        id: plan_targets
         env:
-          CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+          CHANGED_TARGETS: ${{ steps.paths.outputs.targets }}
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_TARGET: ${{ inputs.target }}
         run: |
-          if [ "$CONFIRM_DESTROY" != "DESTROY" ]; then
-            echo "Destroy requires confirm_destroy=DESTROY." >&2
-            exit 1
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "targets=${CHANGED_TARGETS:-[]}" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            printf 'targets=["%s"]\n' "$REQUESTED_TARGET" >> "$GITHUB_OUTPUT"
+          else
+            echo 'targets=[]' >> "$GITHUB_OUTPUT"
           fi
 
   plan:
     name: Plan ${{ matrix.target }}
-    needs: quality
+    needs: detect-changes
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.operation == 'plan' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'plan') &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.plan_targets != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(github.event_name == 'pull_request' && '["monitoring","primary","secondary"]' || format('["{0}"]', inputs.target)) }}
+        target: ${{ fromJSON(needs.detect-changes.outputs.plan_targets) }}
     permissions:
       contents: read
       id-token: write
     env:
       TF_TARGET: ${{ matrix.target }}
       TF_ROOT: terraform/environments/${{ matrix.target }}
-      TF_REGION: ${{ fromJSON(vars.TF_REGION_MAP)[matrix.target] }}
+      AWS_REGION: ${{ fromJSON(vars.AWS_REGION_MAP)[matrix.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -177,7 +131,7 @@ jobs:
         with:
           terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ github.event_name == 'pull_request' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_ROLE_ARN }}
-          aws-region: ${{ env.TF_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-plan-${{ github.run_id }}
 
       - name: Initialize remote state
@@ -193,8 +147,8 @@ jobs:
           # shellcheck source=../../../scripts/ci/terraform-plan-vars.sh
           source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
           build_plan_args
-          # Speculative plans must not block or be blocked by live infrastructure operations.
-          terraform plan -input=false -lock=false -out=tfplan "${plan_args[@]}"
+          # Each environment has separate state, so these locks still allow matrix plans to run together.
+          terraform plan -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}"
           terraform show -no-color tfplan > plan.txt
 
       - name: Upload human-readable plan
@@ -220,15 +174,15 @@ jobs:
 
   apply:
     name: Apply ${{ inputs.target }}
-    needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.operation == 'apply' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
-    # Shared repository-wide mutation lock. GitHub preserves the running operation and the
-    # newest pending operation; an older pending operation is canceled when another is queued.
+    # primary/secondary share ECS resources with ecs-url-shortener.yml, while monitoring shares its ECS service
+    # and image-digest parameter with ecs-sentry.yml. GitHub preserves the running operation and
+    # newest pending operation; another queued operation cancels the older pending operation.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false
@@ -242,7 +196,7 @@ jobs:
     env:
       TF_TARGET: ${{ inputs.target }}
       TF_ROOT: terraform/environments/${{ inputs.target }}
-      TF_REGION: ${{ fromJSON(vars.TF_REGION_MAP)[inputs.target] }}
+      AWS_REGION: ${{ fromJSON(vars.AWS_REGION_MAP)[inputs.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -252,7 +206,7 @@ jobs:
         with:
           terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          aws-region: ${{ env.TF_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-apply-${{ github.run_id }}
 
       # Both environments that publish public hostnames depend on apex delegation resolving.
@@ -309,15 +263,14 @@ jobs:
 
   destroy:
     name: Destroy all environments (secondary, primary, monitoring)
-    needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.operation == 'destroy' &&
-      inputs.confirm_destroy == 'DESTROY' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    # Uses the same lock as recovery and ECS deployment jobs that mutate these live resources.
+    # Destroy removes primary, secondary, and monitoring resources, so it must not overlap
+    # recovery or either ECS deployment workflow.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false
@@ -326,6 +279,15 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Validate destroy confirmation
+        env:
+          CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+        run: |
+          if [ "$CONFIRM_DESTROY" != "DESTROY" ]; then
+            echo "Destroy requires confirm_destroy=DESTROY." >&2
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@v7
 

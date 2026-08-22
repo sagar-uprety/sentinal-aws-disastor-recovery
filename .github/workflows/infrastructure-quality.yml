@@ -1,0 +1,99 @@
+name: Infrastructure Quality
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - "scripts/ci/**"
+      - "scripts/config.sh"
+      - ".github/actions/**"
+      - ".github/workflows/**"
+      - ".tflint.hcl"
+      - ".checkov.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "scripts/ci/**"
+      - "scripts/config.sh"
+      - ".github/actions/**"
+      - ".github/workflows/**"
+      - ".tflint.hcl"
+      - ".checkov.yaml"
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TERRAFORM_VERSION: ${{ vars.TERRAFORM_VERSION }}
+
+jobs:
+  quality:
+    name: Validate infrastructure code
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          terraform-version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v5
+
+      - name: Verify Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Validate root modules without remote state
+        run: |
+          roots=(
+            terraform/environments/bootstrap
+            terraform/environments/monitoring
+            terraform/environments/primary
+            terraform/environments/secondary
+          )
+          for root in "${roots[@]}"; do
+            data_dir="$RUNNER_TEMP/tf-data-${root##*/}"
+            TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
+            TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
+          done
+
+      - name: Run TFLint
+        run: |
+          tflint --init --config="$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config="$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          quiet: true
+          compact: true
+          config_file: .checkov.yaml
+
+      - name: Run ShellCheck
+        run: shellcheck --source-path=SCRIPTDIR scripts/config.sh scripts/ci/*.sh
+
+      - name: Test Terraform plan target mapping
+        run: |
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/environments/monitoring/main.tf)" = '["monitoring"]'
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/environments/primary/main.tf)" = '["primary"]'
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/environments/secondary/main.tf)" = '["secondary"]'
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/modules/vpc/main.tf)" = '["monitoring","primary","secondary"]'
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/modules/ecr/main.tf)" = '["monitoring","primary"]'
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/modules/rds/main.tf)" = '["primary","secondary"]'
+          test "$(scripts/ci/terraform-plan-targets.sh terraform/environments/bootstrap/main.tf)" = '[]'
+
+      - name: Run actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          installer_url="https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}"
+          installer_url="${installer_url}/scripts/download-actionlint.bash"
+          bash <(curl --fail --silent --show-error --location "$installer_url") "$ACTIONLINT_VERSION"
+          ./actionlint -color

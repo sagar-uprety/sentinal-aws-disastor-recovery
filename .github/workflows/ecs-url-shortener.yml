@@ -24,10 +24,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: workload-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
   AWS_REGION: ${{ vars.PRIMARY_REGION }}
   CONTAINER_NAME: shortener
@@ -108,6 +104,8 @@ jobs:
     environment:
       name: production
       url: ${{ vars.WORKLOAD_URL }}
+    # Updates the primary image-digest parameter and both primary/secondary ECS services,
+    # which Terraform and recovery operations can also change or remove.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false

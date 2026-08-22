@@ -24,10 +24,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: sentry-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
   # Matches monitoring/locals.tf: isolated from both drill regions (primary eu-central-1, secondary eu-west-1).
   AWS_REGION: ${{ vars.SENTRY_REGION }}
@@ -103,8 +99,8 @@ jobs:
     environment:
       name: production
       url: ${{ vars.SENTRY_URL }}
-    # Shares the account-wide terraform lock: a concurrent terraform.yml apply/destroy
-    # can touch the same ECS service and SSM parameter this job writes to.
+    # Updates the monitoring ECS service and image-digest parameter, which Terraform apply or
+    # destroy can also change or remove.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false
