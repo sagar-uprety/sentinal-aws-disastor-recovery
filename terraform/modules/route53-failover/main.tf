@@ -1,12 +1,6 @@
-# Two ARC routing controls (primary, dr) gate two Route53 failover records
-# via RECOVERY_CONTROL health checks. RECOVERY_CONTROL health status reflects
-# only the control's manual On/Off state, not real endpoint health -- that is
-# what makes the DNS switch operator-gated rather than automatic. A plain
-# Route53 failover policy driven by ALB health checks is deliberately not
-# used here: it would auto-route to DR the moment prod's health check fails,
-# including while DR is still at desired_count=0.
-# Detection-only HTTP health checks for evidence/alarming live in the DR
-# environment root so they remain active even when ARC is toggled off.
+# ARC's routing controls are on/off switches with no ALB knowledge of their own.
+# each mirrors into its own Route53 health check below, which is what actually decides which
+# ALB gets traffic.
 
 resource "aws_route53recoverycontrolconfig_cluster" "main" {
   name = "${var.project_name}-arc"
@@ -17,6 +11,7 @@ resource "aws_route53recoverycontrolconfig_control_panel" "main" {
   cluster_arn = aws_route53recoverycontrolconfig_cluster.main.arn
 }
 
+# Just an on/off switch, doesn't know an ALB or DNS record exists
 resource "aws_route53recoverycontrolconfig_routing_control" "primary" {
   name              = "primary"
   cluster_arn       = aws_route53recoverycontrolconfig_cluster.main.arn
@@ -29,10 +24,7 @@ resource "aws_route53recoverycontrolconfig_routing_control" "dr" {
   control_panel_arn = aws_route53recoverycontrolconfig_control_panel.main.arn
 }
 
-# Two safety rules, not one: ATLEAST/threshold=1/inverted=false blocks a
-# change that would leave fewer than 1 On (no both-off); ATLEAST/threshold=2/
-# inverted=true blocks a change that would leave 2 or more On (no both-on).
-# This is the standard AWS ARC "exactly one active" pattern.
+# enforce at least 1 on
 resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_off" {
   name              = "not-both-off"
   control_panel_arn = aws_route53recoverycontrolconfig_control_panel.main.arn
@@ -50,6 +42,7 @@ resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_off" {
   }
 }
 
+# enforce at most 1 on
 resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_on" {
   name              = "not-both-on"
   control_panel_arn = aws_route53recoverycontrolconfig_control_panel.main.arn
@@ -60,11 +53,8 @@ resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_on" {
     aws_route53recoverycontrolconfig_routing_control.dr.arn,
   ]
 
-  # inverted negates the whole assertion, not just ATLEAST->ATMOST: this
-  # evaluates as "fewer than 2 are On" (threshold=2, inverted=true), i.e. at
-  # most 1 On. threshold=1 here would evaluate as "zero are On" and block
-  # every control from ever being turned on -- confirmed by hitting that
-  # exact AWS-side rejection ("No routing controls can be On") on first apply.
+  # inverted negates the whole assertion: threshold=2 -> "fewer than 2 On" = at most 1.
+  # threshold=1 would wrongly block all controls from ever turning on
   rule_config {
     type      = "ATLEAST"
     threshold = 2
@@ -72,6 +62,7 @@ resource "aws_route53recoverycontrolconfig_safety_rule" "not_both_on" {
   }
 }
 
+# Mirrors the linked routing control's On/Off state as healthy/unhealthy
 resource "aws_route53_health_check" "primary" {
   type                = "RECOVERY_CONTROL"
   routing_control_arn = aws_route53recoverycontrolconfig_routing_control.primary.arn
@@ -95,7 +86,8 @@ resource "aws_route53_record" "primary" {
   name    = var.record_name
   type    = "A"
 
-  set_identifier  = "primary"
+  set_identifier = "primary"
+  # Route53's own failover engine reads this to decide primary vs dr
   health_check_id = aws_route53_health_check.primary.id
 
   failover_routing_policy {

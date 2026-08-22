@@ -1,0 +1,64 @@
+# Repo-wide Checkov suppressions. Single source of truth for both the pre-commit
+# hook and the Run Checkov step in .github/workflows/terraform.yml.
+#
+# Only project-wide policy decisions belong here. A suppression that applies to
+# one specific resource for a resource-specific reason stays as an inline
+# `#checkov:skip=` comment next to that resource.
+skip-check:
+  # --- Encryption: AWS-managed keys instead of customer-managed KMS keys ---
+  # Every CMK carries a fixed monthly fee. This project uses each service's
+  # AWS-managed default key, which still encrypts at rest.
+  - CKV_AWS_337 # SSM parameter uses a CMK (alias/aws/ssm used instead)
+  - CKV_AWS_119 # DynamoDB table uses a CMK (AWS-managed DynamoDB key used instead)
+  - CKV_AWS_26 # SNS topic is encrypted (AWS-managed SNS key used instead)
+  - CKV_AWS_354 # RDS Performance Insights uses a CMK (alias/aws/rds used instead)
+  # CloudWatch Logs has no AWS-managed default KMS option, so a CMK is the only
+  # way to satisfy this and is not worth the fixed cost here.
+  - CKV_AWS_158 # CloudWatch log group is encrypted with a CMK
+
+  # --- Deletion protection: this project is torn down and rebuilt often ---
+  # Enabling these would block `terraform destroy` on every teardown.
+  - CKV_AWS_293 # RDS instance has deletion protection enabled
+  - CKV_AWS_150 # Load balancer has deletion protection enabled
+  # Multi-AZ roughly doubles RDS instance cost; toggle var.multi_az instead of
+  # forcing it on. Revisit as a deliberate cost decision.
+  - CKV_AWS_157 # RDS instance is multi-AZ
+
+  # --- S3: the only buckets here are the Terraform state and the ALB log sink ---
+  - CKV_AWS_144 # Cross-region replication: state is regenerable, ALB logs are not DR-critical
+  - CKV_AWS_18 # Access logging: needs a second bucket plus its own lifecycle, and the ALB bucket is itself the log destination
+  - CKV2_AWS_62 # Event notifications: nothing consumes bucket events, so this would be a no-op resource
+
+  # --- ALB and TLS ---
+  # The :80 listener is a 301 redirect to the :443 listener, which uses
+  # ELBSecurityPolicy-TLS13-1-2-2021-06. Checkov flags the HTTP listener and the
+  # port-80 ingress rule without following the redirect.
+  - CKV_AWS_2 # ALB listener uses HTTPS
+  - CKV2_AWS_20 # ALB redirects HTTP traffic to HTTPS
+  - CKV_AWS_103 # Load balancer uses TLS 1.2 or higher
+  - CKV_AWS_260 # Security group allows ingress from 0.0.0.0/0 to port 80
+  - CKV_AWS_378 # Load balancer target group uses HTTP: TLS terminates at the ALB, traffic stays in the VPC
+  - CKV2_AWS_28 # Public ALB is protected by WAF: not justified for this project
+
+  # --- Networking ---
+  # Both ECS tasks need outbound HTTPS to AWS APIs through the regional NAT
+  # gateway; inbound is already restricted to the ALB security group.
+  - CKV_AWS_382 # Security group allows egress to 0.0.0.0/0 on all ports
+  # NAT gateway EIPs are attached via aws_nat_gateway's dynamic allocation_ids
+  # block; checkov's static graph does not trace that association and always
+  # flags them as unattached (per-resource skips do not propagate through
+  # count-indexed resources).
+  - CKV2_AWS_19 # EIP allocated to a VPC is attached to an instance
+
+  # --- GitHub Actions ---
+  # Workflow dispatch inputs are constrained to choices plus an exact destroy
+  # confirmation. This exception preserves operator gating.
+  - CKV_GHA_7 # Workflow is not using user-controlled inputs
+
+  # --- SSM: image-digest placeholder parameters ---
+  # prod/main.tf and monitoring/main.tf each seed an aws_ssm_parameter.image_digest as a
+  # plain String so the foundation apply can run before any image exists; CI overwrites it
+  # with a real digest afterward. A digest is public image metadata, not a secret, so
+  # SecureString+KMS here is unwarranted cost. Inline #checkov:skip doesn't reliably
+  # suppress CKV2_ (graph) checks, so this is centralized instead.
+  - CKV2_AWS_34 # AWS SSM Parameter should be Encrypted

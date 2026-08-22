@@ -14,13 +14,18 @@ data "aws_kms_key" "rds_primary" {
   key_id = "alias/aws/rds"
 }
 
+data "aws_route53_zone" "pilotlight" {
+  name         = "pilotlight.sagaruprety.com.np."
+  private_zone = false
+}
+
 ephemeral "random_password" "database" {
-  length  = 32
+  length  = 32 # characters
   special = false
 }
 
 ephemeral "random_password" "link_create_token" {
-  length  = 48
+  length  = 48 # characters
   special = false
 }
 
@@ -40,9 +45,8 @@ module "ecr" {
   environment  = local.environment
 }
 
-# Replicates every image push to eu-west-1 under the same repository name and
-# digest, so the DR environment can deploy from a local pull instead of
-# depending on eu-central-1 being reachable during a regional incident.
+# replicates every image push to eu-west-1 under the same repository name and
+# digest, so the DR environment can deploy from a local pull
 resource "aws_ecr_replication_configuration" "main" {
   replication_configuration {
     rule {
@@ -50,8 +54,22 @@ resource "aws_ecr_replication_configuration" "main" {
         region      = "eu-west-1"
         registry_id = data.aws_caller_identity.current.account_id
       }
+
+      # scoping the repository name to just the prod image avoids replicating any other images
+      # that might be pushed to the same account, e.g. from other projects or environments
+      repository_filter {
+        filter      = "${local.project_name}-prod"
+        filter_type = "PREFIX_MATCH"
+      }
     }
   }
+}
+
+module "acm_cert" {
+  source = "../../modules/acm-cert"
+
+  domain_name     = local.app_hostname
+  route53_zone_id = data.aws_route53_zone.pilotlight.zone_id
 }
 
 module "alb" {
@@ -61,11 +79,11 @@ module "alb" {
   environment       = local.environment
   vpc_id            = module.vpc.vpc_id
   public_subnet_ids = module.vpc.public_subnet_ids
-  certificate_arn   = aws_acm_certificate_validation.primary.certificate_arn
+  certificate_arn   = module.acm_cert.certificate_arn
 }
 
 module "ecs" {
-  source = "../../modules/ecs-service"
+  source = "../../modules/ecs-url-shortener"
 
   project_name          = local.project_name
   environment           = local.environment
@@ -74,8 +92,11 @@ module "ecs" {
   alb_security_group_id = module.alb.security_group_id
   target_group_arn      = module.alb.target_group_arn
 
-  # Set var.image_digest to the immutable digest pushed to ECR in phase 2.
-  image_uri                 = var.deploy_service ? "${module.ecr.repository_url}@${var.image_digest}" : "skip"
+  image_uri = (
+    var.deploy_service
+    ? "${module.ecr.repository_url}@${data.aws_ssm_parameter.image_digest[0].insecure_value}"
+    : "skip"
+  )
   db_endpoint               = var.deploy_service ? module.rds.endpoint : "skip"
   db_name                   = "pilotlight"
   db_user                   = "pilotlight"
@@ -86,20 +107,30 @@ module "ecs" {
   desired_count  = var.desired_count
 }
 
+# narrows the ALB's egress to just the ECS tasks' port
+resource "aws_vpc_security_group_egress_rule" "alb_to_ecs" {
+  security_group_id            = module.alb.security_group_id
+  referenced_security_group_id = module.ecs.security_group_id
+  description                  = "App traffic to ECS tasks"
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+}
+
 module "monitoring" {
-  source = "../../modules/monitoring"
+  source = "../../modules/alerting"
 
   project_name            = local.project_name
   environment             = local.environment
   ecs_cluster_name        = module.ecs.cluster_name
   alb_arn_suffix          = module.alb.alb_arn_suffix
   target_group_arn_suffix = module.alb.target_group_arn_suffix
-  ecs_desired_count       = 2
+  ecs_desired_count       = var.desired_count
   alert_email             = var.alert_email
 }
 
 module "github_oidc" {
-  source = "../../modules/github-oidc"
+  source = "../../modules/app-deploy-iam"
 
   project_name             = local.project_name
   environment              = local.environment
@@ -107,18 +138,25 @@ module "github_oidc" {
   github_repo              = var.github_repo
   github_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
 
-  ecr_repository_arn = module.ecr.repository_arn
-  ecs_cluster_arn    = module.ecs.cluster_arn
+  ecr_repository_arn         = module.ecr.repository_arn
+  image_digest_parameter_arn = aws_ssm_parameter.image_digest.arn
+  ecs_cluster_arn            = module.ecs.cluster_arn
   # Constructed rather than referenced because the service only exists when deploy_service is true.
-  ecs_service_arn             = "arn:aws:ecs:eu-central-1:${data.aws_caller_identity.current.account_id}:service/${local.project_name}-${local.environment}/${local.project_name}-${local.environment}"
+  ecs_service_arn = format(
+    "arn:aws:ecs:eu-central-1:%s:service/%s-%s/%s-%s",
+    local.account_id, local.project_name, local.environment, local.project_name, local.environment,
+  )
   ecs_task_execution_role_arn = module.ecs.task_execution_role_arn
   ecs_task_role_arn           = module.ecs.task_role_arn
 
-  dr_ecs_cluster_arn             = "arn:aws:ecs:eu-west-1:${data.aws_caller_identity.current.account_id}:cluster/${local.project_name}-dr"
-  dr_ecr_repository_arn          = "arn:aws:ecr:eu-west-1:${data.aws_caller_identity.current.account_id}:repository/${local.project_name}-prod"
-  dr_ecs_service_arn             = "arn:aws:ecs:eu-west-1:${data.aws_caller_identity.current.account_id}:service/${local.project_name}-dr/${local.project_name}-dr"
-  dr_ecs_task_execution_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.project_name}-dr-ecs-task-exec"
-  dr_ecs_task_role_arn           = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.project_name}-dr-ecs-task"
+  dr_ecs_cluster_arn    = "arn:aws:ecs:eu-west-1:${local.account_id}:cluster/${local.project_name}-dr"
+  dr_ecr_repository_arn = "arn:aws:ecr:eu-west-1:${local.account_id}:repository/${local.project_name}-prod"
+  dr_ecs_service_arn = format(
+    "arn:aws:ecs:eu-west-1:%s:service/%s-dr/%s-dr",
+    local.account_id, local.project_name, local.project_name,
+  )
+  dr_ecs_task_execution_role_arn = "arn:aws:iam::${local.account_id}:role/${local.project_name}-dr-ecs-task-exec"
+  dr_ecs_task_role_arn           = "arn:aws:iam::${local.account_id}:role/${local.project_name}-dr-ecs-task"
 }
 
 module "rds" {
@@ -144,8 +182,34 @@ module "rds" {
   username = "pilotlight"
 }
 
+# Terraform seeds this so the foundation phase can run before any image exists;
+# ecs-url-shortener.yml overwrites it after each push, hence ignore_changes on value.
+resource "aws_ssm_parameter" "image_digest" {
+  name        = "/${local.project_name}/prod/image-digest"
+  description = "Digest of the workload image ecs-url-shortener.yml last published to prod"
+  type        = "String"
+  tier        = "Standard"
+  value       = "pending"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# The resource attribute only holds the seeded value, so the live one is read back here.
+data "aws_ssm_parameter" "image_digest" {
+  count = var.deploy_service ? 1 : 0
+  name  = aws_ssm_parameter.image_digest.name
+
+  lifecycle {
+    postcondition {
+      condition     = can(regex("^sha256:[0-9a-f]{64}$", self.insecure_value))
+      error_message = "No workload image published. Run ecs-url-shortener.yml publish-only before deploy_service=true."
+    }
+  }
+}
+
 resource "aws_ssm_parameter" "database_password_prod" {
-  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key (no per-key monthly fee) rather than a customer-managed key
   name        = "/${local.project_name}/prod/database/password"
   description = "RDS master password for prod"
   type        = "SecureString"
@@ -156,7 +220,6 @@ resource "aws_ssm_parameter" "database_password_prod" {
 }
 
 resource "aws_ssm_parameter" "link_create_token_prod" {
-  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key to avoid a customer-managed-key monthly charge
   name        = "/${local.project_name}/prod/link-create-token"
   description = "URL-shortener operator token for prod"
   type        = "SecureString"
@@ -166,8 +229,6 @@ resource "aws_ssm_parameter" "link_create_token_prod" {
   value_wo_version = var.link_token_version
 }
 
-# AWS-managed key, not a customer-managed key: no per-key monthly fee, matches
-# the pattern already used for SSM and Performance Insights encryption below.
 data "aws_kms_key" "rds_dr" {
   provider = aws.dr
   key_id   = "alias/aws/rds"
@@ -178,11 +239,13 @@ resource "aws_db_instance_automated_backups_replication" "dr" {
 
   source_db_instance_arn = module.rds.arn
   kms_key_id             = data.aws_kms_key.rds_dr.arn
-  retention_period       = 7
+  retention_period       = 7 # days
 }
 
+# Prod's state owns the DR-region SSM parameters (not the dr environment's
+# own state) so they exist ahead of any failover and the promoted replica,
+# which inherits prod's password, resolves against a value already in place.
 resource "aws_ssm_parameter" "database_password_dr" {
-  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key (no per-key monthly fee) rather than a customer-managed key
   provider = aws.dr
 
   name        = "/${local.project_name}/prod/database/password"
@@ -195,7 +258,6 @@ resource "aws_ssm_parameter" "database_password_dr" {
 }
 
 resource "aws_ssm_parameter" "link_create_token_dr" {
-  #checkov:skip=CKV_AWS_337:uses the AWS-managed alias/aws/ssm key to avoid a customer-managed-key monthly charge
   provider = aws.dr
 
   name        = "/${local.project_name}/prod/link-create-token"

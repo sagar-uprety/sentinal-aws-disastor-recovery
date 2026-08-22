@@ -44,21 +44,18 @@ func loadConfig() (config, error) {
 // accepts either a single DATABASE_URL (local-dev convenience) or the five individual DB_* vars ECS injects in prod/DR, never both.
 func databaseConnectionURL() (string, error) {
 	databaseURL := os.Getenv("DATABASE_URL")
-	dbValues := map[string]string{
-		"DB_HOST":     os.Getenv("DB_HOST"),
-		"DB_PORT":     os.Getenv("DB_PORT"),
-		"DB_NAME":     os.Getenv("DB_NAME"),
-		"DB_USER":     os.Getenv("DB_USER"),
-		"DB_PASSWORD": os.Getenv("DB_PASSWORD"),
-	}
+	// kept as an ordered slice rather than a map so the "missing" error below always lists variables in the same order.
+	names := []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"}
+	dbValues := make(map[string]string, len(names))
+	missing := make([]string, 0, len(names))
 	hasDBValues := false
-	missing := make([]string, 0)
-	for name, value := range dbValues {
-		if value == "" {
+	for _, name := range names {
+		dbValues[name] = os.Getenv(name)
+		if dbValues[name] == "" {
 			missing = append(missing, name)
-		} else {
-			hasDBValues = true
+			continue
 		}
+		hasDBValues = true
 	}
 	if databaseURL != "" && hasDBValues {
 		return "", fmt.Errorf("DATABASE_URL and DB_* variables are mutually exclusive")
@@ -69,6 +66,7 @@ func databaseConnectionURL() (string, error) {
 	if len(missing) > 0 {
 		return "", fmt.Errorf("database configuration missing: %s", strings.Join(missing, ", "))
 	}
+	// url.UserPassword percent-encodes credentials, so passwords containing '@' or '/' can't corrupt the DSN.
 	parsed := &url.URL{
 		Scheme: "postgres",
 		User:   url.UserPassword(dbValues["DB_USER"], dbValues["DB_PASSWORD"]),
@@ -112,6 +110,7 @@ func run() error {
 			slog.Error("close database failed", "error", closeErr)
 		}
 	}()
+	// migrations run on every boot so a freshly promoted DR replica reaches the expected schema without a manual step.
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}

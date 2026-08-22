@@ -1,10 +1,6 @@
 # VPC Module
 
-Two-AZ VPC with separate routing tiers: public (ALB), application (ECS), isolated database (RDS).
-
-## Design Intent
-
-Each tier has its own route table. Public subnets route through an internet gateway, application subnets route through a Regional NAT Gateway spanning both AZs, and database subnets have no internet routes. Subnet sizes are calculated with `cidrsubnet` using configurable newbits for each tier. The free S3 gateway endpoint is enabled by default.
+Each tier has its own route table. Public subnets route through an internet gateway, application subnets route through a Regional NAT Gateway spanning across AZs, and database subnets have no internet routes. The free S3 gateway endpoint is enabled by default.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -55,7 +51,6 @@ No modules.
 | ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_app_subnet_newbits"></a> [app\_subnet\_newbits](#input\_app\_subnet\_newbits) | Number of additional bits for application subnet netmasks. | `number` | `3` | no |
 | <a name="input_availability_zones"></a> [availability\_zones](#input\_availability\_zones) | List of availability zones to use. | `list(string)` | n/a | yes |
-| <a name="input_create_interface_endpoints"></a> [create\_interface\_endpoints](#input\_create\_interface\_endpoints) | Provision paid VPC interface endpoints (ecr.api, ecr.dkr, logs, ssm). Not yet implemented: no aws\_vpc\_endpoint resources exist for this var. | `bool` | `false` | no |
 | <a name="input_create_s3_endpoint"></a> [create\_s3\_endpoint](#input\_create\_s3\_endpoint) | Provision a free S3 gateway endpoint. | `bool` | `true` | no |
 | <a name="input_db_subnet_newbits"></a> [db\_subnet\_newbits](#input\_db\_subnet\_newbits) | Number of additional bits for database subnet netmasks. | `number` | `3` | no |
 | <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment name. | `string` | n/a | yes |
@@ -69,11 +64,6 @@ No modules.
 | ---- | ----------- |
 | <a name="output_app_subnet_ids"></a> [app\_subnet\_ids](#output\_app\_subnet\_ids) | IDs of the application private subnets. |
 | <a name="output_db_subnet_ids"></a> [db\_subnet\_ids](#output\_db\_subnet\_ids) | IDs of the isolated database subnets. |
-| <a name="output_nat_gateway_id"></a> [nat\_gateway\_id](#output\_nat\_gateway\_id) | ID of the Regional NAT Gateway. |
 | <a name="output_public_subnet_ids"></a> [public\_subnet\_ids](#output\_public\_subnet\_ids) | IDs of the public subnets. |
 | <a name="output_vpc_id"></a> [vpc\_id](#output\_vpc\_id) | ID of the VPC. |
 <!-- END_TF_DOCS -->
-
-## Cost
-
-One Regional NAT Gateway is billed per supported AZ. Elastic IPs are free when attached. The S3 gateway endpoint has no hourly charge.

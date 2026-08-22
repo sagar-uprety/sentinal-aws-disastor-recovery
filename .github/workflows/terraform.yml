@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "terraform/**"
+      - "scripts/ci/guard-topology.sh"
       - ".github/workflows/recovery.yml"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
@@ -11,26 +12,25 @@ on:
     branches: [main]
     paths:
       - "terraform/**"
+      - "scripts/ci/guard-topology.sh"
       - ".github/workflows/recovery.yml"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
   workflow_dispatch:
     inputs:
       operation:
-        description: Infrastructure operation. Mutations always use dependency-safe environment order.
+        description: Speculative plan, apply, or guarded destroy of every environment.
         required: true
         default: plan
         type: choice
         options:
           - plan
-          - foundation
-          - deploy
-          - full-deploy
-          - monitor-foundation
-          - monitor-deploy
+          - apply
           - destroy
       target:
-        description: Root module for a manual speculative plan. Ignored by deploy and destroy.
+        description: >-
+          Root module to act on. Environments apply one per run, in order monitoring, prod, dr.
+          Ignored by destroy, which always runs dr, prod, monitoring.
         required: true
         default: prod
         type: choice
@@ -38,39 +38,49 @@ on:
           - prod
           - dr
           - monitoring
+      deploy_service:
+        description: >-
+          Create the ECS service. Set false for the foundation phase that provisions the ECR
+          repository before any image exists. Ignored by dr.
+        required: false
+        default: true
+        type: boolean
+      create_arc:
+        description: >-
+          Provision (true) or tear down (false) the DR root's ARC cluster and controls.
+          Applies only to target=dr.
+        required: false
+        default: false
+        type: boolean
       confirm_destroy:
         description: Type DESTROY to authorize a destroy operation.
         required: false
         type: string
-      image_digest:
-        description: Initial immutable digest from workload.yml or monitor.yml publish-only mode. Required when creating the selected ECS service.
-        required: false
-        type: string
-      workload_image_digest:
-        description: Workload image SHA256 digest. Optional for full-deploy; built from source if not provided.
-        required: false
-        type: string
-      monitor_image_digest:
-        description: Monitor image SHA256 digest. Optional for full-deploy; built from source if not provided.
-        required: false
-        type: string
-      create_arc:
-        description: Provision (true) or tear down (false) the DR root's ARC cluster/controls. Applies only to deploy and full-deploy.
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && 'operations' || github.ref }}
+  # apply/destroy share the account-wide "terraform-operations" lock with recovery.yml,
+  # ecs-monitor.yml, ecs-url-shortener.yml (same live AWS resources). Everything else (PR,
+  # push, manual plan) gets its own per-branch lock, so a plan never waits behind someone
+  # else's live apply.
+  group: >-
+    ${{ (github.event_name == 'workflow_dispatch' && inputs.operation != 'plan')
+        && 'terraform-operations' || format('terraform-{0}', github.ref) }}
   cancel-in-progress: false
 
 env:
-  AWS_REGION: eu-central-1
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
+  TERRAFORM_VERSION: ${{ vars.TERRAFORM_VERSION }}
+  PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+  BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+  MONITOR_URL: ${{ vars.MONITOR_URL }}
+  WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
+  PRIMARY_REGION: ${{ vars.PRIMARY_REGION }}
+  DR_REGION: ${{ vars.DR_REGION }}
+  MONITOR_REGION: ${{ vars.MONITOR_REGION }}
 
 jobs:
   quality:
@@ -82,10 +92,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: ./.github/actions/terraform-setup
         with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
+          terraform-version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Set up TFLint
         uses: terraform-linters/setup-tflint@v5
@@ -95,7 +104,13 @@ jobs:
 
       - name: Validate root modules without remote state
         run: |
-          for root in terraform/environments/bootstrap terraform/environments/monitoring terraform/environments/prod terraform/environments/dr; do
+          roots=(
+            terraform/environments/bootstrap
+            terraform/environments/monitoring
+            terraform/environments/prod
+            terraform/environments/dr
+          )
+          for root in "${roots[@]}"; do
             data_dir="$RUNNER_TEMP/tf-data-${root##*/}"
             TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
             TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
@@ -112,24 +127,33 @@ jobs:
           directory: terraform
           quiet: true
           compact: true
-          skip_check: CKV_AWS_219,CKV2_AWS_19,CKV_AWS_260,CKV_AWS_2,CKV2_AWS_20,CKV_AWS_103,CKV2_AWS_28,CKV_AWS_378,CKV_AWS_157
+          config_file: .checkov.yaml
+
+      # -x plus SCRIPTDIR resolves the drill-lib.sh/config.sh the other scripts source.
+      - name: Run ShellCheck
+        run: shellcheck -x --source-path=SCRIPTDIR scripts/*.sh scripts/ci/*.sh scripts/drills/*.sh
 
       - name: Run actionlint
-        shell: bash
+        env:
+          ACTIONLINT_VERSION: 1.7.12
         run: |
-          bash <(curl --fail --silent --show-error --location https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+          installer_url="https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}"
+          installer_url="${installer_url}/scripts/download-actionlint.bash"
+          bash <(curl --fail --silent --show-error --location "$installer_url") "$ACTIONLINT_VERSION"
           ./actionlint -color
 
       - name: Validate destructive-operation confirmation
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'destroy'
+        env:
+          CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
         run: |
-          if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
+          if [ "$CONFIRM_DESTROY" != "DESTROY" ]; then
             echo "Destroy requires confirm_destroy=DESTROY." >&2
             exit 1
           fi
 
   plan:
-    name: Plan ${{ github.event_name == 'pull_request' && 'primary environment' || inputs.target }}
+    name: Plan ${{ inputs.target || 'prod' }}
     needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.operation == 'plan' ||
@@ -139,25 +163,21 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
     env:
-      TF_ROOT: terraform/environments/${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}
+      TF_TARGET: ${{ inputs.target || 'prod' }}
+      TF_ROOT: terraform/environments/${{ inputs.target || 'prod' }}
+      TF_REGION: ${{ fromJSON(vars.TF_REGION_MAP)[inputs.target || 'prod'] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: ./.github/actions/terraform-setup
         with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ github.event_name == 'pull_request' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-plan-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
+          terraform-version: ${{ env.TERRAFORM_VERSION }}
+          role-arn: ${{ github.event_name == 'pull_request' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.TF_REGION }}
+          session-name: terraform-plan-${{ github.run_id }}
 
       - name: Initialize remote state
         working-directory: ${{ env.TF_ROOT }}
@@ -165,532 +185,127 @@ jobs:
 
       - name: Create speculative plan
         working-directory: ${{ env.TF_ROOT }}
+        env:
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          DEPLOY_SERVICE: ${{ inputs.deploy_service }}
+          CREATE_ARC: ${{ inputs.create_arc }}
         run: |
-          plan_args=()
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            plan_args+=("-lock=false")
-          fi
-          if [ "${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}" = "prod" ]; then
-            plan_args+=("-var=deploy_service=true" "-var=multi_az=true")
-          fi
-          set +e
-          terraform plan -detailed-exitcode -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}" > plan.log 2>&1
-          status=$?
-          set -e
-          cat plan.log
-          if [ "$status" -eq 1 ]; then
-            exit 1
-          fi
+          # shellcheck source=../../../scripts/ci/terraform-plan-vars.sh
+          source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
+          build_plan_args
+          # Skip requesting the state lock: a plan is read-only, but still asks for the lock by
+          # default, so it could sit blocked for up to 5m behind an unrelated apply in progress.
+          [ "$IS_PULL_REQUEST" = "true" ] && plan_args+=("-lock=false")
+          terraform plan -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}"
           terraform show -no-color tfplan > plan.txt
 
       - name: Upload human-readable plan
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          name: terraform-plan-${{ github.event_name == 'pull_request' && 'prod' || inputs.target }}
+          name: terraform-plan-${{ env.TF_TARGET }}
           path: ${{ env.TF_ROOT }}/plan.txt
           retention-days: 7
 
-      - name: Prepare pull-request plan comment
-        if: github.event_name == 'pull_request'
+      # No PR comment bot: the plan job shows as a check on the PR, and its "Details"
+      # link opens straight to this run summary.
+      - name: Publish plan summary
         env:
-          PLAN_FILE: terraform/environments/prod/plan.txt
+          PLAN_FILE: ${{ env.TF_ROOT }}/plan.txt
         run: |
           {
-            echo '## Terraform speculative plan (prod)'
-            echo
-            echo '> This pull-request plan covers prod. DR is planned during the approved deployment sequence after prod is applied.'
-            echo
-            echo '<details><summary>Show plan</summary>'
+            echo "## Terraform speculative plan ($TF_TARGET)"
             echo
             echo '```terraform'
             tail -c 60000 "$PLAN_FILE"
             echo '```'
-            echo '</details>'
-          } > plan-comment.md
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish pull-request plan comment
-        if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: terraform-plan-prod
-          path: plan-comment.md
-
-  deploy:
-    name: Provision primary and DR infrastructure
+  apply:
+    name: Apply ${{ inputs.target }}
     needs: quality
     if: >-
-      always() &&
-      needs.quality.result == 'success' &&
-      github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'foundation' || inputs.operation == 'deploy')
+      inputs.operation == 'apply' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment:
       name: terraform-production
-      url: https://monitor.pilotlight.sagaruprety.com.np
+      # dr never serves public traffic (pilot light), so it gets no URL rather than a wrong one.
+      url: ${{ inputs.target == 'monitoring' && vars.MONITOR_URL || inputs.target == 'prod' && vars.WORKLOAD_URL || '' }}
     permissions:
       contents: read
       id-token: write
+    env:
+      TF_TARGET: ${{ inputs.target }}
+      TF_ROOT: terraform/environments/${{ inputs.target }}
+      TF_REGION: ${{ fromJSON(vars.TF_REGION_MAP)[inputs.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: ./.github/actions/terraform-setup
         with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
+          terraform-version: ${{ env.TERRAFORM_VERSION }}
+          role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.TF_REGION }}
+          session-name: terraform-apply-${{ github.run_id }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-deploy-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Initialize primary state
-        working-directory: terraform/environments/prod
-        run: terraform init -input=false
-
+      # Both environments that publish public hostnames depend on apex delegation resolving.
       - name: Verify public Route 53 delegation
-        run: |
-          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name pilotlight.sagaruprety.com.np. --query "HostedZones[?Name=='pilotlight.sagaruprety.com.np.'].Id | [0]" --output text)"
-          for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text); do
-            if ! dig +short NS pilotlight.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
-              echo "Missing public delegation to $nameserver. Apply bootstrap and update Cloudflare before deployment." >&2
-              exit 1
-            fi
-          done
+        if: inputs.target != 'dr'
+        run: scripts/ci/guard-topology.sh route53-delegation
 
-      - name: Refuse deployment during failback topology
-        run: |
-          prod_source="$(aws rds describe-db-instances \
-            --region eu-central-1 \
-            --db-instance-identifier pilotlight-prod \
-            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
-          dr_source="$(aws rds describe-db-instances \
-            --region eu-west-1 \
-            --db-instance-identifier pilotlight-dr \
-            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
-          if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
-            echo "Database topology is in failback. Use recovery.yml instead of deploy." >&2
-            exit 1
-          fi
+      - name: Refuse apply during failback topology
+        if: inputs.target == 'prod' || inputs.target == 'dr'
+        run: scripts/ci/guard-topology.sh no-failback
 
-      - name: Plan primary
-        working-directory: terraform/environments/prod
-        env:
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
-        run: |
-          plan_args=("-var=multi_az=true")
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "foundation" ]; then
-            service_arn="$(aws ecs describe-services \
-              --cluster pilotlight-prod \
-              --services pilotlight-prod \
-              --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
-            if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
-              echo "Foundation mode is only valid before the prod ECS service exists." >&2
-              exit 1
-            fi
-            plan_args+=("-var=deploy_service=false")
-          else
-            plan_args+=("-var=deploy_service=true")
-            if [ -z "$IMAGE_DIGEST" ]; then
-              service_arn="$(aws ecs describe-services \
-                --cluster pilotlight-prod \
-                --services pilotlight-prod \
-                --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
-              if [ -z "$service_arn" ] || [ "$service_arn" = "None" ]; then
-                echo "A fresh service deployment requires image_digest from workload.yml publish-only mode." >&2
-                exit 1
-              fi
-              task_definition="$(aws ecs describe-services \
-                --cluster pilotlight-prod \
-                --services pilotlight-prod \
-                --query 'services[0].taskDefinition' --output text)"
-              # JMESPath backticks are literals, not shell substitutions.
-              # shellcheck disable=SC2016
-              image="$(aws ecs describe-task-definition \
-                --task-definition "$task_definition" \
-                --query 'taskDefinition.containerDefinitions[?name==`shortener`].image | [0]' --output text)"
-              IMAGE_DIGEST="${image##*@}"
-            fi
-            if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "image_digest must be a sha256 digest." >&2
-              exit 1
-            fi
-            plan_args+=("-var=image_digest=$IMAGE_DIGEST")
-          fi
-          terraform plan -input=false -lock-timeout=5m -out=prod.tfplan "${plan_args[@]}"
-
-      - name: Show primary plan
-        working-directory: terraform/environments/prod
-        run: terraform show -no-color prod.tfplan
-
-      - name: Apply primary plan
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m prod.tfplan
-
-      - name: Initialize DR state
-        if: inputs.operation == 'deploy'
-        working-directory: terraform/environments/dr
+      - name: Initialize state
+        working-directory: ${{ env.TF_ROOT }}
         run: terraform init -input=false
 
-      - name: Plan DR pilot light
-        if: inputs.operation == 'deploy'
-        working-directory: terraform/environments/dr
-        run: terraform plan -input=false -lock-timeout=5m -var=create_arc=${{ inputs.create_arc }} -out=dr.tfplan
+      - name: Plan
+        working-directory: ${{ env.TF_ROOT }}
+        env:
+          DEPLOY_SERVICE: ${{ inputs.deploy_service }}
+          CREATE_ARC: ${{ inputs.create_arc }}
+        run: |
+          # shellcheck source=../../../scripts/ci/terraform-plan-vars.sh
+          source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
+          build_plan_args
+          terraform plan -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}"
 
-      - name: Show DR pilot-light plan
-        if: inputs.operation == 'deploy'
-        working-directory: terraform/environments/dr
-        run: terraform show -no-color dr.tfplan
+      - name: Show plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform show -no-color tfplan
 
-      - name: Apply DR pilot-light plan
-        if: inputs.operation == 'deploy'
-        working-directory: terraform/environments/dr
-        run: terraform apply -input=false -lock-timeout=5m dr.tfplan
+      - name: Apply plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform apply -input=false -lock-timeout=5m tfplan
 
       - name: Verify DR pilot-light state
-        if: inputs.operation == 'deploy'
-        run: |
-          desired="$(aws ecs describe-services --region eu-west-1 --cluster pilotlight-dr --services pilotlight-dr --query 'services[0].desiredCount' --output text)"
-          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier pilotlight-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
-          test "$desired" = "0"
-          test -n "$source" && test "$source" != "None"
-
-  full-deploy:
-    name: Full deploy (monitor + prod + DR)
-    needs: quality
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      inputs.operation == 'full-deploy' &&
-      github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment:
-      name: terraform-production
-      url: https://monitor.pilotlight.sagaruprety.com.np
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-full-deploy-${{ github.run_id }}
-          aws-region: eu-west-1
-
-      - name: Initialize monitoring state
-        working-directory: terraform/environments/monitoring
-        run: terraform init -input=false
-
-      - name: Detect monitoring service state
-        id: monitor-state
-        run: |
-          service_arn="$(aws ecs describe-services \
-            --region eu-west-1 \
-            --cluster pilotlight-monitoring \
-            --services pilotlight-monitoring \
-            --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
-          if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
-            echo "existing=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "existing=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Plan monitoring foundation
-        if: steps.monitor-state.outputs.existing == 'false'
-        working-directory: terraform/environments/monitoring
-        run: |
-          terraform plan -input=false -lock-timeout=5m -out=monitoring.tfplan \
-            -var=deploy_service=false
-
-      - name: Apply monitoring foundation
-        if: steps.monitor-state.outputs.existing == 'false'
-        working-directory: terraform/environments/monitoring
-        run: terraform apply -input=false -lock-timeout=5m monitoring.tfplan
-
-      - name: Get monitoring ECR URL
-        id: monitor-ecr
-        run: |
-          repo_uri="$(aws ecr describe-repositories --region eu-west-1 --repository-names pilotlight-monitoring --query 'repositories[0].repositoryUri' --output text)"
-          echo "url=$repo_uri" >> "$GITHUB_OUTPUT"
-
-      - name: Login to monitoring ECR
-        run: aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin "${{ steps.monitor-ecr.outputs.url }}"
-
-      - name: Resolve monitor image digest
-        id: monitor-digest
-        env:
-          PROVIDED_DIGEST: ${{ inputs.monitor_image_digest }}
-        run: |
-          if [ -n "$PROVIDED_DIGEST" ]; then
-            echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
-          else
-            docker build --platform linux/arm64 -t "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" -f apps/monitor/Dockerfile apps/monitor
-            docker push "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}"
-            digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.monitor-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
-            echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Resolve monitor deploy digest
-        id: monitor-deploy-digest
-        env:
-          MONITOR_DIGEST: ${{ steps.monitor-digest.outputs.digest }}
-          EXISTING: ${{ steps.monitor-state.outputs.existing }}
-        run: |
-          digest="$MONITOR_DIGEST"
-          if [ "$EXISTING" = "true" ] && [ -z "$digest" ] && [ -z "${{ inputs.monitor_image_digest }}" ]; then
-            task_definition="$(aws ecs describe-services --region eu-west-1 --cluster pilotlight-monitoring --services pilotlight-monitoring --query 'services[0].taskDefinition' --output text)"
-            image="$(aws ecs describe-task-definition --region eu-west-1 --task-definition "$task_definition" --query 'taskDefinition.containerDefinitions[0].image' --output text)"
-            digest="${image##*@}"
-          fi
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Monitor deploy requires a valid image digest." >&2
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      - name: Plan monitoring deploy
-        working-directory: terraform/environments/monitoring
-        run: |
-          terraform plan -input=false -lock-timeout=5m -out=monitoring.tfplan \
-            -var=deploy_service=true -var="image_digest=${{ steps.monitor-deploy-digest.outputs.digest }}"
-
-      - name: Show monitoring plan
-        working-directory: terraform/environments/monitoring
-        run: terraform show -no-color monitoring.tfplan
-
-      - name: Apply monitoring plan
-        working-directory: terraform/environments/monitoring
-        run: terraform apply -input=false -lock-timeout=5m monitoring.tfplan
+        if: inputs.target == 'dr'
+        run: scripts/ci/guard-topology.sh dr-pilot-light
 
       - name: Verify isolated monitor
+        if: inputs.target == 'monitoring' && inputs.deploy_service
         run: |
-          aws ecs wait services-stable --region eu-west-1 --cluster pilotlight-monitoring --services pilotlight-monitoring
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://monitor.pilotlight.sagaruprety.com.np/healthz
+          aws ecs wait services-stable --region "$MONITOR_REGION" \
+            --cluster "$PROJECT_NAME-monitoring" --services "$PROJECT_NAME-monitoring"
+          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
+            "$MONITOR_URL/healthz"
 
-      - name: Configure AWS credentials for workload
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-full-deploy-workload-${{ github.run_id }}
-          aws-region: eu-central-1
-
-      - name: Verify public Route 53 delegation
+      - name: Verify public workload health
+        if: inputs.target == 'prod' && inputs.deploy_service
         run: |
-          zone_id="$(aws route53 list-hosted-zones-by-name --dns-name pilotlight.sagaruprety.com.np. --query "HostedZones[?Name=='pilotlight.sagaruprety.com.np.'].Id | [0]" --output text)"
-          for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text); do
-            if ! dig +short NS pilotlight.sagaruprety.com.np | grep -Fxq "${nameserver%.}."; then
-              echo "Missing public delegation to $nameserver. Apply bootstrap and update Cloudflare before deployment." >&2
-              exit 1
-            fi
-          done
-
-      - name: Refuse deploy during failback topology
-        run: |
-          prod_source="$(aws rds describe-db-instances --region eu-central-1 --db-instance-identifier pilotlight-prod --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
-          dr_source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier pilotlight-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
-          if { [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; } || [ "$dr_source" = "None" ]; then
-            echo "Database topology is in failback. Use recovery.yml instead of full-deploy." >&2
-            exit 1
-          fi
-
-      - name: Initialize primary state
-        working-directory: terraform/environments/prod
-        run: terraform init -input=false
-
-      - name: Detect prod service state
-        id: prod-state
-        run: |
-          service_arn="$(aws ecs describe-services --region eu-central-1 --cluster pilotlight-prod --services pilotlight-prod --query 'services[0].serviceArn' --output text 2>/dev/null || true)"
-          if [ -n "$service_arn" ] && [ "$service_arn" != "None" ]; then
-            echo "existing=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "existing=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Plan prod foundation
-        if: steps.prod-state.outputs.existing == 'false'
-        working-directory: terraform/environments/prod
-        run: |
-          terraform plan -input=false -lock-timeout=5m -out=prod.tfplan \
-            -var=deploy_service=false -var=multi_az=true
-
-      - name: Apply prod foundation
-        if: steps.prod-state.outputs.existing == 'false'
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m prod.tfplan
-
-      - name: Get prod ECR URL
-        id: prod-ecr
-        run: |
-          repo_uri="$(aws ecr describe-repositories --region eu-central-1 --repository-names pilotlight-prod --query 'repositories[0].repositoryUri' --output text)"
-          echo "url=$repo_uri" >> "$GITHUB_OUTPUT"
-
-      - name: Login to prod ECR
-        run: aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin "${{ steps.prod-ecr.outputs.url }}"
-
-      - name: Resolve workload image digest
-        id: workload-digest
-        env:
-          PROVIDED_DIGEST: ${{ inputs.workload_image_digest }}
-        run: |
-          if [ -n "$PROVIDED_DIGEST" ]; then
-            echo "digest=$PROVIDED_DIGEST" >> "$GITHUB_OUTPUT"
-          else
-            docker build --platform linux/arm64 -t "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" -f apps/url-shortener/Dockerfile apps/url-shortener
-            docker push "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}"
-            digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.prod-ecr.outputs.url }}:${GITHUB_SHA}" | cut -d@ -f2)"
-            echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Resolve prod deploy digest
-        id: prod-deploy-digest
-        env:
-          WORKLOAD_DIGEST: ${{ steps.workload-digest.outputs.digest }}
-          EXISTING: ${{ steps.prod-state.outputs.existing }}
-        run: |
-          digest="$WORKLOAD_DIGEST"
-          if [ "$EXISTING" = "true" ] && [ -z "$digest" ] && [ -z "${{ inputs.workload_image_digest }}" ]; then
-            task_definition="$(aws ecs describe-services --region eu-central-1 --cluster pilotlight-prod --services pilotlight-prod --query 'services[0].taskDefinition' --output text)"
-            # JMESPath backticks are literals, not shell substitutions.
-            # shellcheck disable=SC2016
-            image="$(aws ecs describe-task-definition --region eu-central-1 --task-definition "$task_definition" --query 'taskDefinition.containerDefinitions[?name==`shortener`].image | [0]' --output text)"
-            digest="${image##*@}"
-          fi
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Prod deploy requires a valid workload image digest." >&2
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      - name: Plan prod deploy
-        working-directory: terraform/environments/prod
-        run: |
-          terraform plan -input=false -lock-timeout=5m -out=prod.tfplan \
-            -var=deploy_service=true -var=multi_az=true -var="image_digest=${{ steps.prod-deploy-digest.outputs.digest }}"
-
-      - name: Show prod plan
-        working-directory: terraform/environments/prod
-        run: terraform show -no-color prod.tfplan
-
-      - name: Apply prod plan
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m prod.tfplan
-
-      - name: Initialize DR state
-        working-directory: terraform/environments/dr
-        run: terraform init -input=false
-
-      - name: Plan DR pilot light
-        working-directory: terraform/environments/dr
-        run: terraform plan -input=false -lock-timeout=5m -var=create_arc=${{ inputs.create_arc }} -out=dr.tfplan
-
-      - name: Show DR pilot-light plan
-        working-directory: terraform/environments/dr
-        run: terraform show -no-color dr.tfplan
-
-      - name: Apply DR pilot-light plan
-        working-directory: terraform/environments/dr
-        run: terraform apply -input=false -lock-timeout=5m dr.tfplan
-
-      - name: Verify DR pilot-light state
-        run: |
-          desired="$(aws ecs describe-services --region eu-west-1 --cluster pilotlight-dr --services pilotlight-dr --query 'services[0].desiredCount' --output text)"
-          source="$(aws rds describe-db-instances --region eu-west-1 --db-instance-identifier pilotlight-dr --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
-          test "$desired" = "0"
-          test -n "$source" && test "$source" != "None"
-
-  deploy-monitor:
-    name: Provision isolated monitoring infrastructure
-    needs: quality
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'monitor-foundation' || inputs.operation == 'monitor-deploy') &&
-      github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment:
-      name: terraform-production
-      url: https://monitor.pilotlight.sagaruprety.com.np
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-monitor-${{ github.run_id }}
-          aws-region: eu-west-1
-
-      - name: Initialize monitoring state
-        working-directory: terraform/environments/monitoring
-        run: terraform init -input=false
-
-      - name: Plan monitoring environment
-        working-directory: terraform/environments/monitoring
-        env:
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
-        run: |
-          plan_args=()
-          if [ "${{ inputs.operation }}" = "monitor-foundation" ]; then
-            plan_args+=("-var=deploy_service=false")
-          else
-            if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "monitor-deploy requires image_digest from monitor.yml publish-only mode." >&2
-              exit 1
-            fi
-            plan_args+=("-var=deploy_service=true" "-var=image_digest=$IMAGE_DIGEST")
-          fi
-          terraform plan -input=false -lock-timeout=5m -out=monitoring.tfplan "${plan_args[@]}"
-
-      - name: Show monitoring plan
-        working-directory: terraform/environments/monitoring
-        run: terraform show -no-color monitoring.tfplan
-
-      - name: Apply monitoring plan
-        working-directory: terraform/environments/monitoring
-        run: terraform apply -input=false -lock-timeout=5m monitoring.tfplan
-
-      - name: Verify isolated monitor
-        if: inputs.operation == 'monitor-deploy'
-        run: |
-          aws ecs wait services-stable --region eu-west-1 --cluster pilotlight-monitoring --services pilotlight-monitoring
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors https://monitor.pilotlight.sagaruprety.com.np/healthz
+          aws ecs wait services-stable --region "$PRIMARY_REGION" \
+            --cluster "$PROJECT_NAME-prod" --services "$PROJECT_NAME-prod"
+          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
+            "$WORKLOAD_URL/healthz"
 
   destroy:
-    name: Destroy all environments (DR, prod, monitoring)
+    name: Destroy all environments (dr, prod, monitoring)
     needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' &&
@@ -708,85 +323,43 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: ./.github/actions/terraform-setup
         with:
-          terraform_version: 1.15.5
-          terraform_wrapper: false
+          terraform-version: ${{ env.TERRAFORM_VERSION }}
+          role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.PRIMARY_REGION }}
+          session-name: terraform-destroy-${{ github.run_id }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: terraform-destroy-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
+      - name: Refuse destruction during reverse replication
+        run: scripts/ci/guard-topology.sh no-reverse-replication
 
-      - name: Refuse normal destruction during reverse replication
+      # dr before prod because the DR database replicates from prod, and prod before
+      # monitoring because monitoring only observes the other two.
+      - name: Destroy dr then prod
         run: |
-          prod_source="$(aws rds describe-db-instances \
-            --region eu-central-1 \
-            --db-instance-identifier pilotlight-prod \
-            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text 2>/dev/null || true)"
-          if [ -n "$prod_source" ] && [ "$prod_source" != "None" ]; then
-            echo "Prod is still a DR replica. Complete recovery.yml failback-reset before destroy." >&2
-            exit 1
-          fi
-
-      - name: Initialize DR state
-        working-directory: terraform/environments/dr
-        run: terraform init -input=false
-
-      - name: Plan DR destruction
-        working-directory: terraform/environments/dr
-        run: terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
-
-      - name: Show DR destruction plan
-        working-directory: terraform/environments/dr
-        run: terraform show -no-color destroy.tfplan
-
-      - name: Apply DR destruction plan
-        working-directory: terraform/environments/dr
-        run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
-
-      - name: Initialize primary state
-        working-directory: terraform/environments/prod
-        run: terraform init -input=false
-
-      - name: Plan primary destruction
-        working-directory: terraform/environments/prod
-        run: terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
-
-      - name: Show primary destruction plan
-        working-directory: terraform/environments/prod
-        run: terraform show -no-color destroy.tfplan
-
-      - name: Apply primary destruction plan
-        working-directory: terraform/environments/prod
-        run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
+          for root in terraform/environments/dr terraform/environments/prod; do
+            terraform -chdir="$root" init -input=false
+            terraform -chdir="$root" plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
+            terraform -chdir="$root" show -no-color destroy.tfplan
+            terraform -chdir="$root" apply -input=false -lock-timeout=5m destroy.tfplan
+          done
 
       - name: Remove AWS-managed workload artifacts
         env:
           CONFIRM_CLEANUP: "YES"
-        run: bash scripts/cleanup-workload-artifacts.sh
+        run: bash scripts/ci/cleanup-workload-artifacts.sh
 
       - name: Configure AWS credentials for monitoring
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           role-session-name: terraform-destroy-monitor-${{ github.run_id }}
-          aws-region: eu-west-1
+          aws-region: ${{ env.MONITOR_REGION }}
 
-      - name: Initialize monitoring state
+      - name: Destroy monitoring
         working-directory: terraform/environments/monitoring
-        run: terraform init -input=false
-
-      - name: Plan monitoring destruction
-        working-directory: terraform/environments/monitoring
-        run: terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
-
-      - name: Show monitoring destruction plan
-        working-directory: terraform/environments/monitoring
-        run: terraform show -no-color destroy.tfplan
-
-      - name: Apply monitoring destruction plan
-        working-directory: terraform/environments/monitoring
-        run: terraform apply -input=false -lock-timeout=5m destroy.tfplan
+        run: |
+          terraform init -input=false
+          terraform plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
+          terraform show -no-color destroy.tfplan
+          terraform apply -input=false -lock-timeout=5m destroy.tfplan

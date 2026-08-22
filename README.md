@@ -1,51 +1,114 @@
-# Pilotlight - AWS Multi-Region Disaster Recovery
+# Pilotlight
 
-An AWS resilience project with an isolated monitoring plane that observes a separate database-backed URL shortener through multi-AZ and pilot-light recovery drills.
+A multi-region disaster recovery architecture on AWS, implemented as two independent systems: a PostgreSQL-backed URL-shortener workload that runs active in one region with a pilot-light standby in a second, and a monitoring service that lives in its own region, on its own infrastructure, and keeps reporting status regardless of what the workload is doing.
 
-The monitor dashboard is served at `https://monitor.pilotlight.sagaruprety.com.np`; its machine-readable health endpoint is `/healthz`.
+The split matters because a monitor that shares infrastructure with the thing it watches produces useless signal exactly when you need it most: if the workload region goes down, a co-located monitor goes down with it. Here the monitor has its own VPC, its own Terraform state, and its own AWS account-level failure domain, so it keeps observing and recording through every drill, including a full regional failover of the workload.
 
-## Status
+Recovery follows the pilot-light pattern: the DR region's network, database replica, and container image exist and stay current at all times, but application compute stays at zero until an operator promotes the database and starts it. That keeps standby cost low while keeping recovery time in minutes, and every step of promotion, traffic switching, and failback is scripted and operator-gated rather than automatic.
 
-Milestones 0 through 7 are complete. M0-M6 built and live-drilled the historical self-monitoring architecture; M7 split it into an isolated monitor plane (`monitor.pilotlight.sagaruprety.com.np`, eu-west-1) observing a separate URL shortener (`shortener.pilotlight.sagaruprety.com.np`, prod eu-central-1 / DR pilot-light eu-west-1), then live-drilled the new two-plane architecture end to end on 2026-08-08. Two real bugs found during that drill (a monitor checker connection-reuse issue across DNS cutover, and a `measure.sh` event-name collision) were fixed and redeployed live; see drill evidence for the full account. Measured M7 results:
+## Architecture
 
-- **RTO:** 666s (11m6s) against a 30-minute target
-- **RPO:** 26.0s, real CloudWatch `ReplicaLag` (target 60s)
-- **Failback duration:** 851s (14m11s) from write freeze through verified prod traffic
-- **HA: ECS task replacement:** 42s
-- **HA: AZ capacity recovery:** 55s
-- **HA: RDS Multi-AZ failover:** 412s
+### System Overview
 
-Every link present on primary before the outage was verified present in DR after promotion, and a DR-created link was verified present on prod after failback.
+![Pilotlight system overview](docs/aws-dr-architecture.drawio.png)
 
-Historical M0-M6 results (self-monitoring architecture, superseded by the M7 split) remain retained as evidence in drill evidence, `docs/postmortem.md`, and `docs/evidence/m6/`, and are not conflated with the M7 numbers above.
+The primary region (`eu-central-1`) serves live traffic behind an ALB, with two ECS Fargate tasks across two Availability Zones writing to a Multi-AZ RDS PostgreSQL instance. The DR region (`eu-west-1`) mirrors the same network and load balancer, pre-provisioned but idle: its ECS service runs zero tasks, and its database is a cross-region read replica kept continuously in sync. Route 53 Application Recovery Controller (ARC) holds the only traffic-routing switch: DNS answers depend solely on ARC's routing-control state, never on ALB health directly, so the system can never auto-route users to a DR region that isn't actually ready. The monitoring plane sits below both regions with its own ALB, ECS task, and DynamoDB-backed check history, polling the workload's public health endpoint and reading ECS/RDS state through read-only AWS APIs.
 
-Workload, DR, and monitoring infrastructure are ephemeral by design and are currently destroyed after the M7 drill; only `bootstrap` (state backend, OIDC roles, delegated Route53 zone) is live. The two-plane isolation described below is proven both structurally (DR's Terraform data sources reference only prod, never monitoring; monitoring's Terraform config has no workload data sources at all) and by empty-state `terraform plan`/`terraform plan -destroy` runs on 2026-08-14 confirming zero cross-plane resources in any state file.
+### Detailed Infrastructure Topology
 
-## Two-Plane Architecture
+![Pilotlight detailed infrastructure topology](docs/aws-dr-architecture-detailed.drawio.png)
 
-Deployed and live-drilled 2026-08-08 (currently torn down between drills, per the ephemeral-infrastructure design above):
+This view expands both regions down to subnet level. Each region's VPC is split into three tiers across two Availability Zones: public subnets for the ALB and NAT Gateway, private application subnets for ECS tasks, and isolated database subnets for RDS with no route to the internet. The primary region's RDS instance runs synchronous Multi-AZ (a standby for availability, not a backup) alongside an asynchronous cross-region read replica and cross-region automated-backup replication with a 7-day point-in-time-recovery window (a corruption-recovery path independent of the replica). Container images are built once, pushed to ECR by immutable digest, and replicated to the DR region's ECR so both regions run the exact same artifact. Secrets (the database password and the workload's link-creation token) are generated as Terraform ephemeral values and written directly to regional SSM Parameter Store SecureString parameters through write-only provider arguments, so plaintext never touches Terraform state.
 
-- An isolated monitor in eu-west-1 with separate Terraform state, VPC, ECS service, ALB, ECR repository, and on-demand DynamoDB table.
-- A monitor task that checks `https://shortener.pilotlight.sagaruprety.com.np/healthz` and reads explicit prod and DR ECS and RDS state through read-only AWS APIs.
-- A live drill timeline fed by the same guarded scripts that retain the local evidence log, with events stored in monitor-owned DynamoDB.
-- A PostgreSQL-backed URL shortener on the existing eu-central-1 prod and eu-west-1 pilot-light DR environments.
-- A Terraform-generated URL creation token passed only through write-only arguments and stored in regional SSM SecureString parameters.
-- Failover and failback scripts that use a prod-created link and a DR-created link as application-level data-survival evidence.
+### Recovery Mechanics
 
-## Repository Checks
+Two independent, complementary mechanisms protect the database, matching the trade-off described in AWS's own pilot-light guidance:
 
-Run these without deploying infrastructure:
+| Mechanism | Purpose | Recovery time |
+|---|---|---|
+| Cross-region read replica | Always-on standby data path; promoted to standalone primary on failover | Minutes |
+| Cross-region automated backup replication (PITR) | Corruption/deletion recovery, since a replica faithfully copies corrupted data and backups don't | Minutes to an hour, restored into an isolated instance |
+
+Traffic never moves automatically. Recovery is a sequence of operator-gated, scripted steps, each one verifying the previous step actually succeeded before proceeding:
+
+1. **Detect**: confirm the primary is actually down (health checks, not assumption).
+2. **Promote**: validate replica freshness, promote it to a standalone writer, scale DR compute to two tasks across two AZs, verify application-level writes succeed.
+3. **Switch**: atomically flip the pre-provisioned ARC routing controls (primary off, DR on) in a single data-plane call, then verify authoritative DNS and public traffic are actually being served from the new region.
+4. **Fail back**: once the original region is healthy again, rebuild it as a fresh replica of the (now-authoritative) DR database, freeze writes, promote it back, and reverse the ARC switch.
+
+Design targets: **RTO ≤ 30 minutes** end-to-end (detection through verified traffic on DR), **RPO ≤ 60 seconds** on the replica-promotion path, measured against real CloudWatch `ReplicaLag`, not assumed.
+
+## Resilience Testing
+
+Each row below is a real injected failure with a defined recovery expectation, not a documentation-only claim:
+
+| Layer | Injected failure | Expected recovery |
+|---|---|---|
+| Application process | Stop one ECS task | ALB removes the target; ECS replaces it; no user-visible outage |
+| Application release | Deploy an image that exits immediately | ECS deployment circuit breaker rolls back automatically; alert fires |
+| Application dependency | Make the database unavailable | All tasks lose their shared DB connection together; ALB has no healthy targets; recovers when the DB returns |
+| External egress | Block outbound NAT traffic | App still serves cached state; external checks go red; documented as a known limitation |
+| AZ compute capacity | Stop all tasks in one Availability Zone | Remaining AZ serves traffic; ECS restores desired count across available capacity |
+| AZ database failure | Force an RDS Multi-AZ failover | App reconnects through the unchanged RDS endpoint; interruption is measured, not assumed |
+| Regional failure | Stop primary compute, promote DR replica, start DR compute, switch traffic | Full pilot-light runbook executes against measured RTO/RPO targets |
+| Data corruption | Restore the cross-region automated backup into a new isolated instance | Known pre-corruption data verified present; restored instance is separate from the healthy primary |
+| Config/artifact drift | Compare image digest, task definition, and SSM parameter state between regions | Recovery prerequisites confirmed to match before a drill is declared ready |
+| DNS/control plane | Exercise the ARC routing control and its documented fallback | Traffic changes only after DR is verified ready; no automatic routing to a zero-capacity region |
+
+Operational runbooks with the exact commands for each drill:
+
+- [`docs/runbook-failover.md`](docs/runbook-failover.md): full regional failover and failback
+- [`docs/runbook-ha.md`](docs/runbook-ha.md): in-region task, AZ-capacity, and RDS Multi-AZ drills
+
+## Repository Layout
+
+```
+apps/
+  monitor/          isolated monitoring service (Go): checks, history, topology, status UI
+  url-shortener/     drill workload (Go): link creation and redirect, PostgreSQL-backed
+terraform/
+  modules/           reusable building blocks: vpc, alb, ecs-url-shortener, ecs-monitor, rds, ecr, alerting, route53-failover, app-deploy-iam
+  environments/
+    bootstrap/       persistent state backend, GitHub OIDC roles, delegated Route 53 zone
+    monitoring/       isolated monitor, own state, own lifecycle
+    prod/            primary region workload
+    dr/              pilot-light DR region workload
+scripts/             drills/ (operator-gated drill automation) and ci/ (CI-only helpers)
+docs/                architecture diagrams and operational runbooks
+.github/workflows/   CI/CD: per-app build/deploy, Terraform plan/apply/destroy, guarded failback operations
+```
+
+## Local Development
+
+Requires Docker and Docker Compose.
 
 ```bash
-terraform fmt -check -recursive terraform
-tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=terraform
+docker compose up --build
+```
+
+This starts the monitor (`localhost:8080`), the URL shortener (`localhost:8081`), and a local PostgreSQL instance. The monitor uses a static topology fixture locally instead of live AWS calls, since ECS/RDS topology only exists once deployed.
+
+Create a link:
+
+```bash
+curl --request POST \
+  --header "Authorization: Bearer local-operator-token" \
+  --header "Content-Type: application/json" \
+  --data '{"slug":"example","destination_url":"https://example.com"}' \
+  http://localhost:8081/links
+```
+
+Run tests and static checks without deploying anything:
+
+```bash
 cd apps/monitor && go test ./...
 cd ../url-shortener && go test ./...
-bash -n ../../scripts/*.sh
+terraform fmt -check -recursive terraform
+tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=terraform
 pre-commit run --all-files
 ```
 
-`terraform validate` needs an initialized module directory but does not need remote state. Use a temporary Terraform data directory so prior local backend metadata cannot request AWS credentials:
+`terraform validate` needs an initialized module directory but not remote state or AWS credentials:
 
 ```bash
 for root in terraform/environments/bootstrap terraform/environments/monitoring terraform/environments/prod terraform/environments/dr; do
@@ -55,38 +118,42 @@ for root in terraform/environments/bootstrap terraform/environments/monitoring t
 done
 ```
 
-## Deployment Prerequisites
+## Deploying to AWS
 
-Configure protected GitHub environments `terraform-production` and `production`, repository variables `AWS_TERRAFORM_ROLE_ARN`, `AWS_ROLE_ARN`, and `AWS_MONITOR_ROLE_ARN`, and secret `INFRACOST_API_KEY`. `AWS_MONITOR_ROLE_ARN` is the monitoring root's `github_actions_role_arn` output after monitor foundation creation.
+### Prerequisites
 
-Bootstrap persists the Terraform state backend, GitHub OIDC roles, and delegated Route53 zone so nameservers remain stable while workload environments are repeatedly created and destroyed. Its Terraform role deliberately starts with AWS `PowerUserAccess` plus exact workload IAM role management, exact `iam:PassRole` targets, and protected-environment OIDC trust. After the full M6 deploy/destroy exercise, CloudTrail-backed IAM Access Analyzer output must be reviewed and tested before replacing `PowerUserAccess` with the observed least-privilege service policy.
+- An AWS account, Terraform ≥ 1.11 (write-only secret arguments require it), and a domain you can delegate a subdomain from.
+- A GitHub repository with two protected environments (`terraform-production`, `production`) and an `INFRACOST_API_KEY` secret for local cost estimation.
+- The AWS provider is pinned to the `~> 6.0` line; see `terraform/environments/*/terraform.tf` for exact version constraints.
 
-Use [docs/runbook-failover.md](docs/runbook-failover.md) for recovery steps. `docs/aws-dr-architecture.drawio` was updated for the two-plane split (isolated monitor drawn as its own box outside both region groups, dashed read-only polling edges into prod/DR, current Pilotlight DNS naming); see `docs/aws-dr-architecture.drawio.png` for an exported, still-editable copy. Deployment and teardown ordering is automated by `.github/workflows/terraform.yml`.
+### Apply order
+
+Regions apply in a fixed order because DR and monitoring both depend on resources the earlier stages create (ECR images, SSM parameters, resolved database versions):
+
+1. **Bootstrap**: state backend (S3 + native locking), GitHub OIDC roles, and the delegated Route 53 zone. Applied once, stays up permanently.
+2. **Monitoring foundation**: VPC, ALB, ECR, DynamoDB table, and the OIDC role the monitor's own CI will assume.: `terraform.yml` `operation=apply target=monitoring deploy_service=false`
+3. **Monitor image + deploy**: build and push the monitor image by immutable digest, then deploy the ECS service against that digest.: `ecs-monitor.yml` `mode=publish-only`, then `terraform.yml` `operation=apply target=monitoring deploy_service=true`
+4. **Workload foundation**: primary-region VPC, ECR, and supporting infrastructure, without a running ECS service yet (avoids a chicken-and-egg dependency on an image that doesn't exist).: `terraform.yml` `operation=apply target=prod deploy_service=false`
+5. **Workload image + deploy**: build and push the shortener image by digest; Terraform then creates the primary ECS service from that digest and replicates the image into the DR region's ECR.: `ecs-url-shortener.yml` `mode=publish-only`, then `terraform.yml` `operation=apply target=prod deploy_service=true`
+6. **DR pilot light**: DR VPC, ALB, ECS service at zero desired count, cross-region read replica, and automated backup replication, composed from the same Terraform modules with different variables.: `terraform.yml` `operation=apply target=dr`
+
+Each stage is a `terraform init && terraform plan && terraform apply` in its respective `terraform/environments/*` directory, or the equivalent dispatch of `.github/workflows/terraform.yml`, which runs the same plan/apply through GitHub Actions using short-lived OIDC credentials rather than long-lived AWS keys. One dispatch applies one environment, so the ordering above is enforced by the operator rather than by a single combined run.
+
+Image digests never travel as workflow inputs. `ecs-url-shortener.yml` and `ecs-monitor.yml` write the digest they just pushed to an SSM parameter (`/pilotlight/<env>/image-digest`), and Terraform reads that parameter when `deploy_service=true`. A `publish-only` run is therefore what unblocks the first service-creating apply.
+
+Route 53 ARC routing controls are provisioned on demand, only for the duration of a drill, and torn down afterward. They bill per cluster-hour, so keeping them idle year-round adds no value.
 
 ### Cost
 
-The NAT gateway, ALB, ECS Fargate, RDS Multi-AZ, and SSM Parameter Store are the paid services this project deliberately uses; these services support regional networking, health checks, compute, database resilience, and runtime configuration. Optional VPC interface endpoints (ECR API/DKR, CloudWatch Logs, SSM) stay disabled by default because their fixed hourly cost is likely greater than the NAT processing they'd save at this traffic level. Actual per-session AWS cost is measured from Cost Explorer after a session, not estimated in advance; session costs are recorded after each deployment. Local `infracost scan` runs as a required pre-commit check before every deploy.
+Every paid service is a deliberate trade-off documented alongside its Terraform module: one Regional NAT Gateway per environment (external egress for image pulls, health checks, and reliable task startup), an ALB (stable endpoint plus HTTPS termination for tasks with dynamic IPs), ECS Fargate (no OS to patch, no idle EC2 capacity), RDS Multi-AZ (only enabled during active drills), and SSM Parameter Store Standard tier (cheaper than Secrets Manager at this secret count). Optional VPC interface endpoints for ECR/CloudWatch/SSM are disabled by default because their fixed hourly cost outweighs the NAT traffic they'd save at this scale. `infracost` runs as a local pre-commit check before every apply, and actual spend should always be verified against AWS Cost Explorer rather than estimated.
 
-### Least-privilege IAM
+### IAM
 
-- **Bootstrap's** Terraform role deliberately starts from `PowerUserAccess` (see above) pending a CloudTrail-derived least-privilege policy, tracked outside M7/M8.
-- **The monitor's** ECS task role holds only read-only `Describe*`/`List*`/`Get*` actions against ECS/RDS (wildcard resources only where those APIs require it, documented in `terraform/modules/monitor-service/main.tf`), plus scoped `dynamodb:PutItem`/`Query` on its own table ARN. It has no ECS, RDS, ARC, Route53, or Terraform mutation permissions.
-- **The workload's** ECS task execution role is scoped to the one SSM parameter ARN it needs (regional database password / operator token); it has no visibility into the monitor's DynamoDB table or IAM role.
+- The monitor's ECS task role holds only read-only `Describe*`/`List*`/`Get*` actions against ECS and RDS, plus scoped `dynamodb:PutItem`/`Query` on its own table. No mutation permissions on anything, ever.
+- The workload's ECS task execution role is scoped to exactly the one SSM parameter ARN and KMS key it needs to start.
+- CI authenticates to AWS through GitHub OIDC with short-lived, per-workflow roles. No long-lived AWS access keys are stored anywhere.
+- The bootstrap Terraform role currently starts from a broad managed policy pending a CloudTrail-derived least-privilege policy generated via IAM Access Analyzer; this is a known, documented trade-off rather than a final state.
 
-Normal Terraform deployment and teardown run through manually dispatched `.github/workflows/terraform.yml`; pushes run validation only so monitor and workload migrations cannot race their infrastructure foundations. Monitor and workload releases are also manual dispatches after their initial foundations exist. Both failback topology-reset stages run through the separately protected `.github/workflows/recovery.yml`. Time-sensitive promotion, traffic switching, and verification remain local scripts and assume the active AWS CLI credentials already have the required permissions; no separate local recovery role is provisioned.
+## License
 
-For a deployment from empty monitor and workload state after bootstrap:
-
-1. Confirm ARC is not provisioned (`create_arc = false`), then dispatch `terraform.yml` with `operation=monitor-foundation`. Monitoring claims the existing apex DNS record; the later DR apply deliberately forgets its historical apex state entry without deleting that record.
-2. Set `AWS_MONITOR_ROLE_ARN` from monitoring `github_actions_role_arn` output, then dispatch `monitor.yml` with `mode=publish-only`.
-3. Copy monitor `sha256:...` digest and dispatch `terraform.yml` with `operation=monitor-deploy` and that `image_digest`.
-4. Dispatch `terraform.yml` with `operation=foundation`. This creates workload prod foundations and ECR without prod ECS service.
-5. Set `AWS_ROLE_ARN` from prod `github_actions_role_arn` output, then dispatch `workload.yml` with `mode=publish-only`.
-6. Copy workload `sha256:...` digest and dispatch `terraform.yml` with `operation=deploy` and that `image_digest`. Terraform creates prod workload service, then DR pilot light from replicated image.
-7. Use `monitor.yml` and `workload.yml` independently for later releases.
-
-**Historical note:** the one-time M7 migration from the retained M6 workload used a variant of this sequence, omitting workload `foundation` and reusing the existing prod ECR repository, since prod already existed from M6. That path no longer applies now that workload/monitoring state is empty; use steps 1-7 above for any future deploy.
-
-Before the first monitoring foundation, bootstrap IAM needs one reviewed update because the existing Terraform OIDC role cannot grant itself access to new monitoring role names. Run `scripts/bootstrap.sh plan`, review the saved plan, then request explicit approval before `CONFIRM_BOOTSTRAP=APPLY_BOOTSTRAP scripts/bootstrap.sh apply`. Do not apply bootstrap changes through an unreviewed direct command.
-
-Use [docs/runbook-ha.md](docs/runbook-ha.md) for controlled in-region task, AZ-capacity, and RDS Multi-AZ drills. These are separate from regional pilot-light recovery.
+MIT. See [LICENSE](LICENSE).

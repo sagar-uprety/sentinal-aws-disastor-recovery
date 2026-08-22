@@ -92,6 +92,7 @@ func New(store store, token string) http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /links", s.list)
 	mux.HandleFunc("POST /links", s.create)
+	// "/{$}" matches only the exact root path, so the "/{slug}" wildcard below never swallows it.
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /{slug}", s.redirect)
 	return mux
@@ -116,6 +117,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		DestinationURL string `json:"destination_url"`
 		Slug           string `json:"slug"`
 	}
+	// caps the body at 4KB and rejects unknown fields, so a malformed or oversized payload fails before touching the database.
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
@@ -123,7 +125,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// a second Decode call that doesn't hit io.EOF means there was trailing content after the first JSON value.
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "body must contain one JSON object")
 		return
 	}
@@ -186,6 +188,7 @@ func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 // checks the bearer token in constant time to avoid leaking its value through response-time differences.
 func (s *server) authorized(header string) bool {
 	provided, ok := strings.CutPrefix(header, "Bearer ")
+	// length is compared first because ConstantTimeCompare returns 0 for unequal lengths without comparing content; only the length leaks, never the token.
 	if !ok || len(provided) != len(s.token) {
 		return false
 	}

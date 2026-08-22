@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	// imported for *pq.Error inspection in Create, and for the side effect of registering the "postgres" sql driver used by Open.
 	"github.com/lib/pq"
 )
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#f4f1ea">
-  <title>Pilotlight — DR Monitor</title>
+  <title>Pilotlight DR Monitor</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
@@ -100,7 +100,7 @@ h1 span{color:var(--blue)}
     const BAR_COUNT = 50;
 
     function hostname(url) { try { return new URL(url).hostname; } catch { return url; } }
-    function esc(v) { return String(v || '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c]); }
+    function esc(v) { return String(v || 'N/A').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c]); }
     function timeAgo(t) {
       const s = Math.floor((Date.now() - new Date(t).getTime()) / 1000);
       if (s < 5) return 'just now';
@@ -115,8 +115,8 @@ h1 span{color:var(--blue)}
       return d.role === 'writer' && d.available && c.available && c.desired > 0 && c.running >= c.desired;
     }
 
-    // Disaster recovery sits at desired=0 by design until a drill promotes it —
-    // that is 'standby', not a fault. Only a running/desired mismatch, an
+    // Disaster recovery sits at desired=0 by design until a drill promotes it.
+    // That is 'standby', not a fault. Only a running/desired mismatch, an
     // unavailable database, or production sitting at desired=0 is 'degraded'.
     function regionState(entry, index) {
       const c = entry.compute || {};
@@ -142,7 +142,7 @@ h1 span{color:var(--blue)}
 
       const tasks = Array.isArray(c.tasks) && c.tasks.length > 0
         ? '<div class="task-id-list">' + c.tasks.map(t => '<span class="task-id">' + esc(t) + '</span>').join('') + '</div>'
-        : '<span class="task-id">—</span>';
+        : '<span class="task-id">N/A</span>';
 
       return '<article class="region-card ' + regionClass + '">' +
         '<div class="topbar">' +
@@ -176,7 +176,7 @@ h1 span{color:var(--blue)}
       const el = document.getElementById('live-region');
       if (!Array.isArray(entries) || entries.length === 0) {
         el.className = 'unknown';
-        el.innerHTML = '<span class="pin"></span>No topology data — cannot determine active region';
+        el.innerHTML = '<span class="pin"></span>No topology data, cannot determine active region';
         return;
       }
       const activeIndex = entries.findIndex(isServing);
@@ -194,14 +194,14 @@ h1 span{color:var(--blue)}
       const grid = document.getElementById('topology-grid');
       const badge = document.getElementById('topology-updated');
       if (!top || !Array.isArray(top.regions)) {
-        grid.innerHTML = '<div style="grid-column:1/-1">' + regionCard({ region: 'Unavailable', compute: { available: false }, database: { status: 'offline', role: '—', identifier: '—', availability_zone: '—', multi_az: false } }, 0) + '</div>';
+        grid.innerHTML = '<div style="grid-column:1/-1">' + regionCard({ region: 'Unavailable', compute: { available: false }, database: { status: 'offline', role: 'N/A', identifier: 'N/A', availability_zone: 'N/A', multi_az: false } }, 0) + '</div>';
         badge.innerHTML = '<span class="dot" style="background:var(--red)"></span>Failed to load';
         renderLiveRegion(null);
         return;
       }
       if (top.regions.length === 0) {
         grid.innerHTML = '<article class="region-card" style="grid-column:1/-1"><div class="body" style="text-align:center;padding:40px;color:var(--muted)"><p style="font-size:18px;font-weight:700;font-family:Fredoka,sans-serif">No topology data</p><p style="margin-top:8px">AWS topology not configured or unavailable</p></div></article>';
-        badge.innerHTML = '<span class="dot" style="background:var(--amber)"></span>Local mode — topology disabled';
+        badge.innerHTML = '<span class="dot" style="background:var(--amber)"></span>Local mode, topology disabled';
         renderLiveRegion(null);
         return;
       }
@@ -212,7 +212,7 @@ h1 span{color:var(--blue)}
         return regionCard(entry, index);
       }).join('');
       badge.innerHTML = '<span class="dot" style="background:' + (anyDegraded ? 'var(--red)' : 'var(--green)') + '"></span>' +
-        (anyDegraded ? 'Degraded — check region cards' : 'No issues detected');
+        (anyDegraded ? 'Degraded, check region cards' : 'No issues detected');
     }
 
     function renderBanner(statuses) {

@@ -12,7 +12,7 @@ This runbook tests primary-region high availability. It is separate from pilot-l
 ## Task Replacement
 
 ```bash
-CONFIRM_HA=YES scripts/simulate-ha.sh task
+CONFIRM_HA=YES scripts/drills/simulate-ha.sh task
 ```
 
 Expected: workload ALB continues serving through another task while monitor remains healthy. Retain monitor topology before and after script. Verify stopped workload task ID disappears, replacement task ID appears, compute returns to `2 / 2 running` across two AZs, and `HA ready` returns. Script continuously probes workload `/healthz`, requires ECS to recover to two healthy targets across two AZs, verifies stopped task ARN is absent, and records recovery evidence.
@@ -20,7 +20,7 @@ Expected: workload ALB continues serving through another task while monitor rema
 ## AZ Application Capacity
 
 ```bash
-CONFIRM_HA=YES scripts/simulate-ha.sh az eu-central-1a
+CONFIRM_HA=YES scripts/drills/simulate-ha.sh az eu-central-1a
 ```
 
 Expected: only workload tasks currently placed in that AZ stop. Keep monitor open during reduced-capacity interval. After recovery, verify new workload task IDs, `2 / 2 running`, two-AZ spread, and `HA ready`. This is controlled application-capacity loss, not a complete AWS AZ outage. Script refuses injection unless a task exists in another AZ, continuously probes workload `/healthz`, requires monitor health, and requires final two-target, two-AZ placement before recording recovery evidence.
@@ -28,7 +28,7 @@ Expected: only workload tasks currently placed in that AZ stop. Keep monitor ope
 ## RDS Multi-AZ Failover
 
 ```bash
-CONFIRM_HA=YES CONFIRM_HA_DB_FAILOVER=YES scripts/simulate-ha.sh db
+CONFIRM_HA=YES CONFIRM_HA_DB_FAILOVER=YES scripts/drills/simulate-ha.sh db
 ```
 
 This forces a real Multi-AZ failover on the production database, materially higher blast radius than the task/AZ drills above, so it requires its own confirmation on top of `CONFIRM_HA`.

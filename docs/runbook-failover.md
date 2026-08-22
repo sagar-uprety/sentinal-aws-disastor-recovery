@@ -18,7 +18,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
   ```
   Then initialize controls:
   ```bash
-  CONFIRM_TRAFFIC_SWITCH=INITIALIZE DRILL_LOG=./drill-events.log scripts/switch-traffic.sh initialize
+  CONFIRM_TRAFFIC_SWITCH=INITIALIZE DRILL_LOG=./drill-events.log scripts/drills/switch-traffic.sh initialize
   ```
   ARC controls must be primary `On`, DR `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
@@ -30,7 +30,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 1. Start and confirm the controlled outage:
 
    ```bash
-   CONFIRM_DISASTER=YES DRILL_LOG=./drill-events.log scripts/simulate-disaster.sh
+   CONFIRM_DISASTER=YES DRILL_LOG=./drill-events.log scripts/drills/simulate-disaster.sh
    ```
 
    Script verifies pilot-light prerequisites, creates and records a normal short link in prod, scales primary ECS to 0, and records `outage_confirmed` only after workload ALB returns 503 with zero healthy targets. It also requires monitor health and restores original desired count if confirmation fails.
@@ -40,7 +40,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 3. Promote and activate DR:
 
    ```bash
-   CONFIRM_FAILOVER=YES DRILL_LOG=./drill-events.log scripts/failover.sh
+   CONFIRM_FAILOVER=YES DRILL_LOG=./drill-events.log scripts/drills/failover.sh
    ```
 
    Before promotion, script requires current outage marker, validates replica, regional immutable image, regional SSM token parameter, and fresh ReplicaLag evidence. It then promotes RDS, starts two ECS tasks across two AZs, requires two healthy ALB targets, verifies prod-created link, creates a DR link through `POST /links`, and verifies monitor health. It does not switch traffic.
@@ -48,7 +48,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 4. Switch the pre-created ARC controls as a separate operator gate:
 
    ```bash
-   CONFIRM_TRAFFIC_SWITCH=DR DRILL_LOG=./drill-events.log scripts/switch-traffic.sh dr
+   CONFIRM_TRAFFIC_SWITCH=DR DRILL_LOG=./drill-events.log scripts/drills/switch-traffic.sh dr
    ```
 
    Script discovers ARC cluster and controls, verifies primary `On` and DR `Off`, sends both state changes in one atomic `update-routing-control-states` request through an available regional ARC data-plane endpoint, and verifies resulting states. It records completion only after authoritative Route53 DNS, workload health, and expected short link prove eu-west-1 serves `shortener.pilotlight.sagaruprety.com.np`. It separately verifies monitor health. This demo discovers identifiers through AWS control-plane APIs immediately before switching; production runbook should retain five data-plane endpoints and control ARNs out of band.
@@ -58,7 +58,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 5. Print measurements:
 
    ```bash
-   DRILL_LOG=./drill-events.log scripts/measure.sh
+   DRILL_LOG=./drill-events.log scripts/drills/measure.sh
    ```
 
    RTO runs from `outage_confirmed` through `traffic_verified`. The report also prints promotion, task startup, target health, write verification, and routing phases.
@@ -93,7 +93,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
 1. Snapshot the active DR writer while it still serves traffic. This protects all post-failover writes before former prod is replaced:
 
    ```bash
-   CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/failback.sh snapshot
+   CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/drills/failback.sh snapshot
    ```
 
 2. Dispatch the guarded recovery workflow. It validates the active-DR snapshot and writer, saves the reverse-replication plan, and applies that exact plan in a dependent job:
@@ -108,21 +108,21 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    Verify source and lag after the workflow succeeds:
 
    ```bash
-   DRILL_LOG=./drill-events.log scripts/failback.sh verify-replica
+   DRILL_LOG=./drill-events.log scripts/drills/failback.sh verify-replica
    ```
 
 3. Verify prod is a fresh reverse replica. Then begin a planned failback interruption by scaling DR compute to zero and retaining DR-created link slug. Only after writes are frozen does script recheck fresh lag evidence, promote prod, convert it to Multi-AZ, start prod tasks, and require that DR-created link. DR and prod are never independent active writers:
 
    ```bash
-   CONFIRM_FAILBACK_FREEZE=YES DRILL_LOG=./drill-events.log scripts/failback.sh freeze-writes
-   CONFIRM_PRIMARY_PROMOTION=YES DRILL_LOG=./drill-events.log scripts/failback.sh promote-primary
-   CONFIRM_FAILBACK_READY=YES DRILL_LOG=./drill-events.log scripts/failback.sh ready
+   CONFIRM_FAILBACK_FREEZE=YES DRILL_LOG=./drill-events.log scripts/drills/failback.sh freeze-writes
+   CONFIRM_PRIMARY_PROMOTION=YES DRILL_LOG=./drill-events.log scripts/drills/failback.sh promote-primary
+   CONFIRM_FAILBACK_READY=YES DRILL_LOG=./drill-events.log scripts/drills/failback.sh ready
    ```
 
 4. Atomically return traffic and verify public prod service:
 
    ```bash
-   CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/switch-traffic.sh primary
+   CONFIRM_TRAFFIC_SWITCH=PRIMARY DRILL_LOG=./drill-events.log scripts/drills/switch-traffic.sh primary
    ```
 
    Retain refreshed monitor topology showing eu-central-1 workload compute and database state, then verify both prod-created and DR-created links through workload URL.
@@ -138,7 +138,7 @@ Once DR accepts writes, old prod has diverged and cannot simply resume.
    Verify reset after the workflow succeeds:
 
    ```bash
-   DRILL_LOG=./drill-events.log scripts/failback.sh verify-reset
+   DRILL_LOG=./drill-events.log scripts/drills/failback.sh verify-reset
    ```
 
 6. Delete the active-DR safety snapshot after reset evidence is retained, using the exact command printed by `failback.sh snapshot`.

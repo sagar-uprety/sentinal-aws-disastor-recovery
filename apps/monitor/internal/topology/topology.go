@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -102,6 +103,7 @@ func (s *Service) Snapshot(ctx context.Context) Snapshot {
 	if s.mock != nil {
 		return *s.mock
 	}
+	// pre-sized so each goroutine writes its own index; no mutex needed and region order stays stable (PROD first, DR second).
 	result := Snapshot{Regions: make([]Region, len(s.regions))}
 	var wait sync.WaitGroup
 	for i := range s.regions {
@@ -135,6 +137,7 @@ func (r *regionReader) compute(ctx context.Context) Compute {
 	if err != nil || len(services.Services) == 0 {
 		return result
 	}
+	// ECS returns unreachable/missing services in Failures rather than as an error, so an empty Failures list is the real availability signal.
 	result.Available = len(services.Failures) == 0
 	result.DesiredCount = services.Services[0].DesiredCount
 	result.RunningCount = services.Services[0].RunningCount
@@ -200,10 +203,8 @@ func (r *regionReader) database(ctx context.Context) Database {
 
 // returns the segment after the last '/' in an ECS task ARN, so the UI shows a short task ID instead of the full ARN.
 func shortID(arn string) string {
-	for i := len(arn) - 1; i >= 0; i-- {
-		if arn[i] == '/' {
-			return arn[i+1:]
-		}
+	if index := strings.LastIndex(arn, "/"); index >= 0 {
+		return arn[index+1:]
 	}
 	return arn
 }

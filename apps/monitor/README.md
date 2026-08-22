@@ -46,4 +46,4 @@ Table keys are strings named `pk` and `sk`.
 
 History and 24-hour uptime use DynamoDB `Query` against the target's partition and time-sortable keys. The monitor never scans table.
 
-Drill lifecycle events are not stored here. `scripts/drill-lib.sh` writes timestamped events to a local plain-text `DRILL_LOG` file only, and `scripts/measure.sh` reads that file to compute RTO/RPO. There is no monitor-side event storage or timeline UI.
+Drill lifecycle events are not stored here. `scripts/drills/drill-lib.sh` writes timestamped events to a local plain-text `DRILL_LOG` file only, and `scripts/drills/measure.sh` reads that file to compute RTO/RPO. There is no monitor-side event storage or timeline UI.

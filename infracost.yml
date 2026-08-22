@@ -1,9 +1,0 @@
-version: 0.1
-
-projects:
-  - path: terraform/environments/prod
-    name: prod
-  - path: terraform/environments/dr
-    name: dr
-  - path: terraform/environments/bootstrap
-    name: bootstrap

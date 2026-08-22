@@ -1,10 +1,6 @@
 # ECR Module
 
-Private Docker registry with immutable tags and automatic lifecycle cleanup.
-
-## Design Intent
-
-The repository stores the container image for one Pilotlight service (monitor or URL-shortener workload). `IMMUTABLE` tag mutability prevents accidental overwrites, and the lifecycle policy keeps only the last 10 images. Scan-on-push is enabled for vulnerability visibility. `force_delete = true` allows teardown without manual image cleanup.
+Private image registry, KMS-encrypted (AWS-managed `alias/aws/ecr` key). `IMMUTABLE` tags prevent overwriting a pushed digest; lifecycle policy keeps the last 10 images; scan-on-push is enabled. `force_delete = true` so `terraform destroy` doesn't require emptying the repo first (as this is a demo-project).
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
