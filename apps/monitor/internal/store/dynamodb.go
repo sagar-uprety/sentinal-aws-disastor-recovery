@@ -61,14 +61,18 @@ func (d *DynamoDB) RecordCheck(ctx context.Context, check Check) error {
 
 // queries checks since the cutoff for uptime; if none fall in that window it falls back to the single most recent check (0/0 uptime) so status still shows "last seen" instead of nothing.
 func (d *DynamoDB) LatestStatuses(ctx context.Context, since time.Time) ([]TargetStatus, error) {
+	// upper bound is nudged one second past now so a check written in this same second isn't excluded by the BETWEEN range.
 	checks, err := d.query(ctx, d.target.URL, since, d.now().UTC().Add(time.Second), 0)
 	if err != nil {
 		return nil, err
 	}
 	if len(checks) == 0 {
 		checks, err = d.query(ctx, d.target.URL, time.Time{}, time.Time{}, 1)
-		if err != nil || len(checks) == 0 {
-			return []TargetStatus{}, err
+		if err != nil {
+			return nil, err
+		}
+		if len(checks) == 0 {
+			return []TargetStatus{}, nil
 		}
 		return []TargetStatus{statusFromChecks(checks[0], 0, 0)}, nil
 	}
@@ -119,14 +123,7 @@ func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time,
 		if err != nil {
 			return nil, fmt.Errorf("query checks: %w", err)
 		}
-		var items []checkItem
-		if err := attributevalue.UnmarshalListOfMaps(page.Items, &items); err != nil {
-			return nil, fmt.Errorf("unmarshal checks: %w", err)
-		}
-		for i := range items {
-			checks = append(checks, items[i].Check)
-		}
-		return checks, nil
+		return appendPage(checks, page.Items)
 	}
 	paginator := dynamodb.NewQueryPaginator(d.client, input)
 	for paginator.HasMorePages() {
@@ -134,13 +131,22 @@ func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time,
 		if err != nil {
 			return nil, fmt.Errorf("query checks: %w", err)
 		}
-		var items []checkItem
-		if err := attributevalue.UnmarshalListOfMaps(page.Items, &items); err != nil {
-			return nil, fmt.Errorf("unmarshal checks: %w", err)
+		checks, err = appendPage(checks, page.Items)
+		if err != nil {
+			return nil, err
 		}
-		for i := range items {
-			checks = append(checks, items[i].Check)
-		}
+	}
+	return checks, nil
+}
+
+// decodes one page of DynamoDB items into Checks, dropping the pk/sk/TTL envelope attributes.
+func appendPage(checks []Check, items []map[string]types.AttributeValue) ([]Check, error) {
+	var decoded []checkItem
+	if err := attributevalue.UnmarshalListOfMaps(items, &decoded); err != nil {
+		return nil, fmt.Errorf("unmarshal checks: %w", err)
+	}
+	for i := range decoded {
+		checks = append(checks, decoded[i].Check)
 	}
 	return checks, nil
 }

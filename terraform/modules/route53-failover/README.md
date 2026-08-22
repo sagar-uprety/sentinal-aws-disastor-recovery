@@ -1,10 +1,6 @@
 # Route53 Failover Module
 
-Operator-gated traffic switching between prod and DR via Route53 Application Recovery Controller (ARC).
-
-## Design Intent
-
-Two Route53 failover records at the same name, each health-gated by a `RECOVERY_CONTROL` health check tied to an ARC routing control's manual On/Off state rather than real ALB health -- so the DNS switch only ever happens when an operator (or a script acting on their behalf) flips the ARC control via its data-plane API, never automatically. Two safety rules block the cluster from ever having both controls On or both Off simultaneously.
+Operator-gated DNS failover between prod and DR via Route53 Application Recovery Controller (ARC). Two failover records at the same name, each gated by a `RECOVERY_CONTROL` health check tied to an ARC routing control's manual On/Off state, not real ALB health, so the switch only happens when an operator (or a script acting on their behalf) flips the control via its data-plane API, never automatically. Two safety rules block both controls from being On or Off at once.
 
 ## Cost
 
@@ -57,10 +53,5 @@ No modules.
 
 ## Outputs
 
-| Name | Description |
-| ---- | ----------- |
-| <a name="output_cluster_arn"></a> [cluster\_arn](#output\_cluster\_arn) | ARN of the ARC routing control cluster. |
-| <a name="output_dr_routing_control_arn"></a> [dr\_routing\_control\_arn](#output\_dr\_routing\_control\_arn) | ARN of the DR routing control, toggled via the ARC data-plane API to switch traffic. |
-| <a name="output_primary_cluster_endpoints"></a> [primary\_cluster\_endpoints](#output\_primary\_cluster\_endpoints) | ARC data-plane endpoints, needed to call update-routing-control-state / get-routing-control-state (control-plane calls use the regular AWS API; data-plane calls require one of these region-specific endpoints). |
-| <a name="output_primary_routing_control_arn"></a> [primary\_routing\_control\_arn](#output\_primary\_routing\_control\_arn) | ARN of the primary routing control, toggled via the ARC data-plane API to switch traffic. |
+No outputs.
 <!-- END_TF_DOCS -->

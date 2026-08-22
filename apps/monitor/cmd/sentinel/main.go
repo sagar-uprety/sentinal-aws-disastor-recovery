@@ -164,6 +164,7 @@ func run() error {
 	}
 	slog.Info("starting sentinel", "port", cfg.port, "target", cfg.monitoredURL, "store", storeKind, "interval_seconds", cfg.checkInterval.Seconds())
 
+	// the checker runs in the background for the process lifetime; ctx cancellation on shutdown stops it.
 	checker := monitor.NewChecker(dataStore, cfg.monitoredURL, cfg.checkInterval, cfg.httpTimeout)
 	go checker.Run(ctx)
 	topologyService, err := loadTopologyService(ctx, &cfg)

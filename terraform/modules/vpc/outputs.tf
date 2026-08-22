@@ -17,8 +17,3 @@ output "db_subnet_ids" {
   description = "IDs of the isolated database subnets."
   value       = aws_subnet.db[*].id
 }
-
-output "nat_gateway_id" {
-  description = "ID of the Regional NAT Gateway."
-  value       = aws_nat_gateway.main.id
-}

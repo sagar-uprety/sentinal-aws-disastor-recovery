@@ -5,8 +5,8 @@ resource "aws_security_group" "rds" {
 
   ingress {
     description     = "PostgreSQL from ECS"
-    from_port       = 5432
-    to_port         = 5432
+    from_port       = local.db_port
+    to_port         = local.db_port
     protocol        = "tcp"
     security_groups = [var.ecs_security_group_id]
   }
@@ -28,7 +28,7 @@ resource "aws_db_parameter_group" "main" {
 
   parameter {
     name  = "log_min_duration_statement"
-    value = "1000"
+    value = "1000" # milliseconds
   }
 
   parameter {
@@ -60,14 +60,12 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
-# One stable address allows a promoted replica to become a Terraform-managed primary without replacement.
 resource "aws_db_instance" "main" {
-  #checkov:skip=CKV_AWS_354:Performance Insights uses the AWS-managed alias/aws/rds key (no per-key monthly fee) rather than a customer-managed key
-  #checkov:skip=CKV_AWS_293:this is a demo project torn down and rebuilt frequently; deletion protection would block terraform destroy every time
-  count = 1
-
   identifier = "${var.project_name}-${var.environment}"
 
+  # same resource plays primary or replica by branching its args below, so
+  # promoting (replicate_source_db_arn -> null) updates in place, no replace.
+  # replica mode: engine/credentials/storage are inherited, API rejects setting them.
   engine              = var.replicate_source_db_arn == null ? "postgres" : null
   engine_version      = var.replicate_source_db_arn == null ? var.engine_version : null
   instance_class      = var.instance_class
@@ -84,41 +82,39 @@ resource "aws_db_instance" "main" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   parameter_group_name   = aws_db_parameter_group.main.name
 
-  allocated_storage   = var.replicate_source_db_arn == null ? 20 : null
+  allocated_storage   = var.replicate_source_db_arn == null ? 20 : null # GiB
   storage_type        = "gp3"
   storage_encrypted   = true
-  port                = 5432
+  port                = local.db_port
   publicly_accessible = false
   multi_az            = var.multi_az
   apply_immediately   = true
 
-  backup_retention_period = 7
+  backup_retention_period = 7 # days
   backup_window           = var.replicate_source_db_arn == null ? "03:00-04:00" : null
   maintenance_window      = var.replicate_source_db_arn == null ? "sun:04:00-sun:05:00" : null
   copy_tags_to_snapshot   = true
 
   auto_minor_version_upgrade = true
-  # This is a demo project torn down and rebuilt frequently; deletion
-  # protection would just get in the way of terraform destroy every time.
-  deletion_protection                 = false
-  skip_final_snapshot                 = true
-  delete_automated_backups            = true
-  iam_database_authentication_enabled = var.replicate_source_db_arn == null ? true : null
+  deletion_protection        = false
+  skip_final_snapshot        = true
+  delete_automated_backups   = true
 
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   performance_insights_enabled          = true
-  performance_insights_retention_period = 7
+  performance_insights_retention_period = 7 # days
 
-  monitoring_interval = 60
+  monitoring_interval = 60 # seconds
   monitoring_role_arn = aws_iam_role.rds_monitoring.arn
 
-  # Replicas inherit credentials. Promotion must not rotate them when write-only version state is absent.
+  # replica's password_wo is null; without this, promotion would try to set it and rotate the password.
   lifecycle {
     ignore_changes = [password_wo, password_wo_version]
   }
 }
 
+# cross-region replicas of an encrypted source need their own destination-region KMS key.
 check "replica_encryption_key" {
   assert {
     condition     = var.replicate_source_db_arn == null || var.kms_key_id != null

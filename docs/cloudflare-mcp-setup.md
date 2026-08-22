@@ -12,14 +12,14 @@ Added as a project-local (not committed, not shared) HTTP MCP server:
 claude mcp add --transport http cloudflare https://mcp.cloudflare.com/mcp
 ```
 
-This is Cloudflare's own remote MCP server — the general API server, not one
+This is Cloudflare's own remote MCP server, the general API server, not one
 of the narrower product-specific servers (e.g. `dns-analytics.mcp.cloudflare.com`,
 which is read-only analytics). It fronts the full Cloudflare API (DNS, zones,
 Workers, R2, Zero Trust, ...) through two tools (`search`, `execute`) behind
 OAuth, scoped per-connection to whatever the authorizing user grants.
 
 Config lives in `~/.claude.json` under this project's entry, scope `local`
-(default) — not `.mcp.json`, so it isn't committed to the repo or shared with
+(default), not `.mcp.json`, so it isn't committed to the repo or shared with
 anyone who clones it. It stores OAuth tokens tied to a personal Cloudflare
 account and has no reason to travel with the code.
 
@@ -34,7 +34,7 @@ claude mcp login cloudflare
 ```
 
 On the Cloudflare consent screen, grant **DNS edit scoped to the
-`sagaruprety.com.np` zone only** — not full account access. This server
+`sagaruprety.com.np` zone only**, not full account access. This server
 otherwise exposes every Cloudflare product; least-privilege here matters.
 
 Check connection status any time with `claude mcp list`.
@@ -70,6 +70,6 @@ claude mcp remove cloudflare
 ```
 
 Credentials are stored per-machine by the CLI; removing the server doesn't
-revoke the Cloudflare-side authorization — revoke that from the Cloudflare
+revoke the Cloudflare-side authorization. Revoke that from the Cloudflare
 dashboard (My Profile → API Tokens / Authorized Applications) if it's no
 longer needed after M4.

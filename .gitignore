@@ -20,6 +20,9 @@ drill-events.log
 *.tfvars
 *.tfvars.json
 !terraform/environments/bootstrap/terraform.tfvars
+!terraform/environments/prod/terraform.tfvars
+!terraform/environments/dr/terraform.tfvars
+!terraform/environments/monitoring/terraform.tfvars
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in

@@ -25,41 +25,44 @@ module "ecr" {
   project_name = local.project_name
 }
 
-resource "aws_acm_certificate" "main" {
-  domain_name       = local.app_hostname
-  validation_method = "DNS"
+# Terraform seeds this so the foundation phase can run before any image exists;
+# ecs-monitor.yml overwrites it after each push, hence ignore_changes on value.
+resource "aws_ssm_parameter" "image_digest" {
+  name        = "/${local.project_name}/${local.environment}/image-digest"
+  description = "Digest of the monitor image ecs-monitor.yml last published"
+  type        = "String"
+  tier        = "Standard"
+  value       = "pending"
 
   lifecycle {
-    create_before_destroy = true
+    ignore_changes = [value]
   }
 }
 
-resource "aws_route53_record" "certificate_validation" {
-  for_each = {
-    for option in aws_acm_certificate.main.domain_validation_options : option.domain_name => {
-      name   = option.resource_record_name
-      record = option.resource_record_value
-      type   = option.resource_record_type
+# The resource attribute only holds the seeded value, so the live one is read back here.
+data "aws_ssm_parameter" "image_digest" {
+  count = var.deploy_service ? 1 : 0
+  name  = aws_ssm_parameter.image_digest.name
+
+  lifecycle {
+    postcondition {
+      condition     = can(regex("^sha256:[0-9a-f]{64}$", self.insecure_value))
+      error_message = "No monitor image published yet. Run ecs-monitor.yml publish-only before deploy_service=true."
     }
   }
-
-  allow_overwrite = true
-  name            = each.value.name
-  records         = [each.value.record]
-  ttl             = 60
-  type            = each.value.type
-  zone_id         = data.aws_route53_zone.pilotlight.zone_id
 }
 
-resource "aws_acm_certificate_validation" "main" {
-  certificate_arn         = aws_acm_certificate.main.arn
-  validation_record_fqdns = [for record in aws_route53_record.certificate_validation : record.fqdn]
+module "acm_cert" {
+  source = "../../modules/acm-cert"
+
+  domain_name     = local.app_hostname
+  route53_zone_id = data.aws_route53_zone.pilotlight.zone_id
 }
 
 module "alb" {
   source = "../../modules/alb"
 
-  certificate_arn   = aws_acm_certificate_validation.main.certificate_arn
+  certificate_arn   = module.acm_cert.certificate_arn
   environment       = local.environment
   project_name      = local.project_name
   public_subnet_ids = module.vpc.public_subnet_ids
@@ -67,7 +70,6 @@ module "alb" {
 }
 
 resource "aws_dynamodb_table" "checks" {
-  #checkov:skip=CKV_AWS_119:the AWS-managed DynamoDB KMS key avoids customer-managed-key fixed cost for this low-volume portfolio monitor
   name         = "${local.project_name}-${local.environment}-checks"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
@@ -98,17 +100,21 @@ resource "aws_dynamodb_table" "checks" {
 }
 
 module "service" {
-  source = "../../modules/monitor-service"
+  source = "../../modules/ecs-monitor"
 
   alb_security_group_id = module.alb.security_group_id
   app_subnet_ids        = module.vpc.app_subnet_ids
   deploy_service        = var.deploy_service
   desired_count         = 1
   environment           = local.environment
-  image_uri             = var.deploy_service ? "${module.ecr.repository_url}@${var.image_digest}" : "skip"
-  project_name          = local.project_name
-  target_group_arn      = module.alb.target_group_arn
-  vpc_id                = module.vpc.vpc_id
+  image_uri = (
+    var.deploy_service
+    ? "${module.ecr.repository_url}@${data.aws_ssm_parameter.image_digest[0].insecure_value}"
+    : "skip"
+  )
+  project_name     = local.project_name
+  target_group_arn = module.alb.target_group_arn
+  vpc_id           = module.vpc.vpc_id
 
   dynamodb_table_arn  = aws_dynamodb_table.checks.arn
   dynamodb_table_name = aws_dynamodb_table.checks.name
@@ -142,89 +148,32 @@ resource "aws_route53_record" "monitor" {
   depends_on = [module.service]
 }
 
-resource "aws_iam_role" "github_actions" {
-  name = "${local.project_name}-${local.environment}-github-actions"
+module "github_oidc" {
+  source = "../../modules/app-deploy-iam"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
-      Action    = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:production"
-        }
-      }
-    }]
-  })
+  project_name             = local.project_name
+  environment              = local.environment
+  github_org               = var.github_org
+  github_repo              = var.github_repo
+  github_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
+
+  ecr_repository_arn          = module.ecr.repository_arn
+  image_digest_parameter_arn  = aws_ssm_parameter.image_digest.arn
+  ecs_cluster_arn             = module.service.cluster_arn
+  ecs_service_arn             = local.service_arn
+  ecs_task_execution_role_arn = module.service.task_execution_role_arn
+  ecs_task_role_arn           = module.service.task_role_arn
 }
 
-resource "aws_iam_role_policy" "github_actions" {
-  #checkov:skip=CKV_AWS_290,CKV_AWS_355:ecr:GetAuthorizationToken and ECS task-definition registration/read do not support resource-level constraints
-  name = "${local.project_name}-${local.environment}-deploy"
-  role = aws_iam_role.github_actions.id
+module "alerting" {
+  source = "../../modules/alerting"
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "EcrAuth"
-        Effect   = "Allow"
-        Action   = ["ecr:GetAuthorizationToken"]
-        Resource = "*"
-      },
-      {
-        Sid    = "PushMonitorImage"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchGetImage",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:CompleteLayerUpload",
-          "ecr:DescribeImages",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:InitiateLayerUpload",
-          "ecr:PutImage",
-          "ecr:UploadLayerPart",
-        ]
-        Resource = module.ecr.repository_arn
-      },
-      {
-        Sid    = "MonitorTaskDefinitions"
-        Effect = "Allow"
-        Action = [
-          "ecs:DescribeTaskDefinition",
-          "ecs:RegisterTaskDefinition",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "DeployMonitorService"
-        Effect = "Allow"
-        Action = [
-          "ecs:DescribeServices",
-          "ecs:UpdateService",
-        ]
-        Resource = [
-          module.service.cluster_arn,
-          "arn:aws:ecs:${local.region}:${data.aws_caller_identity.current.account_id}:service/${local.project_name}-${local.environment}/${local.project_name}-${local.environment}",
-        ]
-      },
-      {
-        Sid    = "PassMonitorRoles"
-        Effect = "Allow"
-        Action = ["iam:PassRole"]
-        Resource = [
-          module.service.task_execution_role_arn,
-          module.service.task_role_arn,
-        ]
-        Condition = {
-          StringEquals = {
-            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
-          }
-        }
-      },
-    ]
-  })
+  project_name            = local.project_name
+  environment             = local.environment
+  ecs_cluster_name        = module.service.cluster_name
+  alb_arn_suffix          = module.alb.alb_arn_suffix
+  target_group_arn_suffix = module.alb.target_group_arn_suffix
+  ecs_desired_count       = var.deploy_service ? 1 : 0
+  alert_email             = var.alert_email
+  create_rds_alarms       = false
 }

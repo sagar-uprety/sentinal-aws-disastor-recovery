@@ -1,10 +1,14 @@
 resource "aws_ecr_repository" "main" {
-  #checkov:skip=CKV_AWS_136:switching to KMS encryption forces repository replacement, which would delete the image currently referenced by the live ECS task definition; not worth the disruption
   name                 = "${var.project_name}-${var.environment}"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
+  }
+
+  # AWS-managed key (alias/aws/ecr)
+  encryption_configuration {
+    encryption_type = "KMS"
   }
 
   force_delete = true

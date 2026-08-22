@@ -1,0 +1,38 @@
+name: Terraform setup
+description: >-
+  Install Terraform and optionally assume an AWS role. Run actions/checkout before this step,
+  since a local composite action can't check out the repo it's defined in.
+
+inputs:
+  terraform-version:
+    description: Terraform version to install.
+    required: true
+  role-arn:
+    description: IAM role to assume. Leave empty to skip AWS credential configuration (e.g. offline validate jobs).
+    required: false
+    default: ""
+  aws-region:
+    description: AWS region for the assumed role. Required when role-arn is set.
+    required: false
+    default: ""
+  session-name:
+    description: Role session name. Required when role-arn is set.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    - name: Configure AWS credentials
+      if: inputs.role-arn != ''
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        role-session-name: ${{ inputs.session-name }}
+        aws-region: ${{ inputs.aws-region }}

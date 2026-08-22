@@ -1,0 +1,4 @@
+root = true
+
+[*.tf]
+max_line_length = 120

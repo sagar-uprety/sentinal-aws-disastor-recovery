@@ -14,8 +14,8 @@ Local validation run 2026-07-26. Do not treat local results as CI or live deploy
 - [x] TFLint and Checkov
 - [x] Shell syntax and ShellCheck for drill scripts
 - [x] Workflow validation for `terraform.yml`, `monitor.yml`, `workload.yml`, and `recovery.yml`
-- [x] Independent monitoring, prod, and DR Terraform plans reviewed — see Update 2026-08-14 below
-- [x] Monitoring and workload destroy plans reviewed for state isolation — see Update 2026-08-14 below
+- [x] Independent monitoring, prod, and DR Terraform plans reviewed, see Update 2026-08-14 below
+- [x] Monitoring and workload destroy plans reviewed for state isolation, see Update 2026-08-14 below
 
 Read-only unlocked live-state plans verified monitoring foundation at 61 creates with no DNS cutover or destroys, and prod migration at two token creates, workload task-definition replacement, removal of obsolete workload topology policies, certificate replacement, and no deletion of the monitor validation CNAME. DR correctly remains blocked until prod creates `/sentinel-aws-dr/prod/link-create-token`; review it after prod apply, before DR apply.
 
@@ -42,7 +42,7 @@ Infracost did not produce an estimate because the local OAuth refresh token is i
 - [x] DR-created link survives failback. `dr-drill-20260807224142` verified present on restored, promoted prod (`failback.sh ready` output).
 - [x] Fresh M7 RTO and RPO evidence retained. RTO 666s, RPO 26.0s (real CloudWatch `ReplicaLag`, not a placeholder). Target was 30min / 60s respectively.
 - [x] Failback reset restores prod writer, DR replica, and DR desired count zero. Confirmed via `failback.sh verify-reset` output and live AWS Console screenshots (prod Primary/eu-central-1, DR Replica/eu-west-1 actively Replicating).
-- [x] Monitoring resources remain unchanged through workload failover, reset, and destroy plans. The failover-and-reset portion is confirmed (monitor never restarted or touched). The destroy portion is confirmed via the actual combined-destroy run — see Update 2026-08-14 below: destroying DR then prod then monitoring left bootstrap untouched, and each root's plan/destroy-plan output contains only that root's own resources.
+- [x] Monitoring resources remain unchanged through workload failover, reset, and destroy plans. The failover-and-reset portion is confirmed (monitor never restarted or touched). The destroy portion is confirmed via the actual combined-destroy run, see Update 2026-08-14 below: destroying DR then prod then monitoring left bootstrap untouched, and each root's plan/destroy-plan output contains only that root's own resources.
 
 ## Live Drill Results (2026-08-08)
 
@@ -71,13 +71,13 @@ One transient AWS CLI credential failure interrupted `failover.sh` after the und
 
 The owner had already destroyed all workload/monitoring infrastructure outside this session, via the reviewed `terraform.yml` `operation=destroy` dispatch (run [31231322585](https://github.com/sagar-uprety/aws-pilotlight-multi-region-dr/actions/runs/31231322585), 2026-08-08, DR then prod then monitoring, gated by typed `confirm_destroy=DESTROY`). This turned out to be the cleanest possible substrate for the still-open state-isolation gate:
 
-- `terraform state list` against the live backend returns nothing for `monitoring`, `prod`, or `dr` — all three states are genuinely empty, confirmed independently by `aws ecs list-clusters` and `aws rds describe-db-instances` returning no results in either region. Bootstrap's state is untouched (Route53 zone, OIDC roles, state bucket, lock table all present).
-- Fresh `terraform plan` per root: monitoring 61 to add, prod 76 to add (both `-var` combinations matching each root's last-deployed config), DR blocked on prod's now-nonexistent data sources (expected — DR's only cross-state dependencies are `aws_ecs_service.prod`, `aws_ecs_task_definition.prod`, `aws_db_instance.prod`, `aws_lb.prod`, two SSM parameters under `/pilotlight/prod/...`, and `aws_ecr_repository.app`; none reference monitoring).
+- `terraform state list` against the live backend returns nothing for `monitoring`, `prod`, or `dr`, all three states are genuinely empty, confirmed independently by `aws ecs list-clusters` and `aws rds describe-db-instances` returning no results in either region. Bootstrap's state is untouched (Route53 zone, OIDC roles, state bucket, lock table all present).
+- Fresh `terraform plan` per root: monitoring 61 to add, prod 76 to add (both `-var` combinations matching each root's last-deployed config), DR blocked on prod's now-nonexistent data sources (expected, DR's only cross-state dependencies are `aws_ecs_service.prod`, `aws_ecs_task_definition.prod`, `aws_db_instance.prod`, `aws_lb.prod`, two SSM parameters under `/pilotlight/prod/...`, and `aws_ecr_repository.app`; none reference monitoring).
 - Grepping each plan's resource-address list for the other plane's resource types (`aws_db_instance`, `shortener`, `aws_dynamodb_table`, monitor ECR/ECS/ALB) found zero hits in either direction. Prod's plan does contain `module.monitoring.*` addresses, but that's prod's own local CloudWatch-alarms/SNS submodule (unrelated naming collision with the isolated monitor plane), not the isolated monitor.
-- `terraform plan -destroy` against all three empty states returns "No changes. No objects need to be destroyed" — the plainest possible proof that neither state holds resources belonging to the other plane.
+- `terraform plan -destroy` against all three empty states returns "No changes. No objects need to be destroyed", the plainest possible proof that neither state holds resources belonging to the other plane.
 
 Also re-ran the local validation checklist post-M9-rename: `terraform fmt -check -recursive` clean, `terraform validate` clean (4 environments), `tflint --recursive` clean, `pre-commit run checkov --all-files` passed. Infracost skipped (local OAuth token unavailable; owner decision, not a failure).
 
 ## Deferred
 
-- [x] Canonical architecture diagram update. Was deferred at the time this file was originally written, then completed later the same day (2026-08-08) as part of the M9 rebrand's diagram pass — see `plan.md` M7 acceptance criteria and M9 tasks for detail. Not re-deferred; this line is now stale relative to that later work but is left as an accurate record of the state at 2026-08-08 evening.
+- [x] Canonical architecture diagram update. Was deferred at the time this file was originally written, then completed later the same day (2026-08-08) as part of the M9 rebrand's diagram pass, see `plan.md` M7 acceptance criteria and M9 tasks for detail. Not re-deferred; this line is now stale relative to that later work but is left as an accurate record of the state at 2026-08-08 evening.

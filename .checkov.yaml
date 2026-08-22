@@ -54,3 +54,11 @@ skip-check:
   # Workflow dispatch inputs are constrained to choices plus an exact destroy
   # confirmation. This exception preserves operator gating.
   - CKV_GHA_7 # Workflow is not using user-controlled inputs
+
+  # --- SSM: image-digest placeholder parameters ---
+  # prod/main.tf and monitoring/main.tf each seed an aws_ssm_parameter.image_digest as a
+  # plain String so the foundation apply can run before any image exists; CI overwrites it
+  # with a real digest afterward. A digest is public image metadata, not a secret, so
+  # SecureString+KMS here is unwarranted cost. Inline #checkov:skip doesn't reliably
+  # suppress CKV2_ (graph) checks, so this is centralized instead.
+  - CKV2_AWS_34 # AWS SSM Parameter should be Encrypted

@@ -34,7 +34,7 @@ variable "instance_class" {
 }
 
 variable "password_wo" {
-  description = "Master database password (write-only). Ignored when replicate_source_db_arn is set; replicas inherit the source instance's credentials."
+  description = "Master password (write-only). Ignored for replicas, which inherit the source instance's credentials."
   type        = string
   default     = ""
   sensitive   = true
@@ -48,13 +48,13 @@ variable "password_wo_version" {
 }
 
 variable "replicate_source_db_arn" {
-  description = "ARN of the source RDS instance to replicate. Set to create a cross-region read replica instead of a standalone instance."
+  description = "ARN of the source RDS instance; set to create a cross-region replica instead of a standalone instance."
   type        = string
   default     = null
 }
 
 variable "kms_key_id" {
-  description = "Destination-region KMS key ARN for encrypting replica storage. Required when replicate_source_db_arn is set."
+  description = "Destination-region KMS key ARN for replica storage. Required when replicate_source_db_arn is set."
   type        = string
   default     = null
 }

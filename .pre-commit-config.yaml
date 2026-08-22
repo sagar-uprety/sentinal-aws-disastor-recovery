@@ -121,6 +121,14 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
 
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker.python
+    rev: 3.11.1
+    hooks:
+      - id: editorconfig-checker
+        files: \.tf$
+        exclude: \.terraform/
+
+# TODO: Remove at the end
   - repo: local
     hooks:
       - id: no-em-en-dash
