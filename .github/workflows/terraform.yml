@@ -1,21 +1,28 @@
 name: Terraform Infrastructure
 
+# Paths list what these jobs execute or source; recovery.yml is here because it runs terraform too.
 on:
   pull_request:
     paths:
       - "terraform/**"
-      - "scripts/ci/guard-topology.sh"
+      - "scripts/ci/**"
+      - "scripts/config.sh"
+      - ".github/actions/terraform-setup/**"
       - ".github/workflows/recovery.yml"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
+      - ".checkov.yaml"
   push:
     branches: [main]
     paths:
       - "terraform/**"
-      - "scripts/ci/guard-topology.sh"
+      - "scripts/ci/**"
+      - "scripts/config.sh"
+      - ".github/actions/terraform-setup/**"
       - ".github/workflows/recovery.yml"
       - ".github/workflows/terraform.yml"
       - ".tflint.hcl"
+      - ".checkov.yaml"
   workflow_dispatch:
     inputs:
       operation:
@@ -47,7 +54,7 @@ on:
         type: boolean
       create_arc:
         description: >-
-          Provision (true) or tear down (false) the DR root's ARC cluster and controls.
+          Provision (true) or tear down (false) the dr root's ARC cluster and controls.
           Applies only to target=dr.
         required: false
         default: false
@@ -60,16 +67,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # apply/destroy share the account-wide "terraform-operations" lock with recovery.yml,
-  # ecs-monitor.yml, ecs-url-shortener.yml (same live AWS resources). Everything else (PR,
-  # push, manual plan) gets its own per-branch lock, so a plan never waits behind someone
-  # else's live apply.
-  group: >-
-    ${{ (github.event_name == 'workflow_dispatch' && inputs.operation != 'plan')
-        && 'terraform-operations' || format('terraform-{0}', github.ref) }}
-  cancel-in-progress: false
-
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
@@ -78,7 +75,7 @@ env:
   BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
   MONITOR_URL: ${{ vars.MONITOR_URL }}
   WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
-  PRIMARY_REGION: ${{ vars.PRIMARY_REGION }}
+  PROD_REGION: ${{ vars.PROD_REGION }}
   DR_REGION: ${{ vars.DR_REGION }}
   MONITOR_REGION: ${{ vars.MONITOR_REGION }}
 
@@ -129,9 +126,9 @@ jobs:
           compact: true
           config_file: .checkov.yaml
 
-      # -x plus SCRIPTDIR resolves the drill-lib.sh/config.sh the other scripts source.
+      # Only the scripts these jobs execute; -x plus SCRIPTDIR resolves the config.sh they source.
       - name: Run ShellCheck
-        run: shellcheck -x --source-path=SCRIPTDIR scripts/*.sh scripts/ci/*.sh scripts/drills/*.sh
+        run: shellcheck -x --source-path=SCRIPTDIR scripts/config.sh scripts/ci/*.sh
 
       - name: Run actionlint
         env:
@@ -153,20 +150,24 @@ jobs:
           fi
 
   plan:
-    name: Plan ${{ inputs.target || 'prod' }}
+    name: Plan ${{ matrix.target }}
     needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.operation == 'plan' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(github.event_name == 'pull_request' && '["monitoring","prod","dr"]' || format('["{0}"]', inputs.target)) }}
     permissions:
       contents: read
       id-token: write
     env:
-      TF_TARGET: ${{ inputs.target || 'prod' }}
-      TF_ROOT: terraform/environments/${{ inputs.target || 'prod' }}
-      TF_REGION: ${{ fromJSON(vars.TF_REGION_MAP)[inputs.target || 'prod'] }}
+      TF_TARGET: ${{ matrix.target }}
+      TF_ROOT: terraform/environments/${{ matrix.target }}
+      TF_REGION: ${{ fromJSON(vars.TF_REGION_MAP)[matrix.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -186,17 +187,14 @@ jobs:
       - name: Create speculative plan
         working-directory: ${{ env.TF_ROOT }}
         env:
-          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           DEPLOY_SERVICE: ${{ inputs.deploy_service }}
           CREATE_ARC: ${{ inputs.create_arc }}
         run: |
           # shellcheck source=../../../scripts/ci/terraform-plan-vars.sh
           source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
           build_plan_args
-          # Skip requesting the state lock: a plan is read-only, but still asks for the lock by
-          # default, so it could sit blocked for up to 5m behind an unrelated apply in progress.
-          [ "$IS_PULL_REQUEST" = "true" ] && plan_args+=("-lock=false")
-          terraform plan -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}"
+          # Speculative plans must not block or be blocked by live infrastructure operations.
+          terraform plan -input=false -lock=false -out=tfplan "${plan_args[@]}"
           terraform show -no-color tfplan > plan.txt
 
       - name: Upload human-readable plan
@@ -229,6 +227,11 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    # Shared repository-wide mutation lock. GitHub preserves the running operation and the
+    # newest pending operation; an older pending operation is canceled when another is queued.
+    concurrency:
+      group: terraform-operations
+      cancel-in-progress: false
     environment:
       name: terraform-production
       # dr never serves public traffic (pilot light), so it gets no URL rather than a wrong one.
@@ -284,7 +287,7 @@ jobs:
         working-directory: ${{ env.TF_ROOT }}
         run: terraform apply -input=false -lock-timeout=5m tfplan
 
-      - name: Verify DR pilot-light state
+      - name: Verify dr pilot-light state
         if: inputs.target == 'dr'
         run: scripts/ci/guard-topology.sh dr-pilot-light
 
@@ -299,7 +302,7 @@ jobs:
       - name: Verify public workload health
         if: inputs.target == 'prod' && inputs.deploy_service
         run: |
-          aws ecs wait services-stable --region "$PRIMARY_REGION" \
+          aws ecs wait services-stable --region "$PROD_REGION" \
             --cluster "$PROJECT_NAME-prod" --services "$PROJECT_NAME-prod"
           curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
             "$WORKLOAD_URL/healthz"
@@ -314,6 +317,10 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    # Uses the same lock as recovery and ECS deployment jobs that mutate these live resources.
+    concurrency:
+      group: terraform-operations
+      cancel-in-progress: false
     environment: terraform-production
     permissions:
       contents: read
@@ -327,13 +334,13 @@ jobs:
         with:
           terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          aws-region: ${{ env.PRIMARY_REGION }}
+          aws-region: ${{ env.PROD_REGION }}
           session-name: terraform-destroy-${{ github.run_id }}
 
       - name: Refuse destruction during reverse replication
         run: scripts/ci/guard-topology.sh no-reverse-replication
 
-      # dr before prod because the DR database replicates from prod, and prod before
+      # dr before prod because the dr database replicates from prod, and prod before
       # monitoring because monitoring only observes the other two.
       - name: Destroy dr then prod
         run: |
