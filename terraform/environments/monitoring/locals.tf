@@ -1,11 +1,11 @@
 locals {
-  app_hostname      = "monitor.pilotlight.sagaruprety.com.np"
+  app_hostname      = "sentry.pilotlight.sagaruprety.com.np"
   workload_hostname = "shortener.pilotlight.sagaruprety.com.np"
   azs               = ["eu-north-1a", "eu-north-1b"]
   environment       = "monitoring"
   project_name      = "pilotlight"
-  # separate from prod (eu-central-1) and dr (eu-west-1) so a regional
-  # incident in either drill region can't also take down the monitor.
+  # separate from primary (eu-central-1) and secondary (eu-west-1) so a regional
+  # incident in either drill region can't also take down the sentry.
   region   = "eu-north-1"
   vpc_cidr = "10.2.0.0/24"
   service_arn = format(

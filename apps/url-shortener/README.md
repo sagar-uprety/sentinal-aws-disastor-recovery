@@ -31,4 +31,4 @@ Production injects database credentials and the creation token from SSM Paramete
 
 ## Design Intent
 
-Normal URL-shortener behavior supplies drill evidence: a prod-created link must survive failover, and a DR-created link must survive failback. Infrastructure remains the interesting part.
+Normal URL-shortener behavior supplies drill evidence: a primary-created link must survive failover, and a secondary-created link must survive failback. Infrastructure remains the interesting part.

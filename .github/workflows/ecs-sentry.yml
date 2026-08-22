@@ -1,0 +1,196 @@
+name: Sentry CI/CD
+
+on:
+  pull_request:
+    paths:
+      - "apps/sentry/**"
+      - ".github/workflows/ecs-sentry.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/sentry/**"
+      - ".github/workflows/ecs-sentry.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Publish only for initial monitoring infrastructure, or deploy to the isolated service.
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - publish-only
+
+permissions:
+  contents: read
+
+env:
+  # Matches monitoring/locals.tf: isolated from both drill regions (primary eu-central-1, secondary eu-west-1).
+  AWS_REGION: ${{ vars.SENTRY_REGION }}
+  CONTAINER_NAME: sentry
+  ECR_REPOSITORY: ${{ vars.PROJECT_NAME }}-monitoring
+  ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-monitoring
+  ECS_SERVICE: ${{ vars.PROJECT_NAME }}-monitoring
+  IMAGE_DIGEST_PARAMETER: /${{ vars.PROJECT_NAME }}/monitoring/image-digest
+  SENTRY_URL: ${{ vars.SENTRY_URL }}
+
+jobs:
+  quality:
+    name: Test and build sentry
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/sentry
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/sentry/go.mod
+          cache-dependency-path: apps/sentry/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/sentry/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Run Go tests with race detection
+        run: go test -race ./...
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ARM64 sentry image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/sentry
+          platforms: linux/arm64
+          push: false
+          cache-from: type=gha,scope=sentry
+          cache-to: type=gha,mode=max,scope=sentry
+
+  deploy:
+    name: Deploy isolated sentry
+    needs: quality
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.SENTRY_URL }}
+    # Updates the monitoring ECS service and image-digest parameter, which Terraform apply or
+    # destroy can also change or remove.
+    concurrency:
+      group: terraform-operations
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_SENTRY_ROLE_ARN }}
+          role-session-name: sentry-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable sentry image
+        id: build-image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/sentry
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=sentry
+          cache-to: type=gha,mode=max,scope=sentry
+
+      # Terraform seeds this parameter with a placeholder on the first deploy_service=false
+      # apply; overwriting it with a real digest here is what lets deploy_service=true pass.
+      # publish-only has no deploy/health step to gate on, so it publishes immediately.
+      - name: Publish sentry image digest (publish-only)
+        if: inputs.mode == 'publish-only'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: |
+          aws ssm put-parameter --name "$IMAGE_DIGEST_PARAMETER" \
+            --type String --value "$IMAGE_DIGEST" --overwrite >/dev/null
+          echo "## Published sentry image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ECR_REPOSITORY@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Read current sentry task definition
+        if: inputs.mode == 'deploy'
+        run: |
+          aws ecs describe-task-definition --task-definition "$ECS_SERVICE" \
+            --query taskDefinition > task-definition.json
+
+      - name: Render sentry task definition
+        if: inputs.mode == 'deploy'
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build-image.outputs.digest }}
+
+      - name: Deploy sentry task definition
+        if: inputs.mode == 'deploy'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+          wait-for-minutes: 15
+
+      - name: Verify public sentry health
+        if: inputs.mode == 'deploy'
+        run: curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors "$SENTRY_URL/healthz"
+
+      # Published only once sentry is confirmed healthy, so a failed deploy never leaves a
+      # broken digest for a future terraform apply to redeploy.
+      - name: Publish sentry image digest (deploy)
+        if: inputs.mode == 'deploy'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: |
+          aws ssm put-parameter --name "$IMAGE_DIGEST_PARAMETER" \
+            --type String --value "$IMAGE_DIGEST" --overwrite >/dev/null
+          echo "## Published sentry image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ECR_REPOSITORY@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

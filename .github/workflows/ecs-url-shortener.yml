@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Publish only for initial infrastructure, or deploy the workload to prod and DR.
+        description: Publish only for initial infrastructure, or deploy the workload to primary and secondary.
         required: true
         default: deploy
         type: choice
@@ -24,20 +24,16 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: workload-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
   AWS_REGION: ${{ vars.PRIMARY_REGION }}
   CONTAINER_NAME: shortener
-  DR_AWS_REGION: ${{ vars.DR_REGION }}
-  DR_ECS_CLUSTER: pilotlight-dr
-  DR_ECS_SERVICE: pilotlight-dr
-  ECR_REPOSITORY: pilotlight-prod
-  ECS_CLUSTER: pilotlight-prod
-  ECS_SERVICE: pilotlight-prod
-  IMAGE_DIGEST_PARAMETER: /pilotlight/prod/image-digest
+  SECONDARY_AWS_REGION: ${{ vars.SECONDARY_REGION }}
+  SECONDARY_ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-secondary
+  SECONDARY_ECS_SERVICE: ${{ vars.PROJECT_NAME }}-secondary
+  ECR_REPOSITORY: ${{ vars.PROJECT_NAME }}-primary
+  ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-primary
+  ECS_SERVICE: ${{ vars.PROJECT_NAME }}-primary
+  IMAGE_DIGEST_PARAMETER: /${{ vars.PROJECT_NAME }}/primary/image-digest
   WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
 
 jobs:
@@ -108,6 +104,8 @@ jobs:
     environment:
       name: production
       url: ${{ vars.WORKLOAD_URL }}
+    # Updates the primary image-digest parameter and both primary/secondary ECS services,
+    # which Terraform and recovery operations can also change or remove.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false
@@ -150,7 +148,9 @@ jobs:
 
       # Terraform seeds this parameter with a placeholder on the first deploy_service=false
       # apply; overwriting it with a real digest here is what lets deploy_service=true pass.
-      - name: Publish workload image digest
+      # publish-only has no deploy/health step to gate on, so it publishes immediately.
+      - name: Publish workload image digest (publish-only)
+        if: inputs.mode == 'publish-only'
         env:
           IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
         run: |
@@ -159,26 +159,26 @@ jobs:
           echo "## Published workload image" >> "$GITHUB_STEP_SUMMARY"
           echo "\`$ECR_REPOSITORY@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Read current prod task definition
+      - name: Read current primary task definition
         if: inputs.mode == 'deploy'
         run: |
           aws ecs describe-task-definition --task-definition "$ECS_SERVICE" \
             --query taskDefinition > task-definition.json
 
-      - name: Render prod task definition
+      - name: Render primary task definition
         if: inputs.mode == 'deploy'
-        id: render-prod
+        id: render-primary
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build-image.outputs.digest }}
 
-      - name: Deploy prod workload
+      - name: Deploy primary workload
         if: inputs.mode == 'deploy'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.render-prod.outputs.task-definition }}
+          task-definition: ${{ steps.render-primary.outputs.task-definition }}
           cluster: ${{ env.ECS_CLUSTER }}
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
@@ -188,55 +188,67 @@ jobs:
         if: inputs.mode == 'deploy'
         run: curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors "$WORKLOAD_URL/healthz"
 
-      # DR's ECR repository only exists once the dr root is applied, so publish-only
+      # Published only once primary is confirmed healthy, so a failed deploy never leaves a
+      # broken digest for a future terraform apply to redeploy.
+      - name: Publish workload image digest (deploy)
+        if: inputs.mode == 'deploy'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: |
+          aws ssm put-parameter --name "$IMAGE_DIGEST_PARAMETER" \
+            --type String --value "$IMAGE_DIGEST" --overwrite >/dev/null
+          echo "## Published workload image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ECR_REPOSITORY@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Secondary's ECR repository only exists once the secondary root is applied, so publish-only
       # runs (which precede it) must not wait on replication.
-      - name: Wait for image replication to DR
+      - name: Wait for image replication to secondary
         if: inputs.mode == 'deploy'
         env:
           IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
         run: |
           for _ in {1..60}; do
-            if aws ecr describe-images --region "$DR_AWS_REGION" \
+            if aws ecr describe-images --region "$SECONDARY_AWS_REGION" \
               --repository-name "$ECR_REPOSITORY" --image-ids imageDigest="$IMAGE_DIGEST" >/dev/null 2>&1; then
               exit 0
             fi
             sleep 10
           done
-          echo "ECR image did not replicate to DR within 10 minutes." >&2
+          echo "ECR image did not replicate to secondary within 10 minutes." >&2
           exit 1
 
-      - name: Read current DR task definition
+      - name: Read current secondary task definition
         if: inputs.mode == 'deploy'
         run: |
-          aws ecs describe-task-definition --region "$DR_AWS_REGION" \
-            --task-definition "$DR_ECS_SERVICE" --query taskDefinition > dr-task-definition.json
+          aws ecs describe-task-definition --region "$SECONDARY_AWS_REGION" \
+            --task-definition "$SECONDARY_ECS_SERVICE" --query taskDefinition > secondary-task-definition.json
 
-      - name: Log in to Amazon ECR (DR region)
+      - name: Log in to Amazon ECR (Secondary region)
         if: inputs.mode == 'deploy'
-        id: login-ecr-dr
+        id: login-ecr-secondary
         uses: aws-actions/amazon-ecr-login@v2
         env:
-          AWS_DEFAULT_REGION: ${{ env.DR_AWS_REGION }}
-          AWS_REGION: ${{ env.DR_AWS_REGION }}
+          AWS_DEFAULT_REGION: ${{ env.SECONDARY_AWS_REGION }}
+          AWS_REGION: ${{ env.SECONDARY_AWS_REGION }}
 
-      - name: Render DR task definition
+      - name: Render secondary task definition
         if: inputs.mode == 'deploy'
-        id: render-dr
+        id: render-secondary
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: dr-task-definition.json
+          task-definition: secondary-task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.login-ecr-dr.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build-image.outputs.digest }}
+          image: ${{ steps.login-ecr-secondary.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build-image.outputs.digest }}
 
-      - name: Deploy DR pilot-light task definition
+      - name: Deploy secondary pilot-light task definition
         if: inputs.mode == 'deploy'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         env:
-          AWS_DEFAULT_REGION: ${{ env.DR_AWS_REGION }}
-          AWS_REGION: ${{ env.DR_AWS_REGION }}
+          AWS_DEFAULT_REGION: ${{ env.SECONDARY_AWS_REGION }}
+          AWS_REGION: ${{ env.SECONDARY_AWS_REGION }}
         with:
-          task-definition: ${{ steps.render-dr.outputs.task-definition }}
-          cluster: ${{ env.DR_ECS_CLUSTER }}
-          service: ${{ env.DR_ECS_SERVICE }}
+          task-definition: ${{ steps.render-secondary.outputs.task-definition }}
+          cluster: ${{ env.SECONDARY_ECS_CLUSTER }}
+          service: ${{ env.SECONDARY_ECS_SERVICE }}
           wait-for-service-stability: true
           wait-for-minutes: 5

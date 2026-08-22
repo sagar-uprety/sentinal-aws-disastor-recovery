@@ -2,7 +2,7 @@
 # shares append-only event evidence and direct short-link helpers across drill steps.
 
 readonly DRILL_LOG="${DRILL_LOG:-./drill-events.log}"
-readonly LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/${PROJECT_NAME}/prod/link-create-token}"
+readonly LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/${PROJECT_NAME}/primary/link-create-token}"
 
 # appends a UTC event timestamp used to order drill phases.
 log_event() {

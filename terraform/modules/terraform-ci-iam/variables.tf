@@ -16,7 +16,7 @@ variable "github_repo" {
 variable "workload_environments" {
   description = "Environment names whose IAM roles this CI role may manage."
   type        = list(string)
-  default     = ["prod", "dr", "monitoring"]
+  default     = ["primary", "secondary", "monitoring"]
 }
 
 # A genuinely new role kind needs one entry added here; an env x suffix combo that doesn't

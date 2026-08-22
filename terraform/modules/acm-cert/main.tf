@@ -11,7 +11,7 @@ resource "aws_acm_certificate" "cert" {
 }
 
 resource "aws_route53_record" "validation" {
-  # empty map when false, so no records get created for the reuse case (e.g. dr).
+  # empty map when false, so no records get created for the reuse case (e.g. secondary).
   for_each = var.create_validation_records ? {
     # one map entry per domain the cert covers (just one today) -- keyed by domain so for_each
     # below makes one record per domain, scaling automatically if this cert ever covers more than one.
@@ -32,8 +32,8 @@ resource "aws_route53_record" "validation" {
 
 resource "aws_acm_certificate_validation" "cert" {
   certificate_arn = aws_acm_certificate.cert.arn
-  # lists the FQDNs of the records we create; null when we create none (dr), relying on
-  # prod's CNAME for this domain instead.
+  # lists the FQDNs of the records we create; null when we create none (secondary), relying on
+  # primary's CNAME for this domain instead.
   validation_record_fqdns = (
     var.create_validation_records
     ? [for record in aws_route53_record.validation : record.fqdn]

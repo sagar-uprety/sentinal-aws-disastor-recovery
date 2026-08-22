@@ -10,11 +10,11 @@ source "$SCRIPT_DIR/../config.sh"
 source "$SCRIPT_DIR/drill-lib.sh"
 
 readonly REGION="$PRIMARY_REGION"
-readonly CLUSTER="$PROD_RESOURCE_NAME"
-readonly SERVICE="$PROD_RESOURCE_NAME"
-readonly DATABASE="$PROD_RESOURCE_NAME"
-readonly TARGET_GROUP="${PROD_RESOURCE_NAME}-tg"
-readonly LOAD_BALANCER="${PROD_RESOURCE_NAME}-alb"
+readonly CLUSTER="$PRIMARY_RESOURCE_NAME"
+readonly SERVICE="$PRIMARY_RESOURCE_NAME"
+readonly DATABASE="$PRIMARY_RESOURCE_NAME"
+readonly TARGET_GROUP="${PRIMARY_RESOURCE_NAME}-tg"
+readonly LOAD_BALANCER="${PRIMARY_RESOURCE_NAME}-alb"
 
 if [ "${CONFIRM_HA:-}" != "YES" ]; then
   echo "error: set CONFIRM_HA=YES to run a controlled HA drill" >&2
@@ -67,7 +67,7 @@ task_az_count() {
     --query 'tasks[].availabilityZone' --output json | jq 'unique | length'
 }
 
-# combines ECS, ALB, public HTTP, and monitor topology into one start gate.
+# combines ECS, ALB, public HTTP, and sentry topology into one start gate.
 require_healthy_baseline() {
   local desired running healthy az_count status topology topology_ok
   local tasks=()
@@ -80,7 +80,7 @@ require_healthy_baseline() {
   healthy="$(healthy_target_count)"
   az_count="$(task_az_count "${tasks[@]}")"
   status="$(public_health_status)"
-  topology="$(curl -fsS "https://${MONITOR_HOST}/topology" || true)"
+  topology="$(curl -fsS "https://${SENTRY_HOST}/topology" || true)"
   topology_ok="$(jq -e --arg region "$REGION" --arg database "$DATABASE" 'any(.regions[]; .region == $region and .database.identifier == $database and .database.available == true)' >/dev/null <<<"$topology" && echo true || echo false)"
   if [ "$desired" != "2" ] ||
      [ "$running" != "2" ] ||
@@ -103,8 +103,8 @@ wait_for_ecs_recovery() {
   local tasks=()
   for _ in {1..60}; do
     status="$(public_health_status)"
-    if ! curl --fail --silent --show-error "https://${MONITOR_HOST}/healthz" >/dev/null; then
-      echo "error: isolated monitor became unavailable during $event_prefix recovery" >&2
+    if ! curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null; then
+      echo "error: isolated sentry became unavailable during $event_prefix recovery" >&2
       return 1
     fi
     if [ "$status" != "200" ]; then
@@ -197,7 +197,7 @@ db)
     exit 1
   fi
   known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
-  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${MONITOR_HOST}" >/dev/null
+  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${SENTRY_HOST}" >/dev/null
   record_event_at "ha_db_known_link_before" "$known_slug"
 
   # requires a real standby before requesting forced database failover.

@@ -1,7 +1,7 @@
 services:
-  monitor:
+  sentry:
     build:
-      context: ./apps/monitor
+      context: ./apps/sentry
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
@@ -10,10 +10,10 @@ services:
       MONITORED_URL: http://shortener:8080/healthz
       PORT: "8080"
       # Local Docker runs cannot reach real AWS ECS/RDS resources, so we use mock data here.
-      # Production and DR deployments should load live AWS topology from environment variables instead.
+      # Production and secondary deployments should load live AWS topology from environment variables instead.
       TOPOLOGY_MOCK_FILE: /testdata/topology.local.json
     volumes:
-      - ./apps/monitor/testdata:/testdata:ro
+      - ./apps/sentry/testdata:/testdata:ro
     depends_on:
       shortener:
         condition: service_started

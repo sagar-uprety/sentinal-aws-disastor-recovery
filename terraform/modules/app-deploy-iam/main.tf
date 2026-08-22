@@ -60,13 +60,13 @@ resource "aws_iam_role_policy" "workload_deploy" {
         Resource = [var.image_digest_parameter_arn]
       },
       ],
-      # confirms the image finished replicating to DR's region before deploying there.
-      var.dr_ecr_repository_arn == null ? [] : [
+      # confirms the image finished replicating to secondary's region before deploying there.
+      var.secondary_ecr_repository_arn == null ? [] : [
         {
           Sid      = "EcrReadReplica"
           Effect   = "Allow"
           Action   = ["ecr:DescribeImages"]
-          Resource = [var.dr_ecr_repository_arn]
+          Resource = [var.secondary_ecr_repository_arn]
         },
       ],
       [
@@ -79,7 +79,7 @@ resource "aws_iam_role_policy" "workload_deploy" {
           #checkov:skip=CKV_AWS_290,CKV_AWS_355
           Resource = "*"
         },
-        # rolls the service onto the new revision (both prod and dr, one pipeline).
+        # rolls the service onto the new revision (both primary and secondary, one pipeline).
         {
           Sid    = "EcsDeploy"
           Effect = "Allow"
@@ -90,8 +90,8 @@ resource "aws_iam_role_policy" "workload_deploy" {
           Resource = compact([
             var.ecs_cluster_arn,
             var.ecs_service_arn,
-            var.dr_ecs_cluster_arn,
-            var.dr_ecs_service_arn,
+            var.secondary_ecs_cluster_arn,
+            var.secondary_ecs_service_arn,
           ])
         },
         # this limits role handoff to these four roles -- AWS checks it separately from
@@ -103,8 +103,8 @@ resource "aws_iam_role_policy" "workload_deploy" {
           Resource = compact([
             var.ecs_task_execution_role_arn,
             var.ecs_task_role_arn,
-            var.dr_ecs_task_execution_role_arn,
-            var.dr_ecs_task_role_arn,
+            var.secondary_ecs_task_execution_role_arn,
+            var.secondary_ecs_task_role_arn,
           ])
           Condition = {
             StringEquals = {

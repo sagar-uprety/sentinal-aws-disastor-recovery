@@ -71,7 +71,7 @@ Your workload must perform its intended function correctly and consistently. To 
 must architect for resiliency. Resiliency is the ability of a workload to recover from infrastructure,
 service, or application disruptions, dynamically acquire computing resources to meet demand, and
 mitigate disruptions, such as misconfigurations or transient network issues.
-Disaster recovery (DR) is an important part of your resiliency strategy and concerns how your
+Disaster recovery (Secondary) is an important part of your resiliency strategy and concerns how your
 workload responds when a disaster strikes (a disaster is an event that causes a serious negative
 impact on your business). This response must be based on your organization's business objectives
 which specify your workload's strategy for avoiding loss of data, known as the Recovery Point
@@ -114,7 +114,7 @@ and sustainable systems. Using the AWS Well-Architected Tool, available at no ch
 Management Console, you can review your workloads against these best practices by answering a
 set of questions for each pillar.
 The concepts covered in this whitepaper expand on the best practices contained in the Reliability
-Pillar whitepaper, specifically question REL 13, “How do you plan for disaster recovery (DR)?”. After
+Pillar whitepaper, specifically question REL 13, “How do you plan for disaster recovery (Secondary)?”. After
 implementing the practices in this whitepaper, be sure to review (or re-review) your workload using
 the AWS Well-Architected Tool.
 Are you Well-Architected? 4
@@ -158,10 +158,10 @@ backup, versioning, and replication strategies.
 Deploying your workload across multiple Availability Zones in an AWS Region is part of a high
 availability strategy designed to protect workloads by isolating issues to one Availability Zone,
 and uses the redundancy of the other Availability Zones to continue serving requests. A Multi-
-AZ architecture is also part of a DR strategy designed to make workloads better isolated and
+AZ architecture is also part of a secondary strategy designed to make workloads better isolated and
 protected from issues such as power outages, lightning strikes, tornadoes, earthquakes, and
-more. DR strategies may also make use of multiple AWS Regions. For example in an active/passive
-configuration, service for the workload will fail over from its active region to its DR region if the
+more. Secondary strategies may also make use of multiple AWS Regions. For example in an active/passive
+configuration, service for the workload will fail over from its active region to its secondary region if the
 active Region can no longer serve requests.
 Figure 2 - Resiliency is a shared responsibility between AWS and the customer
 Customer responsibility “Resiliency in the Cloud” 6
@@ -195,17 +195,17 @@ locations, so that you can fail over the entire workload if necessary.
 You must consider the availability of your workload in disaster recovery planning, as it will
 influence the approach you take. A workload that runs on a single Amazon EC2 instance in one
 Availability Zone does not have high availability. If a local flooding issue affects that Availability
-Zone, this scenario requires failover to another AZ to meet DR objectives. Compare this scenario
+Zone, this scenario requires failover to another AZ to meet secondary objectives. Compare this scenario
 to a highly available workload deployed multi-site active/active, where the workload is deployed
 across multiple active Regions and all Regions are serving production traffic. In this case, even in
-the unlikely event a massive disaster makes a Region unusable, the DR strategy is accomplished by
+the unlikely event a massive disaster makes a Region unusable, the secondary strategy is accomplished by
 routing all traffic to the remaining Regions.
 How you approach data is also different between availability and disaster recovery. Consider a
 storage solution that continuously replicates to another site to achieve high availability (such
 as a multi-site, active/active workload). If a file or files are deleted or corrupted on the primary
 storage device, those destructive changes can be replicated to the secondary storage device. In this
 scenario, despite high availability, the ability to fail over in case of data deletion or corruption will
-be compromised. Instead, a point-in-time backup is also required as part of a DR strategy.
+be compromised. Instead, a point-in-time backup is also required as part of a secondary strategy.
 8
 
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
@@ -215,8 +215,8 @@ Your disaster recovery plan should be a subset of your organization’s business
 disaster recovery targets for restoring a workload if that workload’s business objectives cannot be
 achieved because of the disaster’s impact on elements of your business other than your workload.
 For example an earthquake might prevent you from transporting products purchased on your
-eCommerce application – even if effective DR keeps your workload functioning, your BCP needs to
-accommodate transportation needs. Your DR strategy should be based on business requirements,
+eCommerce application – even if effective secondary keeps your workload functioning, your BCP needs to
+accommodate transportation needs. Your secondary strategy should be based on business requirements,
 priorities, and context.
 Business impact analysis and risk assessment
 A business impact analysis should quantify the business impact of a disruption to your workloads.
@@ -251,27 +251,27 @@ With all of this information, you can document the threat, risk, impact and cost
 scenarios and the associated recovery options. This information should be used to determine your
 recovery objectives for each of your workloads.
 Recovery objectives (RTO and RPO)
-When creating a Disaster Recovery (DR) strategy, organizations most commonly plan for the
+When creating a Disaster Recovery (Secondary) strategy, organizations most commonly plan for the
 Recovery Time Objective (RTO) and Recovery Point Objective (RPO).
 Figure 3 - Recovery objectives
 Recovery Time Objective (RTO) is the maximum acceptable delay between the interruption of
 service and restoration of service. This objective determines what is considered an acceptable time
 window when service is unavailable and is defined by the organization.
-There are broadly four DR strategies discussed in this paper: backup and restore, pilot light, warm
+There are broadly four secondary strategies discussed in this paper: backup and restore, pilot light, warm
 standby, and multi-site active/active (see Disaster Recovery Options in the Cloud). In the following
 Recovery objectives (RTO and RPO) 10
 
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
 diagram, the business has determined their maximum permissible RTO as well as the limit of
-what they can spend on their service restoration strategy. Given the business’ objectives, the DR
+what they can spend on their service restoration strategy. Given the business’ objectives, the secondary
 strategies Pilot Light or Warm Standby will satisfy both the RTO and the cost criteria.
 Figure 4 - Recovery time objective
 Recovery Point Objective (RPO) is the maximum acceptable amount of time since the last data
 recovery point. This objective determines what is considered an acceptable loss of data between
 the last recovery point and the interruption of service and is defined by the organization.
 In the following diagram, the business has determined their maximum permissible RPO as well as
-the limit of what they can spend on their data recovery strategy. Of the four DR strategies, either
-Pilot Light or Warm Standby DR strategy meet both criteria for RPO and cost.
+the limit of what they can spend on their data recovery strategy. Of the four secondary strategies, either
+Pilot Light or Warm Standby secondary strategy meet both criteria for RPO and cost.
 Recovery objectives (RTO and RPO) 11
 
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
@@ -287,7 +287,7 @@ Disaster recovery is different in the cloud
 Disaster recovery strategies evolve with technical innovation. A disaster recovery plan on-premises
 may involve physically transporting tapes or replicating data to another site. Your organization
 needs to re-evaluate the business impact, risk, and cost of its previous disaster recovery strategies
-in order to fulfill its DR objectives on AWS. Disaster recovery in the AWS Cloud includes the
+in order to fulfill its secondary objectives on AWS. Disaster recovery in the AWS Cloud includes the
 following advantages over traditional environments:
 • Recover quickly from a disaster with reduced complexity
 • Simple and repeatable testing allow you to test more easily and more frequently
@@ -331,7 +331,7 @@ definition) to another Region. This strategy reduces the scope of your disaster 
 include data backup and restoration. Leveraging multi-region resiliency by backing up to another
 AWS Region is simple and inexpensive relative to the other multi-Region options described in the
 following section. For example, backing up to Amazon Simple Storage Service (Amazon S3) gives
-you access to immediate retrieval of your data. However if your DR strategy for portions of your
+you access to immediate retrieval of your data. However if your secondary strategy for portions of your
 data has more relaxed requirements for retrieval times (from minutes to hours), then using Amazon
 Glacier or Amazon Glacier Deep Archive will significantly reduce costs of your backup and recovery
 strategy.
@@ -339,7 +339,7 @@ Some workloads may have regulatory data residency requirements. If this applies 
 in a locality that currently has only one AWS Region, then in addition to designing multi-AZ
 workloads for high availability as discussed above, you can also use the AZs within that Region
 as discrete locations, which can be helpful for addressing data residency requirements applicable
-to your workload within that Region. The DR strategies described in the following sections use
+to your workload within that Region. The secondary strategies described in the following sections use
 multiple AWS Regions, but can also be implemented using Availability Zones instead of Regions.
 Multiple AWS Regions
 For a disaster event that includes the risk of losing multiple data centers a significant distance
@@ -409,13 +409,13 @@ resources:
 • Amazon FSx for Windows File Server, Amazon FSx for Lustre, Amazon FSx for NetApp ONTAP,
 and Amazon FSx for OpenZFS
 For Amazon Simple Storage Service (Amazon S3), you can use Amazon S3 Cross-Region Replication
-(CRR) to asynchronously copy objects to an S3 bucket in the DR region continuously, while
+(CRR) to asynchronously copy objects to an S3 bucket in the secondary region continuously, while
 providing versioning for the stored objects so that you can choose your restoration point.
 Continuous replication of data has the advantage of being the shortest time (near zero) to back up
 your data, but may not protect against disaster events such as data corruption or malicious attack
 (such as unauthorized data deletion) as well as point-in-time backups. Continuous replication is
 covered in the AWS Services for Pilot Light section.
-AWS Backup provides a centralized location to configure, schedule, and monitor AWS backup
+AWS Backup provides a centralized location to configure, schedule, and sentry AWS backup
 capabilities for the following services and resources:
 • Amazon Elastic Block Store (Amazon EBS) volumes
 • Amazon EC2 instances
@@ -434,8 +434,8 @@ As an additional disaster recovery strategy for your Amazon S3 data, enable S3 o
 Object versioning protects your data in S3 from the consequences of deletion or modification
 actions by retaining the original version before the action. Object versioning can be a useful
 mitigation for human-error type disasters. If you are using S3 replication to back up data to your
-DR region, then, by default, when an object is deleted in the source bucket, Amazon S3 adds
-a delete marker in the source bucket only. This approach protects data in the DR Region from
+Secondary region, then, by default, when an object is deleted in the source bucket, Amazon S3 adds
+a delete marker in the source bucket only. This approach protects data in the secondary Region from
 malicious deletions in the source Region.
 In addition to data, you must also back up the configuration and infrastructure necessary to
 redeploy your workload and meet your Recovery Time Objective (RTO). AWS CloudFormation
@@ -453,7 +453,7 @@ IAM role, monitoring configuration, and tags. However, this additional metadata 
 restoring the EC2 backup to the same AWS Region.
 Any data stored in the disaster recovery Region as backups must be restored at time of failover.
 AWS Backup offers restore capability, but does not currently enable scheduled or automatic
-restoration. You can implement automatic restore to the DR region using the AWS SDK to call APIs
+restoration. You can implement automatic restore to the secondary region using the AWS SDK to call APIs
 for AWS Backup. You can set this up as a regularly recurring job or trigger restoration whenever
 a backup is completed. The following figure shows an example of automatic restoration using
 Amazon Simple Notification Service (Amazon SNS) and AWS Lambda. Implementing a scheduled
@@ -493,7 +493,7 @@ Pilot light 20
 
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
 across multiple accounts and Regions (full infrastructure deployment to the primary Region and
-scaled down/switched-off infrastructure deployment to DR regions). It is recommended you use a
+scaled down/switched-off infrastructure deployment to secondary regions). It is recommended you use a
 different account per Region to provide the highest level of resource and security isolation (in the
 case compromised credentials are part of your disaster recovery plans as well).
 With this approach, you must also mitigate against a data disaster. Continuous data replication
@@ -504,7 +504,7 @@ backups in that same Region.
 AWS services
 In addition to using the AWS services covered in the Backup and Restore section to create point-in-
 time backups, also consider the following services for your pilot light strategy.
-For pilot light, continuous data replication to live databases and data stores in the DR region is
+For pilot light, continuous data replication to live databases and data stores in the secondary region is
 the best approach for low RPO (when used in addition to the point-in-time backups discussed
 previously). AWS provides continuous, cross-region, asynchronous data replication for data using
 the following services and resources:
@@ -514,7 +514,7 @@ the following services and resources:
 • Amazon DynamoDB global tables
 • Amazon DocumentDB global clusters
 • Global Datastore for Amazon ElastiCache (Redis OSS)
-With continuous replication, versions of your data are available almost immediately in your DR
+With continuous replication, versions of your data are available almost immediately in your secondary
 Region. Actual replication times can be monitored using service features like S3 Replication Time
 Control (S3 RTC) for S3 objects and management features of Amazon Aurora global databases.
 When failing over to run your read/write workload from the disaster recovery Region, you must
@@ -529,15 +529,15 @@ available to serve your application, and can replicate to the secondary Region w
 of under a second (and within an AWS Region is much less than 100 milliseconds). With Amazon
 Aurora global database, if your primary Region suffers a performance degradation or outage,
 you can promote one of the secondary regions to take read/write responsibilities in less than one
-minute even in the event of a complete regional outage. You can also configure Aurora to monitor
+minute even in the event of a complete regional outage. You can also configure Aurora to sentry
 the RPO lag time of all secondary clusters to make sure that at least one secondary cluster stays
 within your target RPO window.
 A scaled down version of your core workload infrastructure with fewer or smaller resources must
-be deployed in your DR Region. Using AWS CloudFormation, you can define your infrastructure
+be deployed in your secondary Region. Using AWS CloudFormation, you can define your infrastructure
 and deploy it consistently across AWS accounts and across AWS Regions. AWS CloudFormation
 uses predefined pseudo parameters to identify the AWS account and AWS Region in which it
 is deployed. Therefore, you can implement condition logic in your CloudFormation templates
-to deploy only the scaled-down version of your infrastructure in the DR Region. For EC2
+to deploy only the scaled-down version of your infrastructure in the secondary Region. For EC2
 instance deployments, an Amazon Machine Image (AMI) supplies information such as hardware
 configuration and installed software. You can implement an Image Builder pipeline that creates
 the AMIs you need and copy these to both your primary and backup Regions. This helps to ensure
@@ -557,7 +557,7 @@ There are several traffic management options to consider when using AWS services
 One option is to use Amazon Route 53. Using Amazon Route 53, you can associate multiple IP
 endpoints in one or more AWS Regions with a Route 53 domain name. Then, you can route traffic
 to the appropriate endpoint under that domain name. On failover you need to switch traffic to the
-recovery endpoint, and away from the primary endpoint. Amazon Route 53 health checks monitor
+recovery endpoint, and away from the primary endpoint. Amazon Route 53 health checks sentry
 AWS services 22
 
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
@@ -576,7 +576,7 @@ therefore not as resilient as the data plane approach using Amazon Application R
 Another option is to use AWS Global Accelerator. Using AnyCast IP, you can associate multiple
 endpoints in one or more AWS Regions with the same static public IP address or addresses. AWS
 Global Accelerator then routes traffic to the appropriate endpoint associated with that address.
-Global Accelerator health checks monitor endpoints. Using these health checks, AWS Global
+Global Accelerator health checks sentry endpoints. Using these health checks, AWS Global
 Accelerator checks the health of your applications and routes user traffic automatically to the
 healthy application endpoint. For manually initiated failover, you can adjust which endpoint
 receives traffic using traffic dials, but note this is a control plane operation. Global Accelerator
@@ -613,7 +613,7 @@ Warm standby 24
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
 Figure 11 - Warm standby architecture
 Note: The difference between pilot light and warm standby can sometimes be difficult to
-understand. Both include an environment in your DR Region with copies of your primary Region
+understand. Both include an environment in your secondary Region with copies of your primary Region
 assets. The distinction is that pilot light cannot process requests without additional action taken
 first, whereas warm standby can handle traffic (at reduced capacity levels) immediately. The
 pilot light approach requires you to “turn on” servers, possibly deploy additional (non-core)
@@ -627,7 +627,7 @@ infrastructure including EC2 instances.
 Amazon EC2 Auto Scaling is used to scale resources including Amazon EC2 instances, Amazon
 ECS tasks, Amazon DynamoDB throughput, and Amazon Aurora replicas within an AWS Region.
 Amazon EC2 Auto Scaling scales deployment of EC2 instance across Availability Zones within an
-AWS Region, providing resiliency within that Region. Use Auto Scaling to scale out your DR Region
+AWS Region, providing resiliency within that Region. Use Auto Scaling to scale out your secondary Region
 AWS services 25
 
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
@@ -636,13 +636,13 @@ EC2, increase the desired capacity setting on the Auto Scaling group. You can ad
 manually through the AWS Management Console, automatically through the AWS SDK, or by
 redeploying your AWS CloudFormation template using the new desired capacity value. You can use
 AWS CloudFormation parameters to make redeploying the CloudFormation template easier. Ensure
-that service quotas in your DR Region are set high enough so as to not limit you from scaling up to
+that service quotas in your secondary Region are set high enough so as to not limit you from scaling up to
 production capacity.
 Because Auto Scaling is a control plane activity, taking a dependency on it will lower the
 resiliency of your overall recovery strategy. It is a trade-off. You can choose to provision sufficient
 capacity such that the recovery Region can handle the full production load as deployed. This
 statically stable configuration is called hot standby (see the next section). Or you may choose to
-provision fewer resources which will cost less, but take a dependency on Auto Scaling. Some DR
+provision fewer resources which will cost less, but take a dependency on Auto Scaling. Some secondary
 implementations will deploy enough resources to handle initial traffic, ensuring low RTO, and then
 rely on Auto Scaling to ramp up for subsequent traffic.
 Multi-site active/active
@@ -655,7 +655,7 @@ most complex and costly approach to disaster recovery, but it can reduce your re
 near zero for most disasters with the correct technology choices and implementation (however
 data corruption may need to rely on backups, which usually results in a non-zero recovery point).
 Hot standby uses an active/passive configuration where users are only directed to a single region
-and DR regions do not take traffic. Most customers find that if they are going to stand up a full
+and secondary regions do not take traffic. Most customers find that if they are going to stand up a full
 environment in the second Region, it makes sense to use it active/active. Alternatively, if you do
 not want to use both Regions to handle user traffic, then Warm Standby offers a more economical
 and operationally less complex approach.
@@ -734,10 +734,10 @@ from an incident. For aggressive recovery objectives, this response time coupled
 information is critical in meeting recovery objectives. If your recovery time objective is one hour,
 then you need to detect the incident, notify appropriate personnel, engage your escalation
 processes, evaluate information (if you have any) on expected time to recovery (without executing
-the DR plan), declare a disaster and recover within an hour.
+the secondary plan), declare a disaster and recover within an hour.
 Note
-If stakeholders decide not to invoke DR even though the RTO would be at risk, then re-
-evaluate DR plans and objectives. The decision not to invoke DR plans may be because the
+If stakeholders decide not to invoke secondary even though the RTO would be at risk, then re-
+evaluate secondary plans and objectives. The decision not to invoke secondary plans may be because the
 plans are inadequate or there is a lack of confidence in execution.
 It is critical to factor in incident detection, notification, escalation, discovery and declaration into
 your planning and objectives to provide realistic, achievable objectives that provide business value.
@@ -760,7 +760,7 @@ need to can in itself introduce availability risks.
 Disaster Recovery of Workloads on AWS: Recovery in the Cloud AWS Well-Architected Framework
 Testing disaster recovery
 Test disaster recovery implementation to validate the implementation and regularly test failover to
-your workload’s DR Region to ensure that RTO and RPO are met.
+your workload’s secondary Region to ensure that RTO and RPO are met.
 A pattern to avoid is developing recovery paths that are rarely executed. For example, you might
 have a secondary data store that is used for read-only queries. When you write to a data store and
 the primary fails, you might want to fail over to the secondary data store. If you don’t frequently
@@ -773,10 +773,10 @@ This is the reason why having a small number of recovery paths is best.
 You can establish recovery patterns and regularly test them. If you have a complex or critical
 recovery path, you still need to regularly execute that failure in production to validate that the
 recovery path works.
-Manage configuration drift at the DR Region. Ensure that your infrastructure, data, and
-configuration are as needed at the DR Region. For example, check that AMIs and service quotas are
+Manage configuration drift at the secondary Region. Ensure that your infrastructure, data, and
+configuration are as needed at the secondary Region. For example, check that AMIs and service quotas are
 up-to-date.
-You can utilize AWS Config to continuously monitor and record your AWS resource configurations.
+You can utilize AWS Config to continuously sentry and record your AWS resource configurations.
 AWS Config can detect drift and trigger AWS Systems Manager Automation to fix drift and raise
 alarms. AWS CloudFormation can additionally detect drift in stacks you have deployed.
 31
@@ -807,10 +807,10 @@ For additional information, see:
 • Reliability Pillar, AWS Well-Architected Framework
 • Disaster Recovery Plan Checklist
 • Implementing Health Checks
-• Disaster Recovery (DR) Architecture on AWS, Part I: Strategies for Recovery in the Cloud
-• Disaster Recovery (DR) Architecture on AWS, Part II: Backup and Restore with Rapid Recovery
-• Disaster Recovery (DR) Architecture on AWS, Part III: Pilot Light and Warm Standby
-• Disaster Recovery (DR) Architecture on AWS, Part IV: Multi-site Active/Active
+• Disaster Recovery (Secondary) Architecture on AWS, Part I: Strategies for Recovery in the Cloud
+• Disaster Recovery (Secondary) Architecture on AWS, Part II: Backup and Restore with Rapid Recovery
+• Disaster Recovery (Secondary) Architecture on AWS, Part III: Pilot Light and Warm Standby
+• Disaster Recovery (Secondary) Architecture on AWS, Part IV: Multi-site Active/Active
 • Creating Disaster Recovery Mechanisms Using Amazon Route 53
 • Minimizing Dependencies in a Disaster Recovery Plan
 • Hands on AWS Well-Architected Disaster Recovery Labs

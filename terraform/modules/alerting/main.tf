@@ -74,7 +74,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_healthy_hosts" {
   alarm_name = "${var.project_name}-${var.environment}-alb-healthy-hosts"
   alarm_description = (
     var.ecs_desired_count == 0
-    ? "DR ALB standby expects zero healthy targets."
+    ? "Secondary ALB standby expects zero healthy targets."
     : "ALB has fewer than 1 healthy target."
   )
   namespace           = "AWS/ApplicationELB"

@@ -50,11 +50,11 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
 
-// creates the links table if absent; safe to call on every startup, including against DR's promoted replica.
+// creates the links table if absent; safe to call on every startup, including against secondary's promoted replica.
 func (s *Store) Migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS links (
-			id BIGSERIAL PRIMARY KEY,
+			id BIGSERIAL primary KEY,
 			slug TEXT UNIQUE NOT NULL,
 			destination_url TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()

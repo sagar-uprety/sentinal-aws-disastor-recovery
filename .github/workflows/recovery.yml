@@ -12,17 +12,19 @@ on:
           - failback-reset
           - credential-repair
       confirm_failback:
-        description: Type REBUILD_PROD, RESET_DR, or RECONCILE_CREDENTIAL for the selected operation.
+        description: Type REBUILD_PRIMARY, RESET_SECONDARY, or RECONCILE_CREDENTIAL for the selected operation.
         required: true
         type: string
       failback_snapshot_id:
-        description: Fresh encrypted DR-writer snapshot required by failback-prepare operations.
+        description: Fresh encrypted secondary-writer snapshot required by failback-prepare operations.
         required: false
         type: string
 
 permissions:
   contents: read
 
+# Recovery changes primary/secondary RDS topology, Terraform state, and ECS capacity;
+# serialize it with normal Terraform operations and workload deployments.
 concurrency:
   group: terraform-operations
   cancel-in-progress: false
@@ -34,7 +36,7 @@ env:
   PROJECT_NAME: ${{ vars.PROJECT_NAME }}
   BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
   PRIMARY_REGION: ${{ vars.PRIMARY_REGION }}
-  DR_REGION: ${{ vars.DR_REGION }}
+  SECONDARY_REGION: ${{ vars.SECONDARY_REGION }}
 
 jobs:
   preflight:
@@ -53,13 +55,13 @@ jobs:
         run: |
           case "$OPERATION" in
             failback-prepare)
-              expected=REBUILD_PROD
+              expected=REBUILD_PRIMARY
               test -n "$SNAPSHOT_ID" || {
                 echo "failback-prepare requires failback_snapshot_id." >&2
                 exit 1
               }
               ;;
-            failback-reset) expected=RESET_DR ;;
+            failback-reset) expected=RESET_SECONDARY ;;
             credential-repair) expected=RECONCILE_CREDENTIAL ;;
             *)
               echo "Unknown operation $OPERATION." >&2
@@ -81,7 +83,7 @@ jobs:
 
       - name: Validate recovery root modules
         run: |
-          for root in terraform/environments/prod terraform/environments/dr; do
+          for root in terraform/environments/primary terraform/environments/secondary; do
             data_dir="$RUNNER_TEMP/recovery-${root##*/}"
             TF_DATA_DIR="$data_dir" terraform -chdir="$root" init -backend=false -input=false
             TF_DATA_DIR="$data_dir" terraform -chdir="$root" validate
@@ -91,7 +93,7 @@ jobs:
     name: Plan primary reverse replica
     needs: preflight
     if: >-
-      inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PROD' &&
+      inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PRIMARY' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -112,49 +114,49 @@ jobs:
           session-name: terraform-failback-prepare-plan-${{ github.run_id }}
 
       # -replace forces destroy-and-recreate unconditionally, so a second failback-prepare
-      # run against an already-rebuilt prod replica would destroy it, not no-op.
-      - name: Verify prod is not already a reverse replica
-        run: scripts/ci/guard-topology.sh prod-standalone-writer
+      # run against an already-rebuilt primary replica would destroy it, not no-op.
+      - name: Verify primary is not already a reverse replica
+        run: scripts/ci/guard-topology.sh primary-standalone-writer
 
-      - name: Verify safety snapshot and promoted DR writer
+      - name: Verify safety snapshot and promoted secondary writer
         env:
           SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
         run: |
           scripts/ci/guard-topology.sh safety-snapshot "$SNAPSHOT_ID"
-          echo "DR_SOURCE_ARN=$(scripts/ci/guard-topology.sh dr-writer-arn)" >> "$GITHUB_ENV"
+          echo "SECONDARY_SOURCE_ARN=$(scripts/ci/guard-topology.sh secondary-writer-arn)" >> "$GITHUB_ENV"
 
       - name: Initialize primary state
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: terraform init -input=false
 
       # The image digest comes from the SSM parameter ecs-url-shortener.yml publishes, so no
       # digest travels through this workflow as a variable.
       - name: Plan reverse replication to primary
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: |
           terraform plan -input=false -lock-timeout=5m -out=failback-prepare.tfplan \
             -replace='module.rds.aws_db_instance.main' \
             -var='deploy_service=true' \
             -var='desired_count=0' \
             -var='multi_az=false' \
-            -var="replicate_source_db_arn=$DR_SOURCE_ARN"
+            -var="replicate_source_db_arn=$SECONDARY_SOURCE_ARN"
 
       - name: Show reverse-replication plan
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: terraform show -no-color failback-prepare.tfplan
 
       - name: Save reverse-replication plan for approval
         uses: actions/upload-artifact@v7
         with:
           name: failback-prepare-plan-${{ github.run_id }}
-          path: terraform/environments/prod/failback-prepare.tfplan
+          path: terraform/environments/primary/failback-prepare.tfplan
           retention-days: 1
 
   failback-prepare-apply:
     name: Apply primary reverse replica
     needs: failback-prepare-plan
     if: >-
-      inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PROD' &&
+      inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PRIMARY' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -182,40 +184,40 @@ jobs:
         run: scripts/ci/guard-topology.sh safety-snapshot "$SNAPSHOT_ID"
 
       - name: Initialize primary state
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: terraform init -input=false
 
       - name: Download approved reverse-replication plan
         uses: actions/download-artifact@v8
         with:
           name: failback-prepare-plan-${{ github.run_id }}
-          path: terraform/environments/prod
+          path: terraform/environments/primary
 
       - name: Show and apply approved reverse-replication plan
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: |
           terraform show -no-color failback-prepare.tfplan
           terraform apply -input=false -lock-timeout=5m failback-prepare.tfplan
 
       - name: Verify primary reverse replica
         run: |
-          aws rds wait db-instance-available --region "$PRIMARY_REGION" --db-instance-identifier "$PROJECT_NAME-prod"
+          aws rds wait db-instance-available --region "$PRIMARY_REGION" --db-instance-identifier "$PROJECT_NAME-primary"
           source="$(aws rds describe-db-instances --region "$PRIMARY_REGION" \
-            --db-instance-identifier "$PROJECT_NAME-prod" \
+            --db-instance-identifier "$PROJECT_NAME-primary" \
             --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
           desired="$(aws ecs describe-services --region "$PRIMARY_REGION" \
-            --cluster "$PROJECT_NAME-prod" --services "$PROJECT_NAME-prod" \
+            --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary" \
             --query 'services[0].desiredCount' --output text)"
-          [[ "$source" == *"$PROJECT_NAME-dr"* ]] || {
-            echo "Prod replicates from $source, expected the DR writer." >&2
+          [[ "$source" == *"$PROJECT_NAME-secondary"* ]] || {
+            echo "Primary replicates from $source, expected the secondary writer." >&2
             exit 1
           }
           test "$desired" = "0"
 
   failback-reset-plan:
-    name: Plan primary-to-DR pilot-light restoration
+    name: Plan primary-to-secondary pilot-light restoration
     needs: preflight
-    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_DR' && github.ref == 'refs/heads/main'
+    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_SECONDARY' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: terraform-production
@@ -235,10 +237,10 @@ jobs:
           session-name: terraform-failback-reset-plan-${{ github.run_id }}
 
       - name: Verify traffic and primary readiness
-        run: scripts/ci/guard-topology.sh prod-serving-traffic
+        run: scripts/ci/guard-topology.sh primary-serving-traffic
 
       - name: Plan primary reconciliation
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: |
           terraform init -input=false
           terraform plan -input=false -lock-timeout=5m -out=failback-primary.tfplan \
@@ -247,34 +249,34 @@ jobs:
             -var='multi_az=true'
           terraform show -no-color failback-primary.tfplan
 
-      - name: Plan DR pilot-light restoration
-        working-directory: terraform/environments/dr
+      - name: Plan secondary pilot-light restoration
+        working-directory: terraform/environments/secondary
         run: |
           terraform init -input=false
-          terraform plan -input=false -lock-timeout=5m -out=failback-dr.tfplan \
+          terraform plan -input=false -lock-timeout=5m -out=failback-secondary.tfplan \
             -replace='module.rds.aws_db_instance.main' \
             -var='desired_count=0' \
             -var='multi_az=false'
-          terraform show -no-color failback-dr.tfplan
+          terraform show -no-color failback-secondary.tfplan
 
       - name: Save primary reconciliation plan for approval
         uses: actions/upload-artifact@v7
         with:
           name: failback-primary-plan-${{ github.run_id }}
-          path: terraform/environments/prod/failback-primary.tfplan
+          path: terraform/environments/primary/failback-primary.tfplan
           retention-days: 1
 
-      - name: Save DR restoration plan for approval
+      - name: Save secondary restoration plan for approval
         uses: actions/upload-artifact@v7
         with:
-          name: failback-dr-plan-${{ github.run_id }}
-          path: terraform/environments/dr/failback-dr.tfplan
+          name: failback-secondary-plan-${{ github.run_id }}
+          path: terraform/environments/secondary/failback-secondary.tfplan
           retention-days: 1
 
   failback-reset-apply:
-    name: Apply primary-to-DR pilot-light restoration
+    name: Apply primary-to-secondary pilot-light restoration
     needs: failback-reset-plan
-    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_DR' && github.ref == 'refs/heads/main'
+    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_SECONDARY' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: terraform-production
@@ -296,38 +298,38 @@ jobs:
 
       # Re-run after the approval gate, since the topology can drift while a human decides.
       - name: Recheck primary traffic and readiness
-        run: scripts/ci/guard-topology.sh prod-serving-traffic
+        run: scripts/ci/guard-topology.sh primary-serving-traffic
 
       - name: Download approved primary plan
         uses: actions/download-artifact@v8
         with:
           name: failback-primary-plan-${{ github.run_id }}
-          path: terraform/environments/prod
+          path: terraform/environments/primary
 
-      - name: Download approved DR plan
+      - name: Download approved secondary plan
         uses: actions/download-artifact@v8
         with:
-          name: failback-dr-plan-${{ github.run_id }}
-          path: terraform/environments/dr
+          name: failback-secondary-plan-${{ github.run_id }}
+          path: terraform/environments/secondary
 
       - name: Show and apply approved primary plan
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/primary
         run: |
           terraform init -input=false
           terraform show -no-color failback-primary.tfplan
           terraform apply -input=false -lock-timeout=5m failback-primary.tfplan
 
-      - name: Show and apply approved DR plan
-        working-directory: terraform/environments/dr
+      - name: Show and apply approved secondary plan
+        working-directory: terraform/environments/secondary
         run: |
           terraform init -input=false
-          terraform show -no-color failback-dr.tfplan
-          terraform apply -input=false -lock-timeout=5m failback-dr.tfplan
+          terraform show -no-color failback-secondary.tfplan
+          terraform apply -input=false -lock-timeout=5m failback-secondary.tfplan
 
       - name: Verify restored pilot light
         run: |
-          aws rds wait db-instance-available --region "$DR_REGION" --db-instance-identifier "$PROJECT_NAME-dr"
-          scripts/ci/guard-topology.sh dr-pilot-light
+          aws rds wait db-instance-available --region "$SECONDARY_REGION" --db-instance-identifier "$PROJECT_NAME-secondary"
+          scripts/ci/guard-topology.sh secondary-pilot-light
 
   credential-repair:
     name: Reconcile promoted-primary credential
@@ -353,31 +355,31 @@ jobs:
           aws-region: ${{ env.PRIMARY_REGION }}
 
       # A promoted replica keeps the password it inherited, so repair is only correct
-      # once the topology is fully reset to prod-writer plus DR pilot light.
+      # once the topology is fully reset to primary-writer plus secondary pilot light.
       - name: Verify reset topology before credential repair
         run: |
-          scripts/ci/guard-topology.sh prod-multi-az-writer
-          scripts/ci/guard-topology.sh dr-pilot-light
+          scripts/ci/guard-topology.sh primary-multi-az-writer
+          scripts/ci/guard-topology.sh secondary-pilot-light
 
       - name: Reconcile RDS password from SecureString
         run: |
           db_password="$(aws ssm get-parameter --region "$PRIMARY_REGION" \
-            --name "/$PROJECT_NAME/prod/database/password" --with-decryption \
+            --name "/$PROJECT_NAME/primary/database/password" --with-decryption \
             --query 'Parameter.Value' --output text)"
           trap 'unset db_password' EXIT
           aws rds modify-db-instance --region "$PRIMARY_REGION" \
-            --db-instance-identifier "$PROJECT_NAME-prod" \
+            --db-instance-identifier "$PROJECT_NAME-primary" \
             --master-user-password "$db_password" --apply-immediately >/dev/null
           aws rds wait db-instance-available --region "$PRIMARY_REGION" \
-            --db-instance-identifier "$PROJECT_NAME-prod"
+            --db-instance-identifier "$PROJECT_NAME-primary"
 
-      - name: Restart prod tasks with reconciled credential
+      - name: Restart primary tasks with reconciled credential
         run: |
           aws ecs update-service --region "$PRIMARY_REGION" \
-            --cluster "$PROJECT_NAME-prod" --service "$PROJECT_NAME-prod" \
+            --cluster "$PROJECT_NAME-primary" --service "$PROJECT_NAME-primary" \
             --force-new-deployment >/dev/null
           aws ecs wait services-stable --region "$PRIMARY_REGION" \
-            --cluster "$PROJECT_NAME-prod" --services "$PROJECT_NAME-prod"
+            --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary"
 
       - name: Verify restored public health
-        run: scripts/ci/guard-topology.sh wait-prod-recovered
+        run: scripts/ci/guard-topology.sh wait-primary-recovered

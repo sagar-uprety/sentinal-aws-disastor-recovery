@@ -35,8 +35,8 @@ repos:
     rev: v2.12.2
     hooks:
       - id: golangci-lint-full
-        name: golangci-lint monitor
-        entry: bash -c 'cd apps/monitor && golangci-lint run --fix --config=../../.golangci.yml'
+        name: golangci-lint sentry
+        entry: bash -c 'cd apps/sentry && golangci-lint run --fix --config=../../.golangci.yml'
       - id: golangci-lint-full
         name: golangci-lint shortener
         entry: bash -c 'cd apps/url-shortener && golangci-lint run --fix --config=../../.golangci.yml'
@@ -52,7 +52,7 @@ repos:
       - id: go-vet
         name: go vet
         description: Static analysis for Go
-        entry: bash -c 'cd apps/monitor && go vet ./...'
+        entry: bash -c 'cd apps/sentry && go vet ./...'
         language: system
         types: [go]
         pass_filenames: false
@@ -65,7 +65,7 @@ repos:
       - id: go-test
         name: go test
         description: Run Go tests
-        entry: bash -c 'cd apps/monitor && go test ./...'
+        entry: bash -c 'cd apps/sentry && go test ./...'
         language: system
         types: [go]
         pass_filenames: false
@@ -78,7 +78,7 @@ repos:
       - id: go-race
         name: go test -race
         description: Race detection
-        entry: bash -c 'cd apps/monitor && go test -race ./...'
+        entry: bash -c 'cd apps/sentry && go test -race ./...'
         language: system
         types: [go]
         pass_filenames: false
@@ -91,7 +91,7 @@ repos:
       - id: go-mod-tidy
         name: go mod tidy
         description: Clean up go.mod/go.sum
-        entry: bash -c 'cd apps/monitor && go mod tidy'
+        entry: bash -c 'cd apps/sentry && go mod tidy'
         language: system
         files: go\.mod$
         pass_filenames: false
@@ -104,7 +104,7 @@ repos:
       - id: govulncheck
         name: govulncheck
         description: Check for known vulnerabilities
-        entry: bash -c 'cd apps/monitor && govulncheck ./...'
+        entry: bash -c 'cd apps/sentry && govulncheck ./...'
         language: system
         types: [go]
         pass_filenames: false

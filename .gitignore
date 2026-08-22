@@ -20,8 +20,8 @@ drill-events.log
 *.tfvars
 *.tfvars.json
 !terraform/environments/bootstrap/terraform.tfvars
-!terraform/environments/prod/terraform.tfvars
-!terraform/environments/dr/terraform.tfvars
+!terraform/environments/primary/terraform.tfvars
+!terraform/environments/secondary/terraform.tfvars
 !terraform/environments/monitoring/terraform.tfvars
 
 # Ignore override files as they are usually used to override resources locally and so
@@ -56,7 +56,7 @@ terraform.rc
 # planout
 
 # Go
-apps/monitor/sentinel
+apps/sentry/sentinel
 apps/url-shortener/shortener
 *.exe
 *.exe~
@@ -74,9 +74,9 @@ apps/url-shortener/shortener
 vendor/
 
 # Node dependencies used to build static Tailwind CSS
-apps/monitor/node_modules/
-apps/monitor/static/uPlot.iife.min.js
-apps/monitor/static/uPlot.min.css
+apps/sentry/node_modules/
+apps/sentry/static/uPlot.iife.min.js
+apps/sentry/static/uPlot.min.css
 
 # Local env secrets
 .env

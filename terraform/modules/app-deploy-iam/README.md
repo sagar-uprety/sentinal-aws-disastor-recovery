@@ -1,6 +1,6 @@
 # GitHub OIDC Module
 
-IAM role assumed via GitHub OIDC (no long-lived AWS keys) so `ecs-url-shortener.yml` can push images and deploy ECS. Trust policy is pinned to the exact repo and the protected `production` GitHub environment. Permissions scope to one ECR repo, the prod and DR ECS services/task roles by ARN, and task-definition register/describe, which AWS doesn't support scoping further.
+IAM role assumed via GitHub OIDC (no long-lived AWS keys) so `ecs-url-shortener.yml` can push images and deploy ECS. Trust policy is pinned to the exact repo and the protected `production` GitHub environment. Permissions scope to one ECR repo, the primary and secondary ECS services/task roles by ARN, and task-definition register/describe, which AWS doesn't support scoping further.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -31,11 +31,6 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| <a name="input_dr_ecr_repository_arn"></a> [dr\_ecr\_repository\_arn](#input\_dr\_ecr\_repository\_arn) | ARN of the replicated DR ECR repository checked by deployments. Null when there's no DR pair. | `string` | `null` | no |
-| <a name="input_dr_ecs_cluster_arn"></a> [dr\_ecs\_cluster\_arn](#input\_dr\_ecs\_cluster\_arn) | ARN of the DR ECS cluster updated by application deployments. Null for environments with no DR pair. | `string` | `null` | no |
-| <a name="input_dr_ecs_service_arn"></a> [dr\_ecs\_service\_arn](#input\_dr\_ecs\_service\_arn) | ARN of the DR ECS service updated by application deployments. Null for environments with no DR pair. | `string` | `null` | no |
-| <a name="input_dr_ecs_task_execution_role_arn"></a> [dr\_ecs\_task\_execution\_role\_arn](#input\_dr\_ecs\_task\_execution\_role\_arn) | ARN of the DR ECS task execution role passed when registering a task definition. Null with no DR pair. | `string` | `null` | no |
-| <a name="input_dr_ecs_task_role_arn"></a> [dr\_ecs\_task\_role\_arn](#input\_dr\_ecs\_task\_role\_arn) | ARN of the DR ECS task role passed when registering a task definition. Null with no DR pair. | `string` | `null` | no |
 | <a name="input_ecr_repository_arn"></a> [ecr\_repository\_arn](#input\_ecr\_repository\_arn) | ARN of the ECR repository ecs-url-shortener.yml pushes images to. | `string` | n/a | yes |
 | <a name="input_ecs_cluster_arn"></a> [ecs\_cluster\_arn](#input\_ecs\_cluster\_arn) | ARN of the ECS cluster ecs-url-shortener.yml deploys to. | `string` | n/a | yes |
 | <a name="input_ecs_service_arn"></a> [ecs\_service\_arn](#input\_ecs\_service\_arn) | ARN of the ECS service ecs-url-shortener.yml updates. | `string` | n/a | yes |
@@ -47,6 +42,11 @@ No modules.
 | <a name="input_github_repo"></a> [github\_repo](#input\_github\_repo) | GitHub repository name (without owner). | `string` | n/a | yes |
 | <a name="input_image_digest_parameter_arn"></a> [image\_digest\_parameter\_arn](#input\_image\_digest\_parameter\_arn) | ARN of the SSM parameter CI writes the image digest to; Terraform reads it back on the next apply. | `string` | n/a | yes |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
+| <a name="input_secondary_ecr_repository_arn"></a> [secondary\_ecr\_repository\_arn](#input\_secondary\_ecr\_repository\_arn) | ARN of the replicated secondary ECR repository checked by deployments. Null without a secondary. | `string` | `null` | no |
+| <a name="input_secondary_ecs_cluster_arn"></a> [secondary\_ecs\_cluster\_arn](#input\_secondary\_ecs\_cluster\_arn) | ARN of the secondary ECS cluster updated by application deployments. Null without a secondary. | `string` | `null` | no |
+| <a name="input_secondary_ecs_service_arn"></a> [secondary\_ecs\_service\_arn](#input\_secondary\_ecs\_service\_arn) | ARN of the secondary ECS service updated by application deployments. Null without a secondary. | `string` | `null` | no |
+| <a name="input_secondary_ecs_task_execution_role_arn"></a> [secondary\_ecs\_task\_execution\_role\_arn](#input\_secondary\_ecs\_task\_execution\_role\_arn) | ARN of the secondary ECS task-execution role registered for task definitions. Null with no secondary. | `string` | `null` | no |
+| <a name="input_secondary_ecs_task_role_arn"></a> [secondary\_ecs\_task\_role\_arn](#input\_secondary\_ecs\_task\_role\_arn) | ARN of the secondary ECS task role registered for task definitions. Null with no secondary. | `string` | `null` | no |
 
 ## Outputs
 
