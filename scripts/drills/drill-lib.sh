@@ -35,17 +35,39 @@ require_current_event() {
   fi
 }
 
-# normalizes the two empty replication-source values returned by the AWS CLI.
-replica_source_is_empty() {
-  [ -z "${1:-}" ] || [ "$1" = "None" ]
+# requires exactly two running tasks spread across two distinct Availability Zones.
+require_two_az_tasks() {
+  local region="$1" cluster="$2" service="$3" task_arns az_count
+  read -r -a task_arns <<<"$(aws ecs list-tasks \
+    --region "$region" \
+    --cluster "$cluster" \
+    --service-name "$service" \
+    --desired-status RUNNING \
+    --query 'taskArns' --output text)"
+  if [ "${#task_arns[@]}" -ne 2 ]; then
+    return 1
+  fi
+  az_count="$(aws ecs describe-tasks \
+    --region "$region" \
+    --cluster "$cluster" \
+    --tasks "${task_arns[@]}" \
+    --query 'tasks[].availabilityZone' --output json | jq 'unique | length')"
+  [ "$az_count" -eq 2 ]
 }
 
-# supports both BSD and GNU date when converting AWS timestamps.
-to_epoch() {
-  local clean="${1%Z}"
-  clean="${clean%+00:00}"
-  clean="${clean%%.*}"
-  date -u -j -f "%Y-%m-%dT%H:%M:%S" "$clean" +%s 2>/dev/null || date -u -d "${clean}Z" +%s
+# fetches the newest maximum ReplicaLag datapoint from a five-minute window.
+latest_replica_lag_json() {
+  local region="$1" database="$2" start
+  start="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+  aws cloudwatch get-metric-statistics \
+    --region "$region" \
+    --namespace AWS/RDS \
+    --metric-name ReplicaLag \
+    --dimensions Name=DBInstanceIdentifier,Value="$database" \
+    --start-time "$start" \
+    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --period 60 --statistics Maximum \
+    --query 'sort_by(Datapoints, &Timestamp)[-1]' --output json
 }
 
 # bypasses public DNS while preserving TLS hostname validation against a chosen ALB.

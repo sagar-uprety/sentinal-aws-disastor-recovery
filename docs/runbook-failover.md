@@ -35,9 +35,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 
    Script verifies pilot-light prerequisites, creates and records a normal short link in primary, scales primary ECS to 0, and records `outage_confirmed` only after workload ALB returns 503 with zero healthy targets. It also requires sentry health and restores original desired count if confirmation fails.
 
-2. Independently review `drill-events.log`, primary target health, and user impact. Promotion is irreversible.
-
-3. Promote and activate secondary:
+2. Promote and activate secondary:
 
    ```bash
    CONFIRM_FAILOVER=YES DRILL_LOG=./drill-events.log scripts/drills/failover.sh
@@ -45,7 +43,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 
    Before promotion, script requires current outage marker, validates replica, regional immutable image, regional SSM token parameter, and fresh ReplicaLag evidence. It then promotes RDS, starts two ECS tasks across two AZs, requires two healthy ALB targets, verifies primary-created link, creates a secondary link through `POST /links`, and verifies sentry health. It does not switch traffic.
 
-4. Switch the pre-created ARC controls as a separate operator gate:
+3. Switch the pre-created ARC controls as a separate operator gate:
 
    ```bash
    CONFIRM_TRAFFIC_SWITCH=secondary DRILL_LOG=./drill-events.log scripts/drills/switch-traffic.sh secondary
@@ -55,15 +53,15 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 
    Retain refreshed sentry topology after switch. It must show eu-west-1 workload compute and database state while sentry remains served from isolated plane.
 
-5. Print measurements:
+4. Print measurements:
 
    ```bash
    DRILL_LOG=./drill-events.log scripts/drills/measure.sh
    ```
 
-   RTO runs from `outage_confirmed` through `traffic_verified`. The report also prints promotion, task startup, target health, write verification, and routing phases.
+   RTO runs from `outage_confirmed` through `traffic_verified`. The report also prints declaration, detection-to-invocation, promotion, task startup, target health, write verification, and routing phases.
 
-6. Harden the promoted secondary database after service recovery. This is not part of RTO:
+5. Harden the promoted secondary database after service recovery. This is not part of RTO:
 
    ```bash
    aws rds modify-db-instance \
@@ -101,7 +99,7 @@ Once secondary accepts writes, old primary has diverged and cannot simply resume
    ```bash
    gh workflow run recovery.yml --ref main \
      -f operation=failback-prepare \
-     -f confirm_failback=REBUILD_PRIMARY \
+     -f confirm=true \
      -f failback_snapshot_id=<snapshot-id>
    ```
 
@@ -111,7 +109,7 @@ Once secondary accepts writes, old primary has diverged and cannot simply resume
    DRILL_LOG=./drill-events.log scripts/drills/failback.sh verify-replica
    ```
 
-3. Verify primary is a fresh reverse replica. Then begin a planned failback interruption by scaling secondary compute to zero and retaining secondary-created link slug. Only after writes are frozen does script recheck fresh lag evidence, promote primary, convert it to Multi-AZ, start primary tasks, and require that secondary-created link. Secondary and primary are never independent active writers:
+3. Verify primary is a fresh reverse replica. Then begin a planned failback interruption by scaling secondary compute to zero and retaining secondary-created link slug. Only after writes are frozen does script recheck fresh lag evidence, promote primary, convert it to Multi-AZ, reconcile the primary database password against the canonical SSM secret, start primary tasks, and require that secondary-created link. Secondary and primary are never independent active writers:
 
    ```bash
    CONFIRM_FAILBACK_FREEZE=YES DRILL_LOG=./drill-events.log scripts/drills/failback.sh freeze-writes
@@ -132,7 +130,7 @@ Once secondary accepts writes, old primary has diverged and cannot simply resume
    ```bash
    gh workflow run recovery.yml --ref main \
      -f operation=failback-reset \
-     -f confirm_failback=RESET_SECONDARY
+     -f confirm=true
    ```
 
    Verify reset after the workflow succeeds:
@@ -143,15 +141,7 @@ Once secondary accepts writes, old primary has diverged and cannot simply resume
 
 6. Delete the active-secondary safety snapshot after reset evidence is retained, using the exact command printed by `failback.sh snapshot`.
 
-Normal promotion preserves the password inherited by the replica. Terraform therefore ignores later changes to the standalone RDS resource's write-only password fields; do not increment a credential-version variable during ordinary failback. If an older reset has already produced an RDS and SSM mismatch, use the guarded break-glass workflow after verifying reset topology:
-
-   ```bash
-   gh workflow run recovery.yml --ref main \
-     -f operation=credential-repair \
-     -f confirm_failback=RECONCILE_CREDENTIAL
-   ```
-
-The repair reads the existing SecureString only inside the protected runner, resets the primary RDS password to that value, forces an ECS deployment, and requires healthy public `/topology`. It is recovery for an observed mismatch, not a routine failback phase or password-rotation mechanism.
+A promoted replica inherits the password of the instance it replicated from, so `failback.sh promote-primary` reconciles the primary database's password against the canonical SSM secret itself, immediately after Multi-AZ conversion and before primary compute starts (step 3 above), no separate credential-repair step exists. There is no scripted fallback for a mismatch produced outside this flow (for example, an out-of-band manual promotion via the console); that would require ad-hoc investigation and a manual `aws rds modify-db-instance --master-user-password` against the SSM-stored value.
 
 The active primary website cannot display secondary desired count zero or primary-to-secondary replica direction after reset. Verify those standby-only properties through the workflow output, AWS APIs, and `failback.sh verify-reset`; do not infer them from the website.
 

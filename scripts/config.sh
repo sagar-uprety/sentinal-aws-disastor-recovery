@@ -13,3 +13,16 @@ readonly SECONDARY_RESOURCE_NAME="${PROJECT_NAME}-secondary"
 readonly WORKLOAD_HOST="shortener.${BASE_DOMAIN}"
 # shellcheck disable=SC2034 # consumed by whichever script sources this file
 readonly SENTRY_HOST="sentry.${BASE_DOMAIN}"
+
+# handles both values the RDS CLI uses for no replication source.
+has_no_replication_source() {
+  [ -z "${1:-}" ] || [ "$1" = "None" ]
+}
+
+# supports both BSD and GNU date when converting AWS timestamps.
+to_epoch() {
+  local clean="${1%Z}"
+  clean="${clean%+00:00}"
+  clean="${clean%%.*}"
+  date -u -j -f "%Y-%m-%dT%H:%M:%S" "$clean" +%s 2>/dev/null || date -u -d "${clean}Z" +%s
+}

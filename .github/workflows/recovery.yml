@@ -10,11 +10,11 @@ on:
         options:
           - failback-prepare
           - failback-reset
-          - credential-repair
-      confirm_failback:
-        description: Type REBUILD_PRIMARY, RESET_SECONDARY, or RECONCILE_CREDENTIAL for the selected operation.
+      confirm:
+        description: Confirm you want to run the selected operation.
         required: true
-        type: string
+        type: boolean
+        default: false
       failback_snapshot_id:
         description: Fresh encrypted secondary-writer snapshot required by failback-prepare operations.
         required: false
@@ -44,32 +44,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Each operation's job also gates on inputs.confirm_failback in its own `if:`, but a
-      # mismatch there just skips the job (run still shows green). Failing here instead of
-      # skipping silently.
-      - name: Validate typed confirmation
+      # Each operation's job also gates on inputs.confirm in its own `if:`, but a mismatch
+      # there just skips the job (run still shows green). Failing here instead of skipping silently.
+      - name: Validate confirmation and operation-specific inputs
         env:
-          CONFIRM_FAILBACK: ${{ inputs.confirm_failback }}
+          CONFIRM: ${{ inputs.confirm }}
           OPERATION: ${{ inputs.operation }}
           SNAPSHOT_ID: ${{ inputs.failback_snapshot_id }}
         run: |
-          case "$OPERATION" in
-            failback-prepare)
-              expected=REBUILD_PRIMARY
-              test -n "$SNAPSHOT_ID" || {
-                echo "failback-prepare requires failback_snapshot_id." >&2
-                exit 1
-              }
-              ;;
-            failback-reset) expected=RESET_SECONDARY ;;
-            credential-repair) expected=RECONCILE_CREDENTIAL ;;
-            *)
-              echo "Unknown operation $OPERATION." >&2
-              exit 1
-              ;;
-          esac
-          if [ "$CONFIRM_FAILBACK" != "$expected" ]; then
-            echo "$OPERATION requires confirm_failback=$expected." >&2
+          if [ "$CONFIRM" != "true" ]; then
+            echo "Check confirm to run $OPERATION." >&2
+            exit 1
+          fi
+          if [ "$OPERATION" = "failback-prepare" ] && [ -z "$SNAPSHOT_ID" ]; then
+            echo "failback-prepare requires failback_snapshot_id." >&2
             exit 1
           fi
 
@@ -93,7 +81,7 @@ jobs:
     name: Plan primary reverse replica
     needs: preflight
     if: >-
-      inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PRIMARY' &&
+      inputs.operation == 'failback-prepare' && inputs.confirm == true &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -156,7 +144,7 @@ jobs:
     name: Apply primary reverse replica
     needs: failback-prepare-plan
     if: >-
-      inputs.operation == 'failback-prepare' && inputs.confirm_failback == 'REBUILD_PRIMARY' &&
+      inputs.operation == 'failback-prepare' && inputs.confirm == true &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -208,16 +196,19 @@ jobs:
           desired="$(aws ecs describe-services --region "$PRIMARY_REGION" \
             --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary" \
             --query 'services[0].desiredCount' --output text)"
-          [[ "$source" == *"$PROJECT_NAME-secondary"* ]] || {
+          if [[ "$source" != *"$PROJECT_NAME-secondary"* ]]; then
             echo "Primary replicates from $source, expected the secondary writer." >&2
             exit 1
-          }
-          test "$desired" = "0"
+          fi
+          if [ "$desired" != "0" ]; then
+            echo "Primary desired count is $desired, expected 0 before serving traffic." >&2
+            exit 1
+          fi
 
   failback-reset-plan:
     name: Plan primary-to-secondary pilot-light restoration
     needs: preflight
-    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_SECONDARY' && github.ref == 'refs/heads/main'
+    if: inputs.operation == 'failback-reset' && inputs.confirm == true && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: terraform-production
@@ -276,7 +267,7 @@ jobs:
   failback-reset-apply:
     name: Apply primary-to-secondary pilot-light restoration
     needs: failback-reset-plan
-    if: inputs.operation == 'failback-reset' && inputs.confirm_failback == 'RESET_SECONDARY' && github.ref == 'refs/heads/main'
+    if: inputs.operation == 'failback-reset' && inputs.confirm == true && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: terraform-production
@@ -330,56 +321,3 @@ jobs:
         run: |
           aws rds wait db-instance-available --region "$SECONDARY_REGION" --db-instance-identifier "$PROJECT_NAME-secondary"
           scripts/ci/guard-topology.sh secondary-pilot-light
-
-  credential-repair:
-    name: Reconcile promoted-primary credential
-    needs: preflight
-    if: >-
-      inputs.operation == 'credential-repair' && inputs.confirm_failback == 'RECONCILE_CREDENTIAL' &&
-      github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: terraform-production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-          role-session-name: credential-repair-${{ github.run_id }}
-          aws-region: ${{ env.PRIMARY_REGION }}
-
-      # A promoted replica keeps the password it inherited, so repair is only correct
-      # once the topology is fully reset to primary-writer plus secondary pilot light.
-      - name: Verify reset topology before credential repair
-        run: |
-          scripts/ci/guard-topology.sh primary-multi-az-writer
-          scripts/ci/guard-topology.sh secondary-pilot-light
-
-      - name: Reconcile RDS password from SecureString
-        run: |
-          db_password="$(aws ssm get-parameter --region "$PRIMARY_REGION" \
-            --name "/$PROJECT_NAME/primary/database/password" --with-decryption \
-            --query 'Parameter.Value' --output text)"
-          trap 'unset db_password' EXIT
-          aws rds modify-db-instance --region "$PRIMARY_REGION" \
-            --db-instance-identifier "$PROJECT_NAME-primary" \
-            --master-user-password "$db_password" --apply-immediately >/dev/null
-          aws rds wait db-instance-available --region "$PRIMARY_REGION" \
-            --db-instance-identifier "$PROJECT_NAME-primary"
-
-      - name: Restart primary tasks with reconciled credential
-        run: |
-          aws ecs update-service --region "$PRIMARY_REGION" \
-            --cluster "$PROJECT_NAME-primary" --service "$PROJECT_NAME-primary" \
-            --force-new-deployment >/dev/null
-          aws ecs wait services-stable --region "$PRIMARY_REGION" \
-            --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary"
-
-      - name: Verify restored public health
-        run: scripts/ci/guard-topology.sh wait-primary-recovered

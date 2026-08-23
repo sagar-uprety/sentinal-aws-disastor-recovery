@@ -21,21 +21,6 @@ readonly SECONDARY_ALB_NAME="${SECONDARY_RESOURCE_NAME}-alb"
 readonly SECONDARY_TARGET_GROUP_NAME="${SECONDARY_RESOURCE_NAME}-tg"
 readonly FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-300}"
 
-# fetches the newest maximum ReplicaLag datapoint from a five-minute window.
-latest_replica_lag_json() {
-  local region="$1" database="$2" start
-  start="$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
-  aws cloudwatch get-metric-statistics \
-    --region "$region" \
-    --namespace AWS/RDS \
-    --metric-name ReplicaLag \
-    --dimensions Name=DBInstanceIdentifier,Value="$database" \
-    --start-time "$start" \
-    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --period 60 --statistics Maximum \
-    --query 'sort_by(Datapoints, &Timestamp)[-1]' --output json
-}
-
 # accepts only recent lag evidence within the configured failback target.
 wait_for_replica_lag() {
   local region="$1" database="$2" data lag timestamp age
@@ -43,6 +28,7 @@ wait_for_replica_lag() {
     data="$(latest_replica_lag_json "$region" "$database")"
     lag="$(jq -r '.Maximum // empty' <<<"$data")"
     timestamp="$(jq -r '.Timestamp // empty' <<<"$data")"
+    # RDS reports ReplicaLag=-1 when replication is not active/determinable; treat as no evidence.
     if [ -n "$lag" ] && [ "$lag" != "-1" ] && [ -n "$timestamp" ]; then
       age=$(( $(date -u +%s) - $(to_epoch "$timestamp") ))
       if [ "$age" -le 180 ] && awk -v lag="$lag" -v target="$FAILBACK_LAG_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
@@ -80,16 +66,16 @@ require_secondary_writes_frozen() {
 case "${1:-}" in
 # step 1: snapshot the secondary writer before destructive primary reconstruction.
 snapshot)
-  [ "${CONFIRM_FAILBACK_SNAPSHOT:-}" = "YES" ] || {
+  if [ "${CONFIRM_FAILBACK_SNAPSHOT:-}" != "YES" ]; then
     echo "error: set CONFIRM_FAILBACK_SNAPSHOT=YES to create the safety snapshot" >&2
     exit 1
-  }
+  fi
   require_current_event "traffic_verified_secondary"
-  read -r secondary_status secondary_source secondary_multi_az <<<"$(aws rds describe-db-instances \
+  read -r secondary_status secondary_replicates_from secondary_multi_az <<<"$(aws rds describe-db-instances \
     --region "$SECONDARY_REGION" \
     --db-instance-identifier "$SECONDARY_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
-  if [ "$secondary_status" != "available" ] || ! replica_source_is_empty "$secondary_source" || [ "$secondary_multi_az" != "True" ]; then
+  if [ "$secondary_status" != "available" ] || ! has_no_replication_source "$secondary_replicates_from" || [ "$secondary_multi_az" != "True" ]; then
     echo "error: active secondary writer must be available, standalone, and Multi-AZ before snapshot" >&2
     exit 1
   fi
@@ -105,7 +91,7 @@ Snapshot $snapshot_id is available.
 
 Next protected Terraform phase:
   1. Dispatch the failback-prepare plan:
-     gh workflow run recovery.yml --ref main -f operation=failback-prepare -f confirm_failback=REBUILD_PRIMARY -f failback_snapshot_id=$snapshot_id
+     gh workflow run recovery.yml --ref main -f operation=failback-prepare -f confirm=true -f failback_snapshot_id=$snapshot_id
   2. Review the saved plan in the plan job; the dependent apply job consumes that exact plan.
   3. Wait for apply and run: scripts/drills/failback.sh verify-replica
 
@@ -116,11 +102,11 @@ EOF
 
 # step 2: verify the rebuilt primary replica is current before cutover.
 verify-replica)
-  read -r status source <<<"$(aws rds describe-db-instances \
+  read -r status primary_replicates_from <<<"$(aws rds describe-db-instances \
     --region "$PRIMARY_REGION" \
     --db-instance-identifier "$PRIMARY_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-  if [ "$status" != "available" ] || [[ "$source" != *"$SECONDARY_DB_ID"* ]]; then
+  if [ "$status" != "available" ] || [[ "$primary_replicates_from" != *"$SECONDARY_DB_ID"* ]]; then
     echo "error: primary is not an available replica of $SECONDARY_DB_ID" >&2
     exit 1
   fi
@@ -144,10 +130,10 @@ EOF
 
 # step 3: freeze secondary writes before promoting primary.
 freeze-writes)
-  [ "${CONFIRM_FAILBACK_FREEZE:-}" = "YES" ] || {
+  if [ "${CONFIRM_FAILBACK_FREEZE:-}" != "YES" ]; then
     echo "error: set CONFIRM_FAILBACK_FREEZE=YES to stop secondary writes for planned failback" >&2
     exit 1
-  }
+  fi
   require_current_event "traffic_verified_secondary"
   require_current_event "failback_replica_verified"
 
@@ -203,20 +189,20 @@ freeze-writes)
 
 # step 4: promote primary, restore Multi-AZ durability, and start primary compute.
 promote-primary)
-  [ "${CONFIRM_PRIMARY_PROMOTION:-}" = "YES" ] || {
+  if [ "${CONFIRM_PRIMARY_PROMOTION:-}" != "YES" ]; then
     echo "error: set CONFIRM_PRIMARY_PROMOTION=YES to promote the synchronized primary replica" >&2
     exit 1
-  }
+  fi
   require_current_event "failback_replica_verified"
   require_current_event "failback_writes_frozen"
 
   # classifies fresh, in-progress, and resumed failback promotion states.
-  read -r status source <<<"$(aws rds describe-db-instances \
+  read -r status primary_replicates_from <<<"$(aws rds describe-db-instances \
     --region "$PRIMARY_REGION" \
     --db-instance-identifier "$PRIMARY_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
   promotion_state="fresh"
-  if replica_source_is_empty "$source"; then
+  if has_no_replication_source "$primary_replicates_from"; then
     require_current_event "primary_promotion_invoked"
     require_current_event "failback_cutover_lag_seconds"
     if [ -n "$(current_event_ts primary_service_stable)" ]; then
@@ -227,7 +213,7 @@ promote-primary)
   elif [ -n "$(current_event_ts primary_promotion_invoked)" ]; then
     # resumes polling because AWS retains the source ARN while promotion is modifying.
     promotion_state="in_progress"
-  elif [ "$status" != "available" ] || [[ "$source" != *"$SECONDARY_DB_ID"* ]]; then
+  elif [ "$status" != "available" ] || [[ "$primary_replicates_from" != *"$SECONDARY_DB_ID"* ]]; then
     echo "error: primary is not an available replica of $SECONDARY_DB_ID" >&2
     exit 1
   fi
@@ -265,16 +251,16 @@ promote-primary)
 
   # waits up to 20 minutes for primary to become an available standalone writer.
   for _ in {1..120}; do
-    read -r status source <<<"$(aws rds describe-db-instances \
+    read -r status primary_replicates_from <<<"$(aws rds describe-db-instances \
       --region "$PRIMARY_REGION" \
       --db-instance-identifier "$PRIMARY_DB_ID" \
       --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-    if [ "$status" = "available" ] && replica_source_is_empty "$source"; then
+    if [ "$status" = "available" ] && has_no_replication_source "$primary_replicates_from"; then
       break
     fi
     sleep 10
   done
-  if [ "$status" != "available" ] || ! replica_source_is_empty "$source"; then
+  if [ "$status" != "available" ] || ! has_no_replication_source "$primary_replicates_from"; then
     echo "error: primary promotion did not produce an available standalone database" >&2
     exit 1
   fi
@@ -313,7 +299,18 @@ promote-primary)
     exit 1
   fi
 
-  # starts primary compute only after database promotion and Multi-AZ conversion finish.
+  # a promoted replica keeps the password it inherited from secondary; reconcile it against
+  # the canonical SSM secret before starting compute, so tasks never launch with a stale one.
+  db_password="$(aws ssm get-parameter --region "$PRIMARY_REGION" \
+    --name "/$PROJECT_NAME/primary/database/password" --with-decryption \
+    --query 'Parameter.Value' --output text)"
+  trap 'unset db_password' EXIT
+  aws rds modify-db-instance --region "$PRIMARY_REGION" \
+    --db-instance-identifier "$PRIMARY_DB_ID" \
+    --master-user-password "$db_password" --apply-immediately >/dev/null
+  aws rds wait db-instance-available --region "$PRIMARY_REGION" --db-instance-identifier "$PRIMARY_DB_ID"
+
+  # starts primary compute only after database promotion, Multi-AZ conversion, and credential reconciliation finish.
   aws ecs update-service \
     --region "$PRIMARY_REGION" \
     --cluster "$PRIMARY_CLUSTER" \
@@ -331,27 +328,33 @@ promote-primary)
     echo "error: primary ECS is not stable at 2/2 tasks" >&2
     exit 1
   fi
+
+  # requires two-AZ task placement before failback can proceed to returning traffic.
+  if ! require_two_az_tasks "$PRIMARY_REGION" "$PRIMARY_CLUSTER" "$PRIMARY_SERVICE"; then
+    echo "error: Primary tasks are not running across two Availability Zones; do not return traffic" >&2
+    exit 1
+  fi
   log_event "primary_service_stable"
   echo "Primary is promoted, Multi-AZ, and stable at 2/2 tasks. Run: CONFIRM_FAILBACK_READY=YES scripts/drills/failback.sh ready"
   ;;
 
 # step 5: verify primary topology, capacity, and final secondary write before returning traffic.
 ready)
-  [ "${CONFIRM_FAILBACK_READY:-}" = "YES" ] || {
+  if [ "${CONFIRM_FAILBACK_READY:-}" != "YES" ]; then
     echo "error: set CONFIRM_FAILBACK_READY=YES after primary promotion and service startup" >&2
     exit 1
-  }
+  fi
   require_current_event "failback_replica_verified"
   require_current_event "failback_writes_frozen"
   require_current_event "failback_secondary_final_link_slug"
   known_link_slug="$(current_event_ts failback_secondary_final_link_slug)"
 
   # rechecks database topology because traffic switching makes primary authoritative again.
-  read -r db_status source multi_az <<<"$(aws rds describe-db-instances \
+  read -r db_status primary_replicates_from multi_az <<<"$(aws rds describe-db-instances \
     --region "$PRIMARY_REGION" \
     --db-instance-identifier "$PRIMARY_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier,MultiAZ]' --output text)"
-  if [ "$db_status" != "available" ] || ! replica_source_is_empty "$source" || [ "$multi_az" != "True" ]; then
+  if [ "$db_status" != "available" ] || ! has_no_replication_source "$primary_replicates_from" || [ "$multi_az" != "True" ]; then
     echo "error: primary must be an available standalone Multi-AZ database before traffic returns" >&2
     exit 1
   fi
@@ -363,6 +366,12 @@ ready)
     --query 'services[0].[desiredCount,runningCount]' --output text)"
   if [ "$desired" != "2" ] || [ "$running" != "2" ]; then
     echo "error: primary ECS is not stable at 2/2 tasks" >&2
+    exit 1
+  fi
+
+  # rechecks two-AZ task placement as the final gate before traffic actually returns.
+  if ! require_two_az_tasks "$PRIMARY_REGION" "$PRIMARY_CLUSTER" "$PRIMARY_SERVICE"; then
+    echo "error: Primary tasks are not running across two Availability Zones; do not return traffic" >&2
     exit 1
   fi
 
@@ -385,11 +394,11 @@ verify-reset)
   require_current_event "traffic_verified_primary"
 
   # proves secondary returned to replica-at-rest state after the protected reset workflow.
-  read -r secondary_status secondary_source <<<"$(aws rds describe-db-instances \
+  read -r secondary_status secondary_replicates_from <<<"$(aws rds describe-db-instances \
     --region "$SECONDARY_REGION" \
     --db-instance-identifier "$SECONDARY_DB_ID" \
     --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-  if [ "$secondary_status" != "available" ] || [[ "$secondary_source" != *"$PRIMARY_DB_ID"* ]]; then
+  if [ "$secondary_status" != "available" ] || [[ "$secondary_replicates_from" != *"$PRIMARY_DB_ID"* ]]; then
     echo "error: Secondary is not an available replica of restored primary" >&2
     exit 1
   fi
@@ -418,10 +427,10 @@ verify-reset)
 # cleanup: remove rollback snapshot only after topology reset is verified.
 delete-snapshot)
   snapshot_id="${2:-}"
-  [ "${CONFIRM_DELETE_SNAPSHOT:-}" = "YES" ] && [ -n "$snapshot_id" ] || {
+  if [ "${CONFIRM_DELETE_SNAPSHOT:-}" != "YES" ] || [ -z "$snapshot_id" ]; then
     echo "usage: CONFIRM_DELETE_SNAPSHOT=YES $0 delete-snapshot <snapshot-id>" >&2
     exit 1
-  }
+  fi
   require_current_event "topology_reset_verified"
   require_current_event "secondary_pre_failback_snapshot"
   recorded_snapshot_id="$(current_event_ts secondary_pre_failback_snapshot)"

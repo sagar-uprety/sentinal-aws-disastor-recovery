@@ -19,20 +19,20 @@ readonly TARGET="${1:-}"
 case "$TARGET" in
 initialize)
   # establishes the resting primary-on state before the first drill.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "INITIALIZE" ] || {
+  if [ "${CONFIRM_TRAFFIC_SWITCH:-}" != "INITIALIZE" ]; then
     echo "error: set CONFIRM_TRAFFIC_SWITCH=INITIALIZE before preparing ARC controls" >&2
     exit 1
-  }
+  fi
   initialize=true
   new_primary="On"
   new_secondary="Off"
   ;;
 secondary)
   # requires healthy, writable secondary before moving public traffic away from primary.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "SECONDARY" ] || {
+  if [ "${CONFIRM_TRAFFIC_SWITCH:-}" != "SECONDARY" ]; then
     echo "error: set CONFIRM_TRAFFIC_SWITCH=SECONDARY to route traffic to secondary" >&2
     exit 1
-  }
+  fi
   require_current_event "secondary_targets_healthy"
   require_current_event "secondary_write_verified"
   require_current_event "pre_outage_link_slug"
@@ -47,10 +47,10 @@ secondary)
   ;;
 primary)
   # requires completed failback verification before returning traffic to primary.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "PRIMARY" ] || {
+  if [ "${CONFIRM_TRAFFIC_SWITCH:-}" != "PRIMARY" ]; then
     echo "error: set CONFIRM_TRAFFIC_SWITCH=PRIMARY after failback verification" >&2
     exit 1
-  }
+  fi
   require_current_event "failback_ready"
   expected_primary="Off"
   expected_secondary="On"
@@ -125,8 +125,14 @@ arc_get_state() {
 }
 
 # rejects stale or partially completed switches before changing routing state.
-primary_state="$(arc_get_state "$primary_control_arn")"
-secondary_state="$(arc_get_state "$secondary_control_arn")"
+if ! primary_state="$(arc_get_state "$primary_control_arn")"; then
+  echo "error: could not read primary routing control state from any ARC endpoint" >&2
+  exit 1
+fi
+if ! secondary_state="$(arc_get_state "$secondary_control_arn")"; then
+  echo "error: could not read secondary routing control state from any ARC endpoint" >&2
+  exit 1
+fi
 if [ "$initialize" != true ] && { [ "$primary_state" != "$expected_primary" ] || [ "$secondary_state" != "$expected_secondary" ]; }; then
   echo "error: ARC state is primary=$primary_state secondary=$secondary_state; expected $expected_primary/$expected_secondary" >&2
   exit 1
@@ -155,8 +161,14 @@ fi
 log_event "traffic_switch_requested_${TARGET}"
 
 # confirms ARC reached requested state instead of trusting request acceptance.
-primary_state="$(arc_get_state "$primary_control_arn")"
-secondary_state="$(arc_get_state "$secondary_control_arn")"
+if ! primary_state="$(arc_get_state "$primary_control_arn")"; then
+  echo "error: could not read primary routing control state from any ARC endpoint" >&2
+  exit 1
+fi
+if ! secondary_state="$(arc_get_state "$secondary_control_arn")"; then
+  echo "error: could not read secondary routing control state from any ARC endpoint" >&2
+  exit 1
+fi
 if [ "$primary_state" != "$new_primary" ] || [ "$secondary_state" != "$new_secondary" ]; then
   echo "error: ARC did not reach requested state primary=$new_primary secondary=$new_secondary" >&2
   exit 1
@@ -213,6 +225,6 @@ echo "Traffic verified on $TARGET through authoritative Route 53 DNS, workload h
 if [ "$TARGET" = "primary" ]; then
   cat <<'EOF'
 Dispatch the protected topology-reset workflow and follow both plan/apply job logs:
-  gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm_failback=RESET_SECONDARY
+  gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm=true
 EOF
 fi

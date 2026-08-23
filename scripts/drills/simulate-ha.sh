@@ -81,7 +81,11 @@ require_healthy_baseline() {
   az_count="$(task_az_count "${tasks[@]}")"
   status="$(public_health_status)"
   topology="$(curl -fsS "https://${SENTRY_HOST}/topology" || true)"
-  topology_ok="$(jq -e --arg region "$REGION" --arg database "$DATABASE" 'any(.regions[]; .region == $region and .database.identifier == $database and .database.available == true)' >/dev/null <<<"$topology" && echo true || echo false)"
+  if jq -e --arg region "$REGION" --arg database "$DATABASE" 'any(.regions[]; .region == $region and .database.identifier == $database and .database.available == true)' >/dev/null <<<"$topology"; then
+    topology_ok=true
+  else
+    topology_ok=false
+  fi
   if [ "$desired" != "2" ] ||
      [ "$running" != "2" ] ||
      [ "${#tasks[@]}" -ne 2 ] ||
@@ -196,10 +200,6 @@ db)
     echo "error: set CONFIRM_HA_DB_FAILOVER=YES to force production RDS failover" >&2
     exit 1
   fi
-  known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
-  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${SENTRY_HOST}" >/dev/null
-  record_event_at "ha_db_known_link_before" "$known_slug"
-
   # requires a real standby before requesting forced database failover.
   read -r multi_az writer_az standby_az <<<"$(aws rds describe-db-instances \
     --region "$REGION" \
@@ -209,6 +209,10 @@ db)
     echo "error: database is not a verified Multi-AZ instance" >&2
     exit 1
   fi
+
+  known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
+  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${SENTRY_HOST}" >/dev/null
+  record_event_at "ha_db_known_link_before" "$known_slug"
   record_event_at "ha_db_writer_before" "$writer_az"
   record_event_at "ha_db_standby_before" "$standby_az"
   log_event "ha_db_failover_started"

@@ -50,12 +50,12 @@ if [ "$secondary_desired" != "0" ]; then
 fi
 
 # requires an available secondary replica before taking primary compute offline.
-read -r secondary_status secondary_source <<<"$(aws rds describe-db-instances \
+read -r secondary_status secondary_replicates_from <<<"$(aws rds describe-db-instances \
   --region "$SECONDARY_REGION" \
   --db-instance-identifier "$SECONDARY_DB_ID" \
   --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-if [ "$secondary_status" != "available" ] || replica_source_is_empty "$secondary_source" ||
-  [[ "$secondary_source" != "$PRIMARY_RESOURCE_NAME" && "$secondary_source" != *":db:${PRIMARY_RESOURCE_NAME}" ]]; then
+if [ "$secondary_status" != "available" ] || has_no_replication_source "$secondary_replicates_from" ||
+  [[ "$secondary_replicates_from" != "$PRIMARY_RESOURCE_NAME" && "$secondary_replicates_from" != *":db:${PRIMARY_RESOURCE_NAME}" ]]; then
   echo "error: Secondary database is not an available replica of $PRIMARY_RESOURCE_NAME" >&2
   exit 1
 fi

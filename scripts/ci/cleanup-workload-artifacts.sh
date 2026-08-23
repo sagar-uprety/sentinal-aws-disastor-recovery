@@ -84,6 +84,7 @@ for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
   [[ -z "$families" || "$families" == "None" ]] && continue
   read -r -a family_list <<<"$families"
   for family in "${family_list[@]}"; do
+    # unlike list-task-definition-families, list-task-definitions has no --status ALL, so both calls are required.
     revision_arns="$(aws ecs list-task-definitions \
       --region "$region" \
       --family-prefix "$family" \
@@ -95,6 +96,7 @@ for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
       --status INACTIVE \
       --query "taskDefinitionArns" \
       --output text)"
+    # --output text prints "None" for an empty list; strip it before splitting into an array.
     revision_arns="${revision_arns//None/}"
     [[ -z "${revision_arns// /}" ]] && continue
     read -r -a revisions <<<"$revision_arns"
@@ -104,6 +106,7 @@ for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
         --task-definition "$revision_arn" >/dev/null
       sleep 0.2
     done
+    # delete-task-definitions accepts at most 10 ARNs per call (AWS limit).
     for ((i = 0; i < ${#revisions[@]}; i += 10)); do
       aws ecs delete-task-definitions \
         --region "$region" \
@@ -191,7 +194,7 @@ if [[ "$remaining_replicated_repository" != "0" ]]; then
   exit 1
 fi
 
-# performs a final snapshot check after asynchronous RDS deletion waiters complete.
+# re-verifies snapshot deletion, already confirmed synchronously by the wait above.
 remaining_snapshots="$(aws rds describe-db-snapshots \
   --region "$SECONDARY_REGION" \
   --snapshot-type manual \
