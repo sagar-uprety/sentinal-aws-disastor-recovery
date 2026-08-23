@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"aws-pilotlight-multi-region-dr/apps/url-shortener/internal/links"
@@ -69,7 +70,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		DestinationURL string `json:"destination_url"`
 		Slug           string `json:"slug"`
 	}
-	// caps the body at 4KB and rejects unknown fields, so a malformed or oversized payload fails before touching the database.
+	// caps the body and rejects unknown fields, so bad input fails before the database.
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
@@ -102,9 +103,14 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, link)
 }
 
-// returns the 50 most recently created links.
+// returns the most recently created links, newest first, 50 by default.
+// drills override ?limit so an older recorded slug cannot fall out of the page and read as data loss.
 func (s *server) list(w http.ResponseWriter, r *http.Request) {
-	result, err := s.store.List(r.Context(), 50)
+	limit := 50
+	if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 1000 {
+		limit = value
+	}
+	result, err := s.store.List(r.Context(), limit)
 	if err != nil {
 		slog.Error("list links failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -140,7 +146,8 @@ func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 // checks the bearer token in constant time to avoid leaking its value through response-time differences.
 func (s *server) authorized(header string) bool {
 	provided, ok := strings.CutPrefix(header, "Bearer ")
-	// length is compared first because ConstantTimeCompare returns 0 for unequal lengths without comparing content; only the length leaks, never the token.
+	// ConstantTimeCompare returns 0 for unequal lengths without comparing, so the length
+	// is checked first: only the token's length can leak from timing, never its content.
 	if !ok || len(provided) != len(s.token) {
 		return false
 	}

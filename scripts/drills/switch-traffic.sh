@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/../config.sh"
 # shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
+# the ARC configuration API is single-region and only exists in us-west-2.
 readonly ARC_CONTROL_REGION="${ARC_CONTROL_REGION:-us-west-2}"
 readonly ARC_CLUSTER_NAME="${ARC_CLUSTER_NAME:-${PROJECT_NAME}-arc}"
 readonly ARC_CONTROL_PANEL_NAME="${ARC_CONTROL_PANEL_NAME:-${PROJECT_NAME}-arc}"
@@ -16,23 +17,24 @@ readonly STATUS_HOST="$WORKLOAD_HOST"
 readonly HOSTED_ZONE_NAME="${BASE_DOMAIN}."
 readonly TARGET="${1:-}"
 
+# ==== PRECHECKS ====
 case "$TARGET" in
 initialize)
   # establishes the resting primary-on state before the first drill.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "INITIALIZE" ] || {
+  if [ "${CONFIRM_TRAFFIC_SWITCH:-}" != "INITIALIZE" ]; then
     echo "error: set CONFIRM_TRAFFIC_SWITCH=INITIALIZE before preparing ARC controls" >&2
     exit 1
-  }
+  fi
   initialize=true
   new_primary="On"
   new_secondary="Off"
   ;;
 secondary)
   # requires healthy, writable secondary before moving public traffic away from primary.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "SECONDARY" ] || {
+  if [ "${CONFIRM_TRAFFIC_SWITCH:-}" != "SECONDARY" ]; then
     echo "error: set CONFIRM_TRAFFIC_SWITCH=SECONDARY to route traffic to secondary" >&2
     exit 1
-  }
+  fi
   require_current_event "secondary_targets_healthy"
   require_current_event "secondary_write_verified"
   require_current_event "pre_outage_link_slug"
@@ -42,15 +44,15 @@ secondary)
   new_secondary="On"
   target_region="$SECONDARY_REGION"
   target_alb="${SECONDARY_RESOURCE_NAME}-alb"
-  verification_slug="$(current_event_ts pre_outage_link_slug)"
+  verification_slug="$(current_drill_event_ts pre_outage_link_slug)"
   initialize=false
   ;;
 primary)
   # requires completed failback verification before returning traffic to primary.
-  [ "${CONFIRM_TRAFFIC_SWITCH:-}" = "PRIMARY" ] || {
+  if [ "${CONFIRM_TRAFFIC_SWITCH:-}" != "PRIMARY" ]; then
     echo "error: set CONFIRM_TRAFFIC_SWITCH=PRIMARY after failback verification" >&2
     exit 1
-  }
+  fi
   require_current_event "failback_ready"
   expected_primary="Off"
   expected_secondary="On"
@@ -58,7 +60,7 @@ primary)
   new_secondary="Off"
   target_region="$PRIMARY_REGION"
   target_alb="${PRIMARY_RESOURCE_NAME}-alb"
-  verification_slug="$(current_event_ts failback_secondary_final_link_slug)"
+  verification_slug="$(current_drill_event_ts failback_secondary_final_link_slug)"
   initialize=false
   ;;
 *)
@@ -67,7 +69,7 @@ primary)
   ;;
 esac
 
-# resolves ARC names into data-plane routing-control ARNs.
+# name-to-ARN lookups only, so the less-available configuration API is fine here.
 cluster_json="$(aws route53-recovery-control-config list-clusters \
   --region "$ARC_CONTROL_REGION" \
   --query "Clusters[?Name=='${ARC_CLUSTER_NAME}'] | [0]" --output json)"
@@ -96,7 +98,7 @@ if [ -z "$primary_control_arn" ] || [ -z "$secondary_control_arn" ]; then
   exit 1
 fi
 
-# collects every ARC endpoint so control operations survive one unavailable region.
+# collects every ARC data-plane endpoint so state reads/writes survive one unavailable region.
 arc_endpoints=()
 while IFS= read -r entry; do
   arc_endpoints[${#arc_endpoints[@]}]="$entry"
@@ -106,7 +108,7 @@ if [ "${#arc_endpoints[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# reads routing state through the first available regional endpoint.
+# tries each endpoint until one answers; only total failure matters during an outage.
 arc_get_state() {
   local control_arn="$1" endpoint region state entry
   for entry in "${arc_endpoints[@]}"; do
@@ -124,15 +126,29 @@ arc_get_state() {
   return 1
 }
 
-# rejects stale or partially completed switches before changing routing state.
-primary_state="$(arc_get_state "$primary_control_arn")"
-secondary_state="$(arc_get_state "$secondary_control_arn")"
+# sets primary_state and secondary_state, or exits; both the pre-switch guard and the
+# post-switch confirmation need the same pair read the same way.
+read_arc_states() {
+  if ! primary_state="$(arc_get_state "$primary_control_arn")"; then
+    echo "error: could not read primary routing control state from any ARC endpoint" >&2
+    exit 1
+  fi
+  if ! secondary_state="$(arc_get_state "$secondary_control_arn")"; then
+    echo "error: could not read secondary routing control state from any ARC endpoint" >&2
+    exit 1
+  fi
+}
+
+# an unexpected starting state means a half-applied switch or an out-of-band change.
+read_arc_states
+# expected_* are unset on the initialize path, where set -u would error on a read.
 if [ "$initialize" != true ] && { [ "$primary_state" != "$expected_primary" ] || [ "$secondary_state" != "$expected_secondary" ]; }; then
   echo "error: ARC state is primary=$primary_state secondary=$secondary_state; expected $expected_primary/$expected_secondary" >&2
   exit 1
 fi
 
-# updates both controls atomically through the first available endpoint.
+# ==== MAIN TASK: atomically flip both ARC routing controls ====
+# one call carries both states, so the pair cannot land with both On or both Off.
 switch_succeeded=false
 for entry in "${arc_endpoints[@]}"; do
   IFS=$'\t' read -r endpoint region <<<"$entry"
@@ -154,9 +170,9 @@ if [ "$switch_succeeded" != true ]; then
 fi
 log_event "traffic_switch_requested_${TARGET}"
 
-# confirms ARC reached requested state instead of trusting request acceptance.
-primary_state="$(arc_get_state "$primary_control_arn")"
-secondary_state="$(arc_get_state "$secondary_control_arn")"
+# ==== POSTCHECKS ====
+# an accepted request is not a converged state, so the flip is read back.
+read_arc_states
 if [ "$primary_state" != "$new_primary" ] || [ "$secondary_state" != "$new_secondary" ]; then
   echo "error: ARC did not reach requested state primary=$new_primary secondary=$new_secondary" >&2
   exit 1
@@ -169,19 +185,16 @@ if [ "$initialize" = true ]; then
   exit 0
 fi
 
-# bypasses resolver caches by querying an authoritative Route 53 nameserver.
+# queries the zone's own nameserver, since a cached resolver still answers pre-switch.
 zone_id="$(aws route53 list-hosted-zones-by-name \
   --dns-name "$HOSTED_ZONE_NAME" \
   --query "HostedZones[?Name=='${HOSTED_ZONE_NAME}'].Id | [0]" --output text)"
 nameserver="$(aws route53 get-hosted-zone \
   --id "$zone_id" \
   --query 'DelegationSet.NameServers[0]' --output text)"
-alb_dns="$(aws elbv2 describe-load-balancers \
-  --region "$target_region" \
-  --names "$target_alb" \
-  --query 'LoadBalancers[0].DNSName' --output text)"
+alb_dns="$(alb_dns_name "$target_region" "$target_alb")"
 
-# verifies authoritative DNS, target health, and expected data before declaring cutover complete.
+# cutover counts only when DNS, health, and the expected row all agree; 36 x 5s = 3 min.
 verified=false
 for _ in {1..36}; do
   target_ips="$(dig +short A "$alb_dns")"
@@ -210,9 +223,3 @@ log_event "traffic_verified"
 curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null
 log_event "sentry_available_after_traffic_switch"
 echo "Traffic verified on $TARGET through authoritative Route 53 DNS, workload health, and link $verification_slug. Sentry remained available."
-if [ "$TARGET" = "primary" ]; then
-  cat <<'EOF'
-Dispatch the protected topology-reset workflow and follow both plan/apply job logs:
-  gh workflow run recovery.yml --ref main -f operation=failback-reset -f confirm_failback=RESET_SECONDARY
-EOF
-fi

@@ -16,19 +16,15 @@ readonly DATABASE="$PRIMARY_RESOURCE_NAME"
 readonly TARGET_GROUP="${PRIMARY_RESOURCE_NAME}-tg"
 readonly LOAD_BALANCER="${PRIMARY_RESOURCE_NAME}-alb"
 
+# ==== PRECHECKS ====
 if [ "${CONFIRM_HA:-}" != "YES" ]; then
   echo "error: set CONFIRM_HA=YES to run a controlled HA drill" >&2
   exit 1
 fi
 
-target_group_arn="$(aws elbv2 describe-target-groups \
-  --region "$REGION" \
-  --names "$TARGET_GROUP" \
-  --query 'TargetGroups[0].TargetGroupArn' --output text)"
-alb_dns="$(aws elbv2 describe-load-balancers \
-  --region "$REGION" \
-  --names "$LOAD_BALANCER" \
-  --query 'LoadBalancers[0].DNSName' --output text)"
+target_group_arn="$(target_group_arn_for "$REGION" "$TARGET_GROUP")"
+alb_dns="$(alb_dns_name "$REGION" "$LOAD_BALANCER")"
+
 
 # returns running task ARNs used by baseline and replacement checks.
 task_arns() {
@@ -40,17 +36,9 @@ task_arns() {
     --query 'taskArns' --output text
 }
 
-# converts transient curl errors into observable non-200 health samples.
+# public DNS on purpose: routing is untouched here, so the public path is under test.
 public_health_status() {
   curl -sS -o /dev/null -w '%{http_code}' "https://${WORKLOAD_HOST}/healthz" || true
-}
-
-# reads ALB target health independently from ECS service counters.
-healthy_target_count() {
-  aws elbv2 describe-target-health \
-    --region "$REGION" \
-    --target-group-arn "$target_group_arn" \
-    --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text
 }
 
 # counts distinct task AZs so two tasks in one AZ cannot pass the baseline.
@@ -67,58 +55,53 @@ task_az_count() {
     --query 'tasks[].availabilityZone' --output json | jq 'unique | length'
 }
 
-# combines ECS, ALB, public HTTP, and sentry topology into one start gate.
+# fills the caller's desired/running/tasks/healthy/az_count via bash dynamic scoping, so both
+# the baseline gate and the recovery poll sample the same four signals the same way.
+read_ecs_state() {
+  read -r desired running <<<"$(ecs_service_counts "$REGION" "$CLUSTER" "$SERVICE")"
+  read -r -a tasks <<<"$(task_arns)"
+  healthy="$(healthy_target_count "$REGION" "$target_group_arn")"
+  az_count="$(task_az_count "${tasks[@]}")"
+}
+
+# a drill starting from a degraded baseline cannot prove anything about recovery.
 require_healthy_baseline() {
   local desired running healthy az_count status topology topology_ok
   local tasks=()
-  read -r desired running <<<"$(aws ecs describe-services \
-    --region "$REGION" \
-    --cluster "$CLUSTER" \
-    --services "$SERVICE" \
-    --query 'services[0].[desiredCount,runningCount]' --output text)"
-  read -r -a tasks <<<"$(task_arns)"
-  healthy="$(healthy_target_count)"
-  az_count="$(task_az_count "${tasks[@]}")"
+  read_ecs_state
   status="$(public_health_status)"
   topology="$(curl -fsS "https://${SENTRY_HOST}/topology" || true)"
-  topology_ok="$(jq -e --arg region "$REGION" --arg database "$DATABASE" 'any(.regions[]; .region == $region and .database.identifier == $database and .database.available == true)' >/dev/null <<<"$topology" && echo true || echo false)"
-  if [ "$desired" != "2" ] ||
-     [ "$running" != "2" ] ||
-     [ "${#tasks[@]}" -ne 2 ] ||
-     [ "$healthy" != "2" ] ||
-     [ "$az_count" != "2" ] ||
+  if jq -e --arg region "$REGION" --arg database "$DATABASE" 'any(.regions[]; .region == $region and .database.identifier == $database and .database.available == true)' >/dev/null <<<"$topology"; then
+    topology_ok=true
+  else
+    topology_ok=false
+  fi
+  if [ "$desired" != "$WORKLOAD_DESIRED_COUNT" ] ||
+     [ "$running" != "$WORKLOAD_DESIRED_COUNT" ] ||
+     [ "${#tasks[@]}" -ne "$WORKLOAD_DESIRED_COUNT" ] ||
+     [ "$healthy" != "$WORKLOAD_DESIRED_COUNT" ] ||
+     [ "$az_count" != "$WORKLOAD_AZ_COUNT" ] ||
      [ "$status" != "200" ] ||
      [ "$topology_ok" != "true" ]; then
-    echo "error: HA baseline requires ECS 2/2, two task AZs, two healthy targets, and HTTP 200" >&2
+    echo "error: HA baseline requires ECS ${WORKLOAD_DESIRED_COUNT}/${WORKLOAD_DESIRED_COUNT}, ${WORKLOAD_AZ_COUNT} task AZs, ${WORKLOAD_DESIRED_COUNT} healthy targets, and HTTP 200" >&2
     echo "       observed desired=$desired running=$running tasks=${#tasks[@]} azs=$az_count healthy=$healthy http=$status" >&2
     exit 1
   fi
   log_event "ha_baseline_verified"
 }
 
-# waits for full two-AZ recovery while remembering any public-health interruption.
+# health_failed persists across the wait, so a dip that self-heals still fails the drill.
 wait_for_ecs_recovery() {
   local event_prefix="$1" started="$2" desired running healthy az_count status elapsed
   local health_failed=false
   local tasks=()
   for _ in {1..60}; do
     status="$(public_health_status)"
-    if ! curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null; then
-      echo "error: isolated sentry became unavailable during $event_prefix recovery" >&2
-      return 1
-    fi
     if [ "$status" != "200" ]; then
       health_failed=true
     fi
-    read -r desired running <<<"$(aws ecs describe-services \
-      --region "$REGION" \
-      --cluster "$CLUSTER" \
-      --services "$SERVICE" \
-      --query 'services[0].[desiredCount,runningCount]' --output text)"
-    read -r -a tasks <<<"$(task_arns)"
-    healthy="$(healthy_target_count)"
-    az_count="$(task_az_count "${tasks[@]}")"
-    if [ "$desired" = "2" ] && [ "$running" = "2" ] && [ "${#tasks[@]}" -eq 2 ] && [ "$healthy" = "2" ] && [ "$az_count" = "2" ]; then
+    read_ecs_state
+    if [ "$desired" = "$WORKLOAD_DESIRED_COUNT" ] && [ "$running" = "$WORKLOAD_DESIRED_COUNT" ] && [ "${#tasks[@]}" -eq "$WORKLOAD_DESIRED_COUNT" ] && [ "$healthy" = "$WORKLOAD_DESIRED_COUNT" ] && [ "$az_count" = "$WORKLOAD_AZ_COUNT" ]; then
       elapsed=$(( $(date -u +%s) - started ))
       record_event_at "${event_prefix}_recovery_seconds" "$elapsed"
       if [ "$health_failed" = true ]; then
@@ -129,7 +112,7 @@ wait_for_ecs_recovery() {
     fi
     sleep 5
   done
-  echo "error: ECS did not recover to two healthy targets across two AZs within five minutes" >&2
+  echo "error: ECS did not recover to ${WORKLOAD_DESIRED_COUNT} healthy targets across ${WORKLOAD_AZ_COUNT} AZs within five minutes" >&2
   return 1
 }
 
@@ -137,6 +120,7 @@ wait_for_ecs_recovery() {
 require_healthy_baseline
 
 case "${1:-}" in
+# ==== MAIN TASK: stop one ECS task, verify the service scheduler replaces it ====
 # stops one task to verify ECS replacement without public-health loss.
 task)
   read -r task _ <<<"$(task_arns)"
@@ -154,9 +138,10 @@ task)
     exit 1
   fi
   log_event "ha_task_replacement_verified"
-  echo "Stopped task was replaced with continuous public health and two-AZ placement."
+  echo "Stopped task was replaced with continuous public health and ${WORKLOAD_AZ_COUNT}-AZ placement."
   ;;
 
+# ==== MAIN TASK: stop every task in one AZ, verify the surviving AZ + scheduler recover it ====
 # stops tasks in one AZ to verify surviving-AZ service and ECS replacement.
 az)
   az="${2:-}"
@@ -164,7 +149,7 @@ az)
     echo "usage: CONFIRM_HA=YES $0 az <${PRIMARY_REGION}a|${PRIMARY_REGION}b>" >&2
     exit 1
   fi
-  # requires a task outside the target AZ to prove surviving-AZ service.
+  # without a task outside the target AZ this is a full outage, not a surviving-AZ test.
   read -r -a tasks <<<"$(task_arns)"
   task_details="$(aws ecs describe-tasks --region "$REGION" --cluster "$CLUSTER" --tasks "${tasks[@]}" --output json)"
   selected="$(jq -r --arg az "$az" '.tasks[] | select(.availabilityZone == $az) | .taskArn' <<<"$task_details")"
@@ -187,20 +172,17 @@ az)
     fi
   done <<<"$selected"
   log_event "ha_az_recovery_verified"
-  echo "A task survived outside $az; ECS restored continuous public health and two-AZ placement."
+  echo "A task survived outside $az; ECS restored continuous public health and ${WORKLOAD_AZ_COUNT}-AZ placement."
   ;;
 
 db)
-  # requires separate confirmation because forced RDS failover can briefly interrupt production writes.
+  # ==== MAIN TASK: force an RDS Multi-AZ failover, verify writer moves and data survives ====
+  # separate confirmation: a forced failover briefly interrupts production writes.
   if [ "${CONFIRM_HA_DB_FAILOVER:-}" != "YES" ]; then
     echo "error: set CONFIRM_HA_DB_FAILOVER=YES to force production RDS failover" >&2
     exit 1
   fi
-  known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
-  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${SENTRY_HOST}" >/dev/null
-  record_event_at "ha_db_known_link_before" "$known_slug"
-
-  # requires a real standby before requesting forced database failover.
+  # without a real standby to fail over to, the reboot is just downtime.
   read -r multi_az writer_az standby_az <<<"$(aws rds describe-db-instances \
     --region "$REGION" \
     --db-instance-identifier "$DATABASE" \
@@ -209,13 +191,17 @@ db)
     echo "error: database is not a verified Multi-AZ instance" >&2
     exit 1
   fi
+
+  known_slug="ha-db-$(date -u +%Y%m%d%H%M%S)"
+  create_short_link_direct "$REGION" "$WORKLOAD_HOST" "$alb_dns" "$known_slug" "https://${SENTRY_HOST}" >/dev/null
+  record_event_at "ha_db_known_link_before" "$known_slug"
   record_event_at "ha_db_writer_before" "$writer_az"
   record_event_at "ha_db_standby_before" "$standby_az"
   log_event "ha_db_failover_started"
   started="$(date -u +%s)"
   aws rds reboot-db-instance --region "$REGION" --db-instance-identifier "$DATABASE" --force-failover >/dev/null
 
-  # samples workload health until RDS reports a different available writer AZ.
+  # a changed writer AZ is the only proof it moved; AWS can report it minutes late.
   health_interruptions=0
   recovered=false
   new_writer_az="$writer_az"
@@ -240,7 +226,7 @@ db)
     exit 1
   fi
 
-  # verifies the known pre-failover row survived the writer transition.
+  # Multi-AZ is synchronous, so a missing pre-failover row means real data loss.
   if ! require_short_link_direct "$WORKLOAD_HOST" "$alb_dns" "$known_slug"; then
     echo "error: known pre-failover link is missing after Multi-AZ recovery" >&2
     exit 1

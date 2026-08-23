@@ -137,4 +137,13 @@ repos:
         entry: '(—|–)'
         language: pygrep
         types: [text]
-        exclude: '^(disaster-recovery-workloads-on-aws\.md|\.pre-commit-config\.yaml)$'
+        exclude: '^(disaster-recovery-workloads-on-aws\.md|\.pre-commit-config\.yaml|tools/pre_commit/check_no_em_dash\.py)$'
+
+  - repo: local
+    hooks:
+      - id: no-em-dash
+        name: No em dashes in project prose
+        entry: python3 tools/pre_commit/check_no_em_dash.py
+        language: system
+        pass_filenames: false
+        always_run: true

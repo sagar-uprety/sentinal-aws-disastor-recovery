@@ -7,7 +7,7 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
 }
 
-# Pull requests need read-only AWS and state access for speculative plans without entering the production environment.
+# Read-only AWS and state access, so PR speculative plans never touch production.
 resource "aws_iam_role" "terraform_github_plan" {
   name = "${var.project_name}-terraform-github-plan"
 
@@ -32,9 +32,8 @@ resource "aws_iam_role_policy_attachment" "terraform_plan_read_only" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
-# CI needs AWS credentials to run terraform apply, but can't create those credentials via
-# the same CI it doesn't have credentials for yet. Bootstrap breaks that loop: applied once,
-# by hand, and left running permanently so every later deploy can go through CI normally.
+# CI cannot create the credentials it needs to run. Bootstrap breaks that loop: applied once
+# by hand, then left in place so every later deploy runs through CI normally.
 resource "aws_iam_role" "terraform_github_apply" {
   name = "${var.project_name}-terraform-github-apply"
 
@@ -57,9 +56,8 @@ resource "aws_iam_role" "terraform_github_apply" {
   })
 }
 
-# used PowerUserAccess here to avoid having to maintain a long list of permissions that are actually needed
-# for Terraform to manage the AWS resources in this project. Scope to more specific permissions than the
-# AWS-managed PowerUserAccess policy in a real production environment.
+# PowerUserAccess avoids maintaining an exact permission list for everything Terraform manages
+# here; a real production environment should scope this down.
 
 resource "aws_iam_role_policy_attachment" "terraform_power_user" {
   role       = aws_iam_role.terraform_github_apply.name

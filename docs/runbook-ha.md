@@ -1,40 +1,65 @@
-# In-Region HA Drill Runbook
+# In-Region High Availability Drills
 
-This runbook tests primary-region high availability. It is separate from pilot-light disaster recovery and must not invoke replica promotion or ARC routing controls.
+These drills test resilience inside the primary Region: losing a task, losing a Region's worth of capacity in one Availability Zone, and failing the database over between zones. They stay entirely within `eu-central-1` and leave replica promotion and ARC routing controls untouched.
+
+Regional recovery is a separate procedure, covered in [`runbook-failover.md`](runbook-failover.md) and [`runbook-failback.md`](runbook-failback.md).
 
 ## Preconditions
 
-- Isolated sentry is healthy at `https://sentry.pilotlight.sagaruprety.com.np` and deployed from separate monitoring state.
-- Workload is healthy at `https://shortener.pilotlight.sagaruprety.com.np`, with primary `multi_az=true` and two healthy ECS tasks.
-- Open sentry and record workload topology before each drill. ECS card must show `2 / 2 running`, two Availability Zones, and `HA ready`.
-- Use `CONFIRM_HA=YES` only during an approved drill.
+Every drill refuses to start unless all of the following hold. `simulate-ha.sh` checks them itself and exits with the observed values if any fail.
 
-## Task Replacement
+- The workload is serving at `https://shortener.pilotlight.sagaruprety.com.np`.
+- The primary ECS service is at two running tasks spread across two Availability Zones.
+- Both ALB targets are healthy.
+- The primary database is `multi_az = true`.
+- Sentry is reachable and reports the primary database as available.
+
+Set `CONFIRM_HA=YES` only for an approved drill.
+
+## Task replacement
+
+Stops one running task and confirms ECS replaces it without a user-visible outage.
 
 ```bash
 CONFIRM_HA=YES scripts/drills/simulate-ha.sh task
 ```
 
-Expected: workload ALB continues serving through another task while sentry remains healthy. Retain sentry topology before and after script. Verify stopped workload task ID disappears, replacement task ID appears, compute returns to `2 / 2 running` across two AZs, and `HA ready` returns. Script continuously probes workload `/healthz`, requires ECS to recover to two healthy targets across two AZs, verifies stopped task ARN is absent, and records recovery evidence.
+The script records the stopped task ARN, then polls until the service returns to two running tasks across two Availability Zones with two healthy targets. It samples the public health endpoint throughout, and fails the drill if any sample returns a non-200, including a dip that recovers before the service does. It also confirms the stopped task ARN is absent from the running set, so a recovered count alone does not pass.
 
-## AZ Application Capacity
+Expected result: the service returns to two healthy tasks with a new task ARN in place of the stopped one, and public health stays at 200 for the whole window.
+
+## Availability Zone capacity loss
+
+Stops every task in one Availability Zone and confirms the surviving zone continues serving while ECS restores capacity.
 
 ```bash
 CONFIRM_HA=YES scripts/drills/simulate-ha.sh az eu-central-1a
 ```
 
-Expected: only workload tasks currently placed in that AZ stop. Keep sentry open during reduced-capacity interval. After recovery, verify new workload task IDs, `2 / 2 running`, two-AZ spread, and `HA ready`. This is controlled application-capacity loss, not a complete AWS AZ outage. Script refuses injection unless a task exists in another AZ, continuously probes workload `/healthz`, requires sentry health, and requires final two-target, two-AZ placement before recording recovery evidence.
+The script refuses to run unless at least one task exists outside the target zone, since stopping every task would be a full outage, not a test of zone survival. Recovery checks match the task drill: two running tasks, two zones, two healthy targets, continuous public health, and confirmation that the stopped ARNs did not return.
 
-## RDS Multi-AZ Failover
+This exercises the loss of application capacity in one zone. It does not simulate a complete AWS Availability Zone failure.
+
+Expected result: the surviving zone serves traffic throughout, and ECS restores two-zone placement with new task ARNs.
+
+## RDS Multi-AZ failover
+
+Forces a real failover of the primary database to its standby.
 
 ```bash
 CONFIRM_HA=YES CONFIRM_HA_DB_FAILOVER=YES scripts/drills/simulate-ha.sh db
 ```
 
-This forces a real Multi-AZ failover on the production database, materially higher blast radius than the task/AZ drills above, so it requires its own confirmation on top of `CONFIRM_HA`.
+This has a materially larger blast radius than the two drills above, since it interrupts production writes, so it requires a second confirmation variable.
 
-Expected: workload `/healthz` can become unavailable briefly during failover while sentry `/healthz` remains available. Retain sentry topology before and after script, showing workload database writer and managed-standby AZs exchanged, status `available`, and workload still in eu-central-1. Script creates a known short link, samples workload health every five seconds, requires RDS and workload health to recover, requires writer AZ to change, and verifies link still exists.
+Before failing over, the script confirms the instance is genuinely Multi-AZ with a real standby, and creates a short link with a known slug. It then calls `reboot-db-instance --force-failover` and polls for up to 10 minutes until the instance is available and reporting a different writer Availability Zone. AWS can report the new zone several minutes after the switch completes, so the window allows for that lag.
 
-## Do Not Confuse With secondary
+Public health is sampled every five seconds and the number of failed samples is recorded. A brief interruption is expected here and does not fail the drill.
 
-These drills retain primary Region control plane and data. They do not prove regional recovery. Regional pilot-light rehearsal uses `simulate-disaster.sh`, `failover.sh`, and the separately confirmed `switch-traffic.sh secondary` gate.
+Finally the script confirms the pre-failover link is still readable. Multi-AZ replication is synchronous, so a missing row would indicate real data loss, not expected downtime.
+
+Expected result: the writer Availability Zone changes, the instance returns to `available`, the application reconnects through the unchanged endpoint, and the known link survives.
+
+## Evidence
+
+Each drill appends timestamped events to `drill-events.log`, including the measured recovery duration and, for the database drill, the writer zones before and after plus the count of failed health samples.

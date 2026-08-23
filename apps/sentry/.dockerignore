@@ -1,8 +1,6 @@
 *
 !go.mod
 !go.sum
-!package.json
-!package-lock.json
 !cmd/
 !internal/
 !static/

@@ -17,15 +17,16 @@ readonly SECONDARY_DB_ID="$SECONDARY_RESOURCE_NAME"
 readonly TARGET_GROUP="${PRIMARY_RESOURCE_NAME}-tg"
 readonly LOAD_BALANCER="${PRIMARY_RESOURCE_NAME}-alb"
 
+# ==== PRECHECKS ====
 if [ "${CONFIRM_DISASTER:-}" != "YES" ]; then
   echo "error: set CONFIRM_DISASTER=YES to start the controlled outage" >&2
   exit 1
 fi
 
-# establishes sentry availability before injecting the workload outage.
+# must be proven up first, or surviving the outage afterwards proves nothing.
 curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null
 
-# refuses to inject failure into an already unhealthy primary service.
+# a service already at zero would let a pre-existing incident be recorded as drill evidence.
 primary_service="$(aws ecs describe-services \
   --region "$PRIMARY_REGION" \
   --cluster "$CLUSTER" \
@@ -49,27 +50,19 @@ if [ "$secondary_desired" != "0" ]; then
   exit 1
 fi
 
-# requires an available secondary replica before taking primary compute offline.
-read -r secondary_status secondary_source <<<"$(aws rds describe-db-instances \
-  --region "$SECONDARY_REGION" \
-  --db-instance-identifier "$SECONDARY_DB_ID" \
-  --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
-if [ "$secondary_status" != "available" ] || replica_source_is_empty "$secondary_source" ||
-  [[ "$secondary_source" != "$PRIMARY_RESOURCE_NAME" && "$secondary_source" != *":db:${PRIMARY_RESOURCE_NAME}" ]]; then
+# without a live replica of this primary, scaling to zero is a real outage, not a drill.
+read -r secondary_status secondary_replicates_from _ <<<"$(db_topology "$SECONDARY_REGION" "$SECONDARY_DB_ID")"
+if [ "$secondary_status" != "available" ] || has_no_replication_source "$secondary_replicates_from" ||
+  [[ "$secondary_replicates_from" != "$PRIMARY_RESOURCE_NAME" && "$secondary_replicates_from" != *":db:${PRIMARY_RESOURCE_NAME}" ]]; then
   echo "error: Secondary database is not an available replica of $PRIMARY_RESOURCE_NAME" >&2
   exit 1
 fi
 
-target_group_arn="$(aws elbv2 describe-target-groups \
-  --region "$PRIMARY_REGION" \
-  --names "$TARGET_GROUP" \
-  --query 'TargetGroups[0].TargetGroupArn' --output text)"
-alb_dns="$(aws elbv2 describe-load-balancers \
-  --region "$PRIMARY_REGION" \
-  --names "$LOAD_BALANCER" \
-  --query 'LoadBalancers[0].DNSName' --output text)"
+target_group_arn="$(target_group_arn_for "$PRIMARY_REGION" "$TARGET_GROUP")"
+alb_dns="$(alb_dns_name "$PRIMARY_REGION" "$LOAD_BALANCER")"
 
-# starts a new evidence segment only after every safety precondition passes.
+# ==== MAIN TASK: inject a controlled, evidence-backed primary outage ====
+# opens a new log segment; later lookups read back only to this marker.
 log_event "drill_started"
 
 pre_outage_slug="pre-drill-$(date -u +%Y%m%d%H%M%S)"
@@ -78,7 +71,7 @@ primary_link_created_at="$(jq -r '.created_at' <<<"$pre_outage_link")"
 record_event_at "pre_outage_link_slug" "$pre_outage_slug"
 record_event_at "primary_link_created_at" "$primary_link_created_at"
 
-# captures every primary slug so failover verifies the complete pre-outage dataset.
+# the full set, so failover proves every pre-outage row survived rather than sampling one.
 primary_slugs_before_outage="$(list_short_links_direct "$WORKLOAD_HOST" "$alb_dns" | jq -r '[.[].slug] | join(",")')"
 record_event_at "primary_link_slugs_before_outage" "$primary_slugs_before_outage"
 
@@ -91,14 +84,12 @@ aws ecs update-service \
   >/dev/null
 log_event "disaster_declared"
 
-# requires both HTTP 503 and zero healthy targets before confirming the outage.
+# ==== POSTCHECKS ====
+# the ALB returns 503 only with no healthy target, so both agreeing rules out a blip.
 echo "Primary desired count set to 0. Waiting for a confirmed user-visible outage..."
 for _ in {1..24}; do
   status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-to "${WORKLOAD_HOST}:443:${alb_dns}:443" "https://${WORKLOAD_HOST}/healthz" || true)"
-  healthy_count="$(aws elbv2 describe-target-health \
-    --region "$PRIMARY_REGION" \
-    --target-group-arn "$target_group_arn" \
-    --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
+  healthy_count="$(healthy_target_count "$PRIMARY_REGION" "$target_group_arn")"
 
   if [ "$status" = "503" ] && [ "$healthy_count" = "0" ]; then
     curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null
@@ -110,7 +101,7 @@ for _ in {1..24}; do
   sleep 5
 done
 
-# restores primary capacity when the expected outage cannot be proven.
+# an unprovable outage must not leave primary sitting at zero.
 log_event "outage_confirmation_failed"
 echo "error: outage confirmation failed; restoring primary desired count to $original_desired" >&2
 aws ecs update-service \

@@ -101,9 +101,8 @@ resource "aws_cloudwatch_log_group" "main" {
   retention_in_days = 365
 }
 
-# Gated by deploy_service for the two-phase apply: a foundation apply
-# (deploy_service=false) creates the ECR repo first so an image can be built
-# and pushed before this task definition tries to reference its digest.
+# Gated by deploy_service for the two-phase apply: a foundation apply (deploy_service=false)
+# creates the ECR repo first, so an image exists before this references its digest.
 resource "aws_ecs_task_definition" "main" {
   count = var.deploy_service ? 1 : 0
 

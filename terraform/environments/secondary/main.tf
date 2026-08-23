@@ -215,10 +215,8 @@ module "route53_failover" {
   secondary_alb_zone_id  = module.alb.alb_zone_id
 }
 
-# Simple A alias to primary when ARC is not provisioned. Must wait for the
-# ARC module (and its failover records) to be destroyed first: Route53
-# rejects a simple A record when set-identifier failover records exist
-# with the same name and type.
+# Simple A alias to primary when ARC is absent; waits for the ARC failover records to be gone
+# first, since Route53 rejects a simple record alongside same-name failover records.
 resource "aws_route53_record" "workload" {
   count   = var.create_arc ? 0 : 1
   zone_id = data.aws_route53_zone.pilotlight.zone_id

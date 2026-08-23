@@ -9,10 +9,8 @@ provider "aws" {
   }
 }
 
-# Alias for the primary region, lets secondary read primary's live ECS/RDS/ALB state directly
-# (image digest, engine version, instance class, ALB DNS). SSM reads use the
-# default eu-west-1 provider instead -- primary's own root already wrote the local
-# copies there, so no cross-region SSM call happens.
+# Alias for the primary region, so secondary can read primary's live ECS/RDS/ALB state.
+# SSM reads use the default provider instead: primary's root already wrote local copies here.
 provider "aws" {
   alias  = "primary"
   region = "eu-central-1"

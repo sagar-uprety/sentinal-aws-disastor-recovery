@@ -248,9 +248,8 @@ resource "aws_db_instance_automated_backups_replication" "secondary" {
   retention_period       = 7 # days
 }
 
-# Primary's state owns the secondary-region SSM parameters (not the secondary environment's
-# own state) so they exist ahead of any failover and the promoted replica,
-# which inherits primary's password, resolves against a value already in place.
+# Primary's state owns the secondary-region SSM parameters so they exist ahead of any failover:
+# the promoted replica inherits primary's password and must resolve a value already in place.
 resource "aws_ssm_parameter" "database_password_secondary" {
   provider = aws.secondary
 

@@ -95,27 +95,6 @@ resource "aws_cloudwatch_metric_alarm" "alb_healthy_hosts" {
   ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
-resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks" {
-  alarm_name          = "${var.project_name}-${var.environment}-ecs-running-tasks"
-  alarm_description   = "ECS running task count is below the desired count."
-  namespace           = "ECS/ContainerInsights"
-  metric_name         = "RunningTaskCount"
-  statistic           = "Minimum"
-  period              = 60 # seconds
-  evaluation_periods  = 2
-  threshold           = var.ecs_desired_count
-  comparison_operator = "LessThanThreshold"
-  treat_missing_data  = var.ecs_desired_count == 0 ? "notBreaching" : "breaching"
-
-  dimensions = {
-    ClusterName = var.ecs_cluster_name
-    ServiceName = local.ecs_service_name
-  }
-
-  alarm_actions = [aws_sns_topic.alerts.arn]
-  ok_actions    = [aws_sns_topic.alerts.arn]
-}
-
 resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   count = var.create_rds_alarms ? 1 : 0
 

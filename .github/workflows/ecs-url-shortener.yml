@@ -146,9 +146,8 @@ jobs:
           cache-from: type=gha,scope=shortener
           cache-to: type=gha,mode=max,scope=shortener
 
-      # Terraform seeds this parameter with a placeholder on the first deploy_service=false
-      # apply; overwriting it with a real digest here is what lets deploy_service=true pass.
-      # publish-only has no deploy/health step to gate on, so it publishes immediately.
+      # Terraform seeds a placeholder digest; overwriting it here is what lets deploy_service=true pass.
+      # publish-only has no deploy or health step to gate on, so it publishes immediately.
       - name: Publish workload image digest (publish-only)
         if: inputs.mode == 'publish-only'
         env:

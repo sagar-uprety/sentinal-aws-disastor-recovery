@@ -32,3 +32,9 @@ output "route53_zone_name_servers" {
   description = "NS records delegated from the Cloudflare-managed parent zone."
   value       = data.aws_route53_zone.pilotlight.name_servers
 }
+
+# Lets CI gate ECS health checks on the applied value instead of a separate workflow input.
+output "deploy_service" {
+  description = "Whether this apply created the ECS service."
+  value       = var.deploy_service
+}

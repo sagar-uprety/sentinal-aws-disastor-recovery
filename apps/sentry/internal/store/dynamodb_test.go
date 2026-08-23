@@ -41,8 +41,18 @@ func TestDynamoDBRecordUsesCompositeKeyAndTTL(t *testing.T) {
 	if err := attributevalue.UnmarshalMap(client.putInput.Item, &item); err != nil {
 		t.Fatalf("unmarshal item: %v", err)
 	}
-	if item.PK != "TARGET#https://example.com/healthz" || item.SK != "CHECK#2026-07-26T12:00:00Z" || item.ExpiresAt != checkedAt.Add(Retention).Unix() {
+	if item.PK != "TARGET#https://example.com/healthz" || item.SK != "CHECK#2026-07-26T12:00:00.000000000Z" || item.ExpiresAt != checkedAt.Add(Retention).Unix() {
 		t.Fatalf("item = %#v", item)
+	}
+}
+
+// a whole-second check must still sort below a fractional one in the same second,
+// which the old trailing-zero-trimming format got backwards.
+func TestCheckSKSortsWholeSecondsBeforeFractional(t *testing.T) {
+	whole := checkSK(time.Date(2026, 7, 26, 12, 0, 5, 0, time.UTC))
+	fractional := checkSK(time.Date(2026, 7, 26, 12, 0, 5, 500000000, time.UTC))
+	if whole >= fractional {
+		t.Fatalf("sort key ordering is inverted: %q >= %q", whole, fractional)
 	}
 }
 

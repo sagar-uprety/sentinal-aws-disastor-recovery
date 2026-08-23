@@ -59,9 +59,10 @@ func (d *DynamoDB) RecordCheck(ctx context.Context, check Check) error {
 	return nil
 }
 
-// queries checks since the cutoff for uptime; if none fall in that window it falls back to the single most recent check (0/0 uptime) so status still shows "last seen" instead of nothing.
+// falls back to the single most recent check (0/0 uptime) when the window is empty,
+// so a long-idle target still shows "last seen" rather than nothing at all.
 func (d *DynamoDB) LatestStatuses(ctx context.Context, since time.Time) ([]TargetStatus, error) {
-	// upper bound is nudged one second past now so a check written in this same second isn't excluded by the BETWEEN range.
+	// nudged a second past now so a check written this same second isn't excluded.
 	checks, err := d.query(ctx, d.target.URL, since, d.now().UTC().Add(time.Second), 0)
 	if err != nil {
 		return nil, err
@@ -97,7 +98,7 @@ func (d *DynamoDB) Health(ctx context.Context) error {
 	return nil
 }
 
-// queries newest-first by sort key; a zero from/to means "no time bound", a positive limit means "single page, no pagination".
+// newest-first by sort key; zero from/to means unbounded, a positive limit means one page.
 func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time, limit int32) ([]Check, error) {
 	values := map[string]types.AttributeValue{":pk": &types.AttributeValueMemberS{Value: targetPK(target)}}
 	condition := "pk = :pk"
@@ -117,7 +118,7 @@ func (d *DynamoDB) query(ctx context.Context, target string, from, to time.Time,
 	}
 
 	checks := make([]Check, 0)
-	// bounded History calls fetch one page directly; unbounded LatestStatuses calls page through everything in the window.
+	// bounded History fetches one page; unbounded LatestStatuses pages the whole window.
 	if limit > 0 {
 		page, err := d.client.Query(ctx, input)
 		if err != nil {
@@ -154,5 +155,8 @@ func appendPage(checks []Check, items []map[string]types.AttributeValue) ([]Chec
 // partition key groups all of one target's checks together.
 func targetPK(target string) string { return "TARGET#" + target }
 
-// sort key is time-ordered (RFC3339Nano), so a Query naturally returns checks in chronological order.
-func checkSK(checkedAt time.Time) string { return "CHECK#" + checkedAt.UTC().Format(time.RFC3339Nano) }
+// fixed-width on purpose: RFC3339Nano drops trailing zeros, so a whole-second timestamp renders
+// as "...:05Z" and sorts above "...:05.5Z", breaking both range and newest-first queries.
+func checkSK(checkedAt time.Time) string {
+	return "CHECK#" + checkedAt.UTC().Format("2006-01-02T15:04:05.000000000Z")
+}

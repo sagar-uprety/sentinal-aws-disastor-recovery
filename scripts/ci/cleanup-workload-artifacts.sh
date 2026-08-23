@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# removes workload artifacts that remain after Terraform destroy.
+# removes AWS-created artifacts that Terraform never owned, so destroy leaves them behind.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,6 +84,7 @@ for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
   [[ -z "$families" || "$families" == "None" ]] && continue
   read -r -a family_list <<<"$families"
   for family in "${family_list[@]}"; do
+    # list-task-definitions has no --status ALL, so ACTIVE and INACTIVE need separate calls.
     revision_arns="$(aws ecs list-task-definitions \
       --region "$region" \
       --family-prefix "$family" \
@@ -95,6 +96,7 @@ for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
       --status INACTIVE \
       --query "taskDefinitionArns" \
       --output text)"
+    # --output text prints "None" for an empty list; strip it before splitting into an array.
     revision_arns="${revision_arns//None/}"
     [[ -z "${revision_arns// /}" ]] && continue
     read -r -a revisions <<<"$revision_arns"
@@ -102,8 +104,10 @@ for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
       aws ecs deregister-task-definition \
         --region "$region" \
         --task-definition "$revision_arn" >/dev/null
+      # paces deregistration under the ECS mutation rate limit.
       sleep 0.2
     done
+    # delete-task-definitions accepts at most 10 ARNs per call (AWS limit).
     for ((i = 0; i < ${#revisions[@]}; i += 10)); do
       aws ecs delete-task-definitions \
         --region "$region" \
@@ -152,7 +156,7 @@ for regional_prefix in "${log_group_prefixes[@]}"; do
   done
 done
 
-# removes account-wide RDSOSMetrics groups only because this demo account has no other RDS workloads.
+# account-wide group; safe to delete only because no other RDS workload shares this account.
 for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
   exists="$(aws logs describe-log-groups \
     --region "$region" \
@@ -191,7 +195,7 @@ if [[ "$remaining_replicated_repository" != "0" ]]; then
   exit 1
 fi
 
-# performs a final snapshot check after asynchronous RDS deletion waiters complete.
+# redundant with the wait above, kept so every cleanup ends on one explicit gate.
 remaining_snapshots="$(aws rds describe-db-snapshots \
   --region "$SECONDARY_REGION" \
   --snapshot-type manual \
