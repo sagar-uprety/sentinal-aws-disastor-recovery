@@ -26,20 +26,6 @@ on:
           - primary
           - secondary
           - monitoring
-      deploy_service:
-        description: >-
-          Create the ECS service. Set false for the foundation phase that provisions the ECR
-          repository before any image exists. Ignored by secondary.
-        required: false
-        default: true
-        type: boolean
-      create_arc:
-        description: >-
-          Provision (true) or tear down (false) the secondary root's ARC cluster and controls.
-          Applies only to target=secondary.
-        required: false
-        default: false
-        type: boolean
       confirm_destroy:
         description: Type DESTROY to authorize a destroy operation.
         required: false
@@ -101,8 +87,8 @@ jobs:
             echo 'targets=[]' >> "$GITHUB_OUTPUT"
           fi
 
-  plan:
-    name: Plan ${{ matrix.target }}
+  preview:
+    name: Preview ${{ matrix.target }}
     needs: detect-changes
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository ||
@@ -133,7 +119,7 @@ jobs:
           terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          session-name: terraform-plan-${{ github.run_id }}
+          session-name: terraform-preview-${{ github.run_id }}
 
       - name: Initialize remote state
         working-directory: ${{ env.TF_ROOT }}
@@ -141,27 +127,80 @@ jobs:
 
       - name: Create speculative plan
         working-directory: ${{ env.TF_ROOT }}
-        env:
-          DEPLOY_SERVICE: ${{ inputs.deploy_service }}
-          CREATE_ARC: ${{ inputs.create_arc }}
         run: |
-          # shellcheck source=../../../scripts/ci/terraform-plan-vars.sh
-          source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
-          build_plan_args
           # Each environment has separate state, so these locks still allow matrix plans to run together.
           # Lock-timeout so a plan waits out a same-env apply instead of failing on lock contention.
-          terraform plan -input=false -lock-timeout=30m -out=tfplan "${plan_args[@]}"
+          terraform plan -input=false -lock-timeout=30m -out=tfplan
           terraform show -no-color tfplan > plan.txt
 
       - name: Upload human-readable plan
         uses: actions/upload-artifact@v7
         with:
-          name: terraform-plan-${{ env.TF_TARGET }}
+          name: terraform-preview-${{ env.TF_TARGET }}
           path: ${{ env.TF_ROOT }}/plan.txt
           retention-days: 7
 
+  plan:
+    name: Plan ${{ inputs.target }}
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'apply' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: terraform-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_TARGET: ${{ inputs.target }}
+      TF_ROOT: terraform/environments/${{ inputs.target }}
+      AWS_REGION: ${{ fromJSON(vars.AWS_REGION_MAP)[inputs.target] }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          terraform-version: ${{ env.TERRAFORM_VERSION }}
+          role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          session-name: terraform-plan-${{ github.run_id }}
+
+      # Both environments that publish public hostnames depend on apex delegation resolving.
+      - name: Verify public Route 53 delegation
+        if: inputs.target != 'secondary'
+        run: scripts/ci/guard-topology.sh route53-delegation
+
+      - name: Refuse apply during failback topology
+        if: inputs.target == 'primary' || inputs.target == 'secondary'
+        run: scripts/ci/guard-topology.sh no-failback
+
+      - name: Initialize state
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform init -input=false
+
+      - name: Plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Show plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform show -no-color tfplan
+
+      # Saved so the approver reviews these exact bytes, and apply runs them as-is instead of re-planning.
+      - name: Save plan for apply
+        uses: actions/upload-artifact@v7
+        with:
+          name: terraform-plan-${{ inputs.target }}-${{ github.run_id }}
+          path: ${{ env.TF_ROOT }}/tfplan
+          retention-days: 1
+
   apply:
     name: Apply ${{ inputs.target }}
+    needs: plan
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.operation == 'apply' &&
@@ -177,6 +216,7 @@ jobs:
       # secondary never serves public traffic (pilot light), so it gets no URL rather than a wrong one.
       url: ${{ inputs.target == 'monitoring' && vars.SENTRY_URL || inputs.target == 'primary' && vars.WORKLOAD_URL || '' }}
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
@@ -195,11 +235,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-apply-${{ github.run_id }}
 
-      # Both environments that publish public hostnames depend on apex delegation resolving.
-      - name: Verify public Route 53 delegation
-        if: inputs.target != 'secondary'
-        run: scripts/ci/guard-topology.sh route53-delegation
-
+      # Failback topology can start between the plan and apply jobs (and during the approval wait); recheck before applying.
       - name: Refuse apply during failback topology
         if: inputs.target == 'primary' || inputs.target == 'secondary'
         run: scripts/ci/guard-topology.sh no-failback
@@ -208,31 +244,31 @@ jobs:
         working-directory: ${{ env.TF_ROOT }}
         run: terraform init -input=false
 
-      - name: Plan
+      - name: Download approved plan
+        uses: actions/download-artifact@v8
+        with:
+          name: terraform-plan-${{ inputs.target }}-${{ github.run_id }}
+          path: ${{ env.TF_ROOT }}
+
+      - name: Show and apply approved plan
         working-directory: ${{ env.TF_ROOT }}
-        env:
-          DEPLOY_SERVICE: ${{ inputs.deploy_service }}
-          CREATE_ARC: ${{ inputs.create_arc }}
         run: |
-          # shellcheck source=../../../scripts/ci/terraform-plan-vars.sh
-          source "$GITHUB_WORKSPACE/scripts/ci/terraform-plan-vars.sh"
-          build_plan_args
-          terraform plan -input=false -lock-timeout=5m -out=tfplan "${plan_args[@]}"
-
-      - name: Show plan
-        working-directory: ${{ env.TF_ROOT }}
-        run: terraform show -no-color tfplan
-
-      - name: Apply plan
-        working-directory: ${{ env.TF_ROOT }}
-        run: terraform apply -input=false -lock-timeout=5m tfplan
+          terraform show -no-color tfplan
+          terraform apply -input=false -lock-timeout=5m tfplan
 
       - name: Verify secondary pilot-light state
         if: inputs.target == 'secondary'
         run: scripts/ci/guard-topology.sh secondary-pilot-light
 
+      # deploy_service now lives in terraform.tfvars, not a workflow input; read back what was actually applied.
+      - name: Read deployed service flag
+        id: deploy_service
+        if: inputs.target == 'primary' || inputs.target == 'monitoring'
+        working-directory: ${{ env.TF_ROOT }}
+        run: echo "value=$(terraform output -raw deploy_service)" >> "$GITHUB_OUTPUT"
+
       - name: Verify isolated sentry
-        if: inputs.target == 'monitoring' && inputs.deploy_service
+        if: inputs.target == 'monitoring' && steps.deploy_service.outputs.value == 'true'
         run: |
           aws ecs wait services-stable --region "$SENTRY_REGION" \
             --cluster "$PROJECT_NAME-monitoring" --services "$PROJECT_NAME-monitoring"
@@ -240,7 +276,7 @@ jobs:
             "$SENTRY_URL/healthz"
 
       - name: Verify public workload health
-        if: inputs.target == 'primary' && inputs.deploy_service
+        if: inputs.target == 'primary' && steps.deploy_service.outputs.value == 'true'
         run: |
           aws ecs wait services-stable --region "$PRIMARY_REGION" \
             --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary"

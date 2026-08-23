@@ -1,6 +1,6 @@
 # Failover Runbook
 
-AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Pilotlight follows that model for the URL-shortener workload: eu-west-1 database replica, workload VPC, ALB, ECS service definition, ECR image, and SSM parameters exist before drill, while workload ECS desired count remains 0. Isolated sentry uses separate state and infrastructure and remains outside workload operations. ARC routing controls are provisioned on demand via `create_arc=true` to avoid idle cost.
+AWS defines pilot light as replicated data plus core infrastructure in a standby Region, with additional compute activated during recovery. Pilotlight follows that model for the URL-shortener workload: eu-west-1 database replica, workload VPC, ALB, ECS service definition, ECR image, and SSM parameters exist before drill, while workload ECS desired count remains 0. Isolated sentry uses separate state and infrastructure and remains outside workload operations. ARC routing controls are provisioned on demand by setting `create_arc = true` in `terraform/environments/secondary/terraform.tfvars` to avoid idle cost.
 
 Historical scripts completed a live M6 drill on 2026-07-22 against the former coupled architecture; those measurements remain historical and are not conflated with M7 below. M7's isolated two-plane architecture completed its own full live drill on 2026-08-08 (see Measurement Semantics).
 
@@ -12,9 +12,9 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
 - The immutable image digest exists in eu-west-1 ECR.
 - Regional database-password and link-creation-token SSM SecureString metadata and versions are current. Terraform generates both secrets through ephemeral values and write-only arguments.
 - GitHub repository variables define `AWS_TERRAFORM_ROLE_ARN`, `AWS_WORKLOAD_ROLE_ARN`, and `AWS_SENTRY_ROLE_ARN`; protected environments gate the jobs that consume them.
-- **Before a drill, provision ARC** through CI:
+- **Before a drill, provision ARC**: set `create_arc = true` in `terraform/environments/secondary/terraform.tfvars` (PR, merge), then dispatch:
   ```bash
-  gh workflow run terraform.yml --ref main -f operation=apply -f target=secondary -f create_arc=true
+  gh workflow run terraform.yml --ref main -f operation=apply -f target=secondary
   ```
   Then initialize controls:
   ```bash
@@ -23,7 +23,7 @@ Historical scripts completed a live M6 drill on 2026-07-22 against the former co
   ARC controls must be primary `On`, secondary `Off`; safety rules require exactly one active control.
 - Use a dedicated `DRILL_LOG` path for the session. Each simulation adds a new `drill_started` boundary so measurements cannot mix drills.
 - Local scripts assume the active AWS CLI credentials already permit their ECS, RDS, ELB, ECR, SSM, CloudWatch, Route53, ARC, and sentry-table DynamoDB operations. This project does not provision a separate local recovery role.
-- **After drill, tear down ARC** to save cost: `gh workflow run terraform.yml --ref main -f operation=apply -f target=secondary -f create_arc=false`. In practice this often happens automatically: any later `recovery.yml` apply against the secondary root runs with default variables (`create_arc=false`), so the first failback apply after a drill will destroy ARC as a side effect even without this explicit step. Confirm actual state either way with `aws route53-recovery-control-config list-clusters --region us-west-2`.
+- **After drill, tear down ARC** to save cost: revert `create_arc` to `false` in `terraform/environments/secondary/terraform.tfvars` (PR, merge), then `gh workflow run terraform.yml --ref main -f operation=apply -f target=secondary`. This is no longer automatic: `create_arc` is a committed tfvars value now, and `recovery.yml`'s failback-reset apply never passes `-var=create_arc`, so it leaves whatever tfvars says untouched. Confirm actual state with `aws route53-recovery-control-config list-clusters --region us-west-2`.
 
 ## Drill Sequence
 
