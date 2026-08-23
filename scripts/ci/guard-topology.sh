@@ -9,8 +9,9 @@ source "$SCRIPT_DIR/../config.sh"
 
 readonly PRIMARY_DATABASE="$PRIMARY_RESOURCE_NAME"
 readonly SECONDARY_DATABASE="$SECONDARY_RESOURCE_NAME"
+readonly PRIMARY_CLUSTER="$PRIMARY_RESOURCE_NAME"
 readonly SECONDARY_CLUSTER="$SECONDARY_RESOURCE_NAME"
-# bounds pre-failback safety snapshot age in seconds.
+# 6h: an older snapshot predates this failover and is not a valid rollback point.
 readonly SNAPSHOT_MAX_AGE=21600
 # bounds post-repair recovery polling in seconds.
 readonly WAIT_TIMEOUT="${WAIT_TIMEOUT:-600}"
@@ -21,7 +22,7 @@ fail() {
   exit 1
 }
 
-# returns MISSING for absent databases while preserving real AWS API failures.
+# filters client-side so an absent database returns MISSING instead of erroring out.
 replica_source_of() {
   aws rds describe-db-instances \
     --region "$1" \
@@ -53,7 +54,7 @@ guard_route53_delegation() {
   done
 }
 
-# fails a normal apply unless primary is a standalone writer and secondary (if present) replicates from it, the only valid steady state.
+# the only valid steady state: primary standalone, secondary replicating from it.
 guard_no_failback() {
   local primary_replicates_from secondary_replicates_from
   primary_replicates_from="$(replica_source_of "$PRIMARY_REGION" "$PRIMARY_DATABASE")"
@@ -136,6 +137,25 @@ guard_secondary_pilot_light() {
   fi
   if [[ "$replicates_from" != *"$PRIMARY_DATABASE"* ]]; then
     fail "Secondary database replicates from $replicates_from, expected $PRIMARY_DATABASE"
+  fi
+}
+
+# mirror of guard_secondary_pilot_light for the reversed failback topology, asserting the
+# state failback-prepare must leave behind: primary a replica of secondary, serving nothing.
+guard_primary_reverse_replica() {
+  local desired replicates_from
+  desired="$(aws ecs describe-services \
+    --region "$PRIMARY_REGION" --cluster "$PRIMARY_CLUSTER" --services "$PRIMARY_CLUSTER" \
+    --query 'services[0].desiredCount' --output text)"
+  replicates_from="$(replica_source_of "$PRIMARY_REGION" "$PRIMARY_DATABASE")"
+  if [ "$desired" != "0" ]; then
+    fail "Primary desired count is $desired, expected 0 before serving traffic"
+  fi
+  if has_no_replication_source "$replicates_from"; then
+    fail "Primary database is a standalone writer, expected a replica of secondary"
+  fi
+  if [[ "$replicates_from" != *"$SECONDARY_DATABASE"* ]]; then
+    fail "Primary database replicates from $replicates_from, expected $SECONDARY_DATABASE"
   fi
 }
 
@@ -228,6 +248,7 @@ case "${1:-}" in
   no-failback) guard_no_failback ;;
   no-reverse-replication) guard_no_reverse_replication ;;
   primary-standalone-writer) guard_primary_standalone_writer ;;
+  primary-reverse-replica) guard_primary_reverse_replica ;;
   primary-multi-az-writer) guard_primary_multi_az_writer ;;
   primary-serving-traffic) guard_primary_serving_traffic ;;
   secondary-pilot-light) guard_secondary_pilot_light ;;
@@ -235,7 +256,7 @@ case "${1:-}" in
   wait-primary-recovered) wait_primary_recovered ;;
   secondary-writer-arn) emit_secondary_writer_arn ;;
   *)
-    echo "usage: $0 {route53-delegation|no-failback|no-reverse-replication|primary-standalone-writer|primary-multi-az-writer|primary-serving-traffic|secondary-pilot-light|safety-snapshot <id>|wait-primary-recovered|secondary-writer-arn}" >&2
+    echo "usage: $0 {route53-delegation|no-failback|no-reverse-replication|primary-standalone-writer|primary-reverse-replica|primary-multi-az-writer|primary-serving-traffic|secondary-pilot-light|safety-snapshot <id>|wait-primary-recovered|secondary-writer-arn}" >&2
     exit 2
     ;;
 esac

@@ -9,22 +9,19 @@ source "$SCRIPT_DIR/../config.sh"
 # shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
-if [ "${1:-}" = "record-traffic-switch" ]; then
-  echo "error: manual traffic timestamps are disabled; use switch-traffic.sh for verified timestamps" >&2
-  exit 1
-fi
-
+# ==== PRECHECKS ====
 if [ ! -f "$DRILL_LOG" ]; then
   echo "error: no drill log at $DRILL_LOG" >&2
   exit 1
 fi
 
+# ==== MAIN TASK: compute and print the RTO/RPO recovery timeline ====
 # converts two UTC timestamps into elapsed seconds.
 duration() {
   printf '%s' "$(( $(to_epoch "$2") - $(to_epoch "$1") ))"
 }
 
-# requires every boundary used by RTO, automation, and RPO output.
+# all-or-nothing, so an aborted drill cannot print a partial timeline as a result.
 for event in disaster_declared outage_confirmed failover_invoked replica_promoted secondary_service_stable secondary_targets_healthy pre_outage_link_verified_in_secondary secondary_write_verified traffic_switch_requested_secondary traffic_verified_secondary primary_link_created_at replica_lag_seconds replica_lag_timestamp; do
   require_current_event "$event"
 done
@@ -43,7 +40,7 @@ primary_link_created_at="$(current_drill_event_ts primary_link_created_at)"
 replica_lag="$(current_drill_event_ts replica_lag_seconds)"
 replica_lag_timestamp="$(current_drill_event_ts replica_lag_timestamp)"
 
-# measures user-visible recovery separately from failover automation runtime.
+# RTO is the user-visible outage; automation excludes detection lag and DNS propagation.
 rto_seconds="$(duration "$outage_ts" "$verified_ts")"
 automation_seconds="$(duration "$invoked_ts" "$write_ts")"
 

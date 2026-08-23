@@ -63,9 +63,8 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
 resource "aws_db_instance" "main" {
   identifier = "${var.project_name}-${var.environment}"
 
-  # same resource plays primary or replica by branching its args below, so
-  # promoting (replicate_source_db_arn -> null) updates in place, no replace.
-  # replica mode: engine/credentials/storage are inherited, API rejects setting them.
+  # one resource plays primary or replica by branching below, so promoting (source -> null)
+  # updates in place; in replica mode engine/credentials/storage are inherited and rejected if set.
   engine              = var.replicate_source_db_arn == null ? "postgres" : null
   engine_version      = var.replicate_source_db_arn == null ? var.engine_version : null
   instance_class      = var.instance_class

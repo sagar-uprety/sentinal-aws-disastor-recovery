@@ -15,10 +15,10 @@ readonly SECONDARY_DB_ID="$SECONDARY_RESOURCE_NAME"
 readonly SECONDARY_ALB_NAME="${SECONDARY_RESOURCE_NAME}-alb"
 readonly SECONDARY_TARGET_GROUP_NAME="${SECONDARY_RESOURCE_NAME}-tg"
 readonly SECONDARY_SSM_ARN_PREFIX="arn:aws:ssm:${SECONDARY_REGION}:"
-readonly SECONDARY_ECS_ALARM_NAME="${SECONDARY_RESOURCE_NAME}-ecs-running-tasks"
 readonly SECONDARY_ALB_ALARM_NAME="${SECONDARY_RESOURCE_NAME}-alb-healthy-hosts"
 readonly RPO_TARGET_SECONDS="${RPO_TARGET_SECONDS:-60}"
 
+# ==== PRECHECKS ====
 if [ "${CONFIRM_FAILOVER:-}" != "YES" ]; then
   echo "error: set CONFIRM_FAILOVER=YES after independently confirming the outage" >&2
   exit 1
@@ -26,16 +26,13 @@ fi
 require_current_event "outage_confirmed"
 require_current_event "primary_link_created_at"
 
-# sets promotion_state to fresh, in_progress, or promoted before mutation.
+# classifies live AWS state so a re-run resumes instead of repeating the promotion.
 determine_promotion_state() {
   local db_status secondary_replicates_from
-  read -r db_status secondary_replicates_from <<<"$(aws rds describe-db-instances \
-    --region "$SECONDARY_REGION" \
-    --db-instance-identifier "$SECONDARY_DB_ID" \
-    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+  read -r db_status secondary_replicates_from _ <<<"$(db_topology "$SECONDARY_REGION" "$SECONDARY_DB_ID")"
   promotion_state="fresh"
 
-  # treats a standalone writer as resumable only when this drill invoked promotion.
+  # standalone is only "ours" if this drill logged it; otherwise it was promoted out of band.
   if has_no_replication_source "$secondary_replicates_from"; then
     require_current_event "failover_invoked"
     if [ -n "$(current_drill_event_ts replica_promoted)" ]; then
@@ -65,12 +62,8 @@ determine_promotion_state() {
 
 determine_promotion_state
 
-# requires resting secondary compute before promotion starts.
-read -r desired_count running_count <<<"$(aws ecs describe-services \
-  --region "$SECONDARY_REGION" \
-  --cluster "$SECONDARY_CLUSTER" \
-  --services "$SECONDARY_SERVICE" \
-  --query 'services[0].[desiredCount,runningCount]' --output text)"
+# secondary already running means a previous drill never reset it.
+read -r desired_count running_count <<<"$(ecs_service_counts "$SECONDARY_REGION" "$SECONDARY_CLUSTER" "$SECONDARY_SERVICE")"
 if [ "$desired_count" != "0" ] || [ "$running_count" != "0" ]; then
   echo "error: Secondary ECS is not in pilot-light state (desired=$desired_count, running=$running_count)" >&2
   exit 1
@@ -100,7 +93,7 @@ aws ecr describe-images \
   --image-ids "imageDigest=$image_digest" \
   --query 'imageDetails[0].imageDigest' --output text >/dev/null
 
-# resolves the regional database password before primary replication is broken.
+# resolves the regional database password before the replica is promoted.
 password_parameter_arn="$(jq -r '.containerDefinitions[0].secrets[] | select(.name == "DB_PASSWORD") | .valueFrom' "$task_definition_json")"
 if [[ "$password_parameter_arn" != "$SECONDARY_SSM_ARN_PREFIX"* ]]; then
   echo "error: Secondary task definition does not reference a $SECONDARY_REGION SSM password parameter" >&2
@@ -112,7 +105,7 @@ aws ssm get-parameter \
   --with-decryption \
   --query 'Parameter.Version' --output text >/dev/null
 
-# resolves the regional write token before primary replication is broken.
+# resolves the regional write token before the replica is promoted.
 link_token_parameter_arn="$(jq -r '.containerDefinitions[0].secrets[] | select(.name == "LINK_CREATE_TOKEN") | .valueFrom' "$task_definition_json")"
 if [[ "$link_token_parameter_arn" != "$SECONDARY_SSM_ARN_PREFIX"* ]]; then
   echo "error: Secondary task definition does not reference a $SECONDARY_REGION link-token parameter" >&2
@@ -124,25 +117,20 @@ aws ssm get-parameter \
   --with-decryption \
   --query 'Parameter.Version' --output text >/dev/null
 
+# ==== MAIN TASK: promote secondary DB, restore pre-outage compute, activate monitoring ====
 # captures fresh lag evidence immediately before irreversible promotion.
 case "$promotion_state" in
 fresh)
-  lag_data="$(latest_replica_lag_json "$SECONDARY_REGION" "$SECONDARY_DB_ID")"
-  replica_lag="$(jq -r '.Maximum // empty' <<<"$lag_data")"
-  lag_timestamp="$(jq -r '.Timestamp // empty' <<<"$lag_data")"
-  # RDS reports ReplicaLag=-1 when replication is not active/determinable; treat as no evidence.
-  if [ -z "$replica_lag" ] || [ "$replica_lag" = "-1" ] || [ -z "$lag_timestamp" ]; then
-    echo "error: current ReplicaLag evidence is unavailable; refusing drill promotion" >&2
+  # single attempt, not a poll: this runs after the outage is already confirmed, so waiting for
+  # replication to improve would only add outage time without changing the decision.
+  if ! lag_evidence="$(fresh_replica_lag "$SECONDARY_REGION" "$SECONDARY_DB_ID")"; then
+    echo "error: no current ReplicaLag evidence; refusing drill promotion" >&2
     exit 1
   fi
-  lag_age=$(( $(date -u +%s) - $(to_epoch "$lag_timestamp") ))
-  if [ "$lag_age" -gt 180 ]; then
-    echo "error: latest ReplicaLag datapoint is ${lag_age}s old" >&2
-    exit 1
-  fi
+  IFS=$'\t' read -r replica_lag lag_timestamp <<<"$lag_evidence"
   record_event_at "replica_lag_seconds" "$replica_lag"
   record_event_at "replica_lag_timestamp" "$lag_timestamp"
-  if ! awk -v lag="$replica_lag" -v target="$RPO_TARGET_SECONDS" 'BEGIN { exit !(lag <= target) }'; then
+  if ! lag_within_target "$replica_lag" "$RPO_TARGET_SECONDS"; then
     if [ "${ALLOW_RPO_TARGET_MISS:-}" != "YES" ]; then
       echo "error: ReplicaLag ${replica_lag}s exceeds ${RPO_TARGET_SECONDS}s; set ALLOW_RPO_TARGET_MISS=YES to accept" >&2
       exit 1
@@ -166,14 +154,11 @@ in_progress)
   ;;
 esac
 
-# waits up to 20 minutes for an available standalone writer.
+# promotion reboots the instance, so completion takes minutes, not seconds.
 promoted_status=""
 promoted_replicates_from=""
 for _ in {1..120}; do
-  read -r promoted_status promoted_replicates_from <<<"$(aws rds describe-db-instances \
-    --region "$SECONDARY_REGION" \
-    --db-instance-identifier "$SECONDARY_DB_ID" \
-    --query 'DBInstances[0].[DBInstanceStatus,ReadReplicaSourceDBInstanceIdentifier]' --output text)"
+  read -r promoted_status promoted_replicates_from _ <<<"$(db_topology "$SECONDARY_REGION" "$SECONDARY_DB_ID")"
   if [ "$promoted_status" = "available" ] && has_no_replication_source "$promoted_replicates_from"; then
     break
   fi
@@ -190,7 +175,7 @@ if [ "$promoted_status" != "available" ] || ! has_no_replication_source "$promot
 fi
 log_event "replica_promoted"
 
-# rewrites database coordinates and removes read-only fields before task-definition registration.
+# describe returns read-only fields that register rejects, so only accepted keys are kept.
 jq --arg host "$db_endpoint" --arg port "$db_port" '
   .containerDefinitions[0].environment |= map(
     if .name == "DB_HOST" then .value = $host
@@ -213,64 +198,40 @@ aws ecs update-service \
   --cluster "$SECONDARY_CLUSTER" \
   --service "$SECONDARY_SERVICE" \
   --task-definition "$new_task_definition_arn" \
-  --desired-count 2 \
+  --desired-count "$WORKLOAD_DESIRED_COUNT" \
   >/dev/null
 aws ecs wait services-stable --region "$SECONDARY_REGION" --cluster "$SECONDARY_CLUSTER" --services "$SECONDARY_SERVICE"
 
-# verifies waiter success against explicit desired and running counts.
-read -r desired_count running_count <<<"$(aws ecs describe-services \
-  --region "$SECONDARY_REGION" \
-  --cluster "$SECONDARY_CLUSTER" \
-  --services "$SECONDARY_SERVICE" \
-  --query 'services[0].[desiredCount,runningCount]' --output text)"
-if [ "$desired_count" != "2" ] || [ "$running_count" != "2" ]; then
-  echo "error: Secondary service is not stable at 2/2 tasks" >&2
+# the waiter can return before both counts match, so they are checked directly.
+read -r desired_count running_count <<<"$(ecs_service_counts "$SECONDARY_REGION" "$SECONDARY_CLUSTER" "$SECONDARY_SERVICE")"
+if [ "$desired_count" != "$WORKLOAD_DESIRED_COUNT" ] || [ "$running_count" != "$WORKLOAD_DESIRED_COUNT" ]; then
+  echo "error: Secondary service is not stable at ${WORKLOAD_DESIRED_COUNT}/${WORKLOAD_DESIRED_COUNT} tasks" >&2
   exit 1
 fi
 
-# requires two-AZ task placement before secondary can receive traffic.
-if ! require_two_az_tasks "$SECONDARY_REGION" "$SECONDARY_CLUSTER" "$SECONDARY_SERVICE"; then
-  echo "error: Secondary tasks are not running across two Availability Zones; do not route traffic" >&2
+# requires full AZ spread before secondary can receive traffic.
+if ! require_task_az_spread "$SECONDARY_REGION" "$SECONDARY_CLUSTER" "$SECONDARY_SERVICE"; then
+  echo "error: Secondary tasks are not spread across ${WORKLOAD_AZ_COUNT} Availability Zones; do not route traffic" >&2
   exit 1
 fi
 log_event "secondary_service_stable"
 
-# preserves the existing SNS destination when reactivating secondary alarms.
+# preserves the existing SNS destination when reactivating the secondary ALB alarm.
 alert_topic_arn="$(aws cloudwatch describe-alarms \
   --region "$SECONDARY_REGION" \
-  --alarm-names "$SECONDARY_ECS_ALARM_NAME" \
+  --alarm-names "$SECONDARY_ALB_ALARM_NAME" \
   --query 'MetricAlarms[0].AlarmActions[0]' --output text)"
 if [ -z "$alert_topic_arn" ] || [ "$alert_topic_arn" = "None" ]; then
-  echo "error: missing secondary ECS running-task alarm action" >&2
+  echo "error: missing secondary ALB healthy-host alarm action" >&2
   exit 1
 fi
-# activates task-count alerting for serving secondary compute.
-aws cloudwatch put-metric-alarm \
-  --region "$SECONDARY_REGION" \
-  --alarm-name "$SECONDARY_ECS_ALARM_NAME" \
-  --alarm-description "ECS running task count is below the active secondary count." \
-  --namespace ECS/ContainerInsights \
-  --metric-name RunningTaskCount \
-  --statistic Minimum \
-  --period 60 \
-  --evaluation-periods 2 \
-  --threshold 2 \
-  --comparison-operator LessThanThreshold \
-  --treat-missing-data breaching \
-  --dimensions "Name=ClusterName,Value=$SECONDARY_CLUSTER" "Name=ServiceName,Value=$SECONDARY_SERVICE" \
-  --alarm-actions "$alert_topic_arn" \
-  --ok-actions "$alert_topic_arn"
-log_event "secondary_task_alarm_activated"
 
 # derives ARN suffixes required by Application ELB metric dimensions.
 load_balancer_arn="$(aws elbv2 describe-load-balancers \
   --region "$SECONDARY_REGION" \
   --names "$SECONDARY_ALB_NAME" \
   --query 'LoadBalancers[0].LoadBalancerArn' --output text)"
-target_group_arn="$(aws elbv2 describe-target-groups \
-  --region "$SECONDARY_REGION" \
-  --names "$SECONDARY_TARGET_GROUP_NAME" \
-  --query 'TargetGroups[0].TargetGroupArn' --output text)"
+target_group_arn="$(target_group_arn_for "$SECONDARY_REGION" "$SECONDARY_TARGET_GROUP_NAME")"
 load_balancer_suffix="${load_balancer_arn#*:loadbalancer/}"
 target_group_suffix="${target_group_arn##*:}"
 
@@ -292,34 +253,29 @@ aws cloudwatch put-metric-alarm \
   --ok-actions "$alert_topic_arn"
 log_event "secondary_alb_alarm_activated"
 
-# requires two healthy secondary targets before application verification.
+# running is not serving; the load balancer must accept every task first.
 healthy_count=0
 for _ in {1..60}; do
-  healthy_count="$(aws elbv2 describe-target-health \
-    --region "$SECONDARY_REGION" \
-    --target-group-arn "$target_group_arn" \
-    --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
-  [ "$healthy_count" = "2" ] && break
+  healthy_count="$(healthy_target_count "$SECONDARY_REGION" "$target_group_arn")"
+  [ "$healthy_count" = "$WORKLOAD_DESIRED_COUNT" ] && break
   sleep 5
 done
-if [ "$healthy_count" != "2" ]; then
-  echo "error: Secondary has $healthy_count healthy ALB targets, expected 2" >&2
+if [ "$healthy_count" != "$WORKLOAD_DESIRED_COUNT" ]; then
+  echo "error: Secondary has $healthy_count healthy ALB targets, expected $WORKLOAD_DESIRED_COUNT" >&2
   exit 1
 fi
 log_event "secondary_targets_healthy"
 
+# ==== POSTCHECKS ====
 # proves the promoted database contains every write visible before the outage.
-secondary_alb_dns="$(aws elbv2 describe-load-balancers \
-  --region "$SECONDARY_REGION" \
-  --names "$SECONDARY_ALB_NAME" \
-  --query 'LoadBalancers[0].DNSName' --output text)"
+secondary_alb_dns="$(alb_dns_name "$SECONDARY_REGION" "$SECONDARY_ALB_NAME")"
 require_current_event "primary_link_slugs_before_outage"
 primary_slugs_before_outage="$(current_drill_event_ts primary_link_slugs_before_outage)"
 if ! missing_slugs="$(require_all_short_links_direct "$WORKLOAD_HOST" "$secondary_alb_dns" "$primary_slugs_before_outage")"; then
   echo "error: Secondary is missing pre-outage links: $missing_slugs; traffic must not be switched" >&2
   exit 1
 fi
-# records wall-clock secondary verification because replicated row timestamps cannot measure data-loss time.
+# wall-clock, since a replicated row's own timestamp cannot measure data-loss time.
 log_event "pre_outage_link_verified_in_secondary"
 
 # proves promoted secondary accepts new writes instead of only serving replicated reads.
@@ -332,11 +288,4 @@ log_event "secondary_write_verified"
 curl --fail --silent --show-error "https://${SENTRY_HOST}/healthz" >/dev/null
 log_event "sentry_available_during_failover"
 
-cat <<EOF
-
-Secondary is promoted, healthy, writing, and running two tasks across two AZs.
-Traffic has NOT been switched.
-
-Next operator-gated step:
-  CONFIRM_TRAFFIC_SWITCH=secondary scripts/drills/switch-traffic.sh secondary
-EOF
+echo "Secondary is promoted, healthy, writing, and running two tasks across two AZs. Traffic has NOT been switched."

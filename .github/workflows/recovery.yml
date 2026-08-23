@@ -119,6 +119,8 @@ jobs:
 
       # The image digest comes from the SSM parameter ecs-url-shortener.yml publishes, so no
       # digest travels through this workflow as a variable.
+      # desired_count=0 is required, not just tidy: the app runs CREATE TABLE IF NOT EXISTS on
+      # boot, which a read-only replica rejects, so no task may start until cutover promotes it.
       - name: Plan reverse replication to primary
         working-directory: terraform/environments/primary
         run: |
@@ -190,20 +192,7 @@ jobs:
       - name: Verify primary reverse replica
         run: |
           aws rds wait db-instance-available --region "$PRIMARY_REGION" --db-instance-identifier "$PROJECT_NAME-primary"
-          source="$(aws rds describe-db-instances --region "$PRIMARY_REGION" \
-            --db-instance-identifier "$PROJECT_NAME-primary" \
-            --query 'DBInstances[0].ReadReplicaSourceDBInstanceIdentifier' --output text)"
-          desired="$(aws ecs describe-services --region "$PRIMARY_REGION" \
-            --cluster "$PROJECT_NAME-primary" --services "$PROJECT_NAME-primary" \
-            --query 'services[0].desiredCount' --output text)"
-          if [[ "$source" != *"$PROJECT_NAME-secondary"* ]]; then
-            echo "Primary replicates from $source, expected the secondary writer." >&2
-            exit 1
-          fi
-          if [ "$desired" != "0" ]; then
-            echo "Primary desired count is $desired, expected 0 before serving traffic." >&2
-            exit 1
-          fi
+          scripts/ci/guard-topology.sh primary-reverse-replica
 
   failback-reset-plan:
     name: Plan primary-to-secondary pilot-light restoration

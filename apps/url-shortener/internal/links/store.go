@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	// imported for *pq.Error inspection in Create, and for the side effect of registering the "postgres" sql driver used by Open.
+	// used for *pq.Error inspection in Create, and registers the "postgres" sql driver.
 	"github.com/lib/pq"
 )
 
@@ -24,7 +24,8 @@ type Store struct {
 	db *sql.DB
 }
 
-// opens a bounded connection pool (fits comfortably under RDS's small connection limit) and pings before returning, so startup fails fast on bad credentials/connectivity.
+// bounds the pool under RDS's small connection limit and pings first, so bad
+// credentials or connectivity fail at startup instead of on the first request.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	database, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -50,7 +51,7 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
 
-// creates the links table if absent; safe to call on every startup, including against secondary's promoted replica.
+// safe on every startup, including against a freshly promoted replica.
 func (s *Store) Migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS links (
@@ -83,7 +84,7 @@ func (s *Store) Create(ctx context.Context, slug, destinationURL string) (Link, 
 	return link, nil
 }
 
-// looks up one link by slug; returns sql.ErrNoRows (wrapped) when the slug doesn't exist, which the HTTP layer maps to 404.
+// returns a wrapped sql.ErrNoRows for an unknown slug, which the HTTP layer maps to 404.
 func (s *Store) Get(ctx context.Context, slug string) (Link, error) {
 	var link Link
 	err := s.db.QueryRowContext(ctx, `

@@ -49,6 +49,8 @@ jobs:
       - name: Verify Terraform formatting
         run: terraform fmt -check -recursive terraform
 
+      # -backend=false keeps PR validation off remote state, so this needs no AWS credentials.
+      # Each root gets its own TF_DATA_DIR because a shared one would clobber the previous init.
       - name: Validate root modules without remote state
         run: |
           roots=(
@@ -79,6 +81,8 @@ jobs:
       - name: Run ShellCheck
         run: shellcheck --source-path=SCRIPTDIR scripts/config.sh scripts/ci/*.sh
 
+      # This mapping decides which roots terraform.yml plans; a wrong entry silently skips an
+      # environment instead of failing, so the module-to-root fan-out is asserted directly.
       - name: Test Terraform plan target mapping
         run: |
           test "$(scripts/ci/terraform-plan-targets.sh terraform/environments/monitoring/main.tf)" = '["monitoring"]'
@@ -89,6 +93,8 @@ jobs:
           test "$(scripts/ci/terraform-plan-targets.sh terraform/modules/rds/main.tf)" = '["primary","secondary"]'
           test "$(scripts/ci/terraform-plan-targets.sh terraform/environments/bootstrap/main.tf)" = '[]'
 
+      # Version is pinned rather than tracking latest, so a new actionlint release cannot
+      # fail unrelated PRs on rules that did not exist when they were opened.
       - name: Run actionlint
         env:
           ACTIONLINT_VERSION: 1.7.12

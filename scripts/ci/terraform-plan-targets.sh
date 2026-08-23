@@ -35,7 +35,8 @@ for path in "$@"; do
         fi
       done
       ;;
-    # terraform-ci-iam/bootstrap fall through on purpose: bootstrap creates this workflow's own CI role, so it can't be planned through this workflow, and is covered separately by infrastructure-quality.yml.
+    # bootstrap creates this workflow's own CI role, so it cannot be planned here;
+    # infrastructure-quality.yml covers it instead.
   esac
 done
 

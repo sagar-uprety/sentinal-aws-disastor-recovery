@@ -52,7 +52,7 @@ type Snapshot struct {
 	Regions []Region `json:"regions"`
 }
 
-// narrow subset of the AWS SDK ECS client this package needs; read-only, matching the sentry's least-privilege IAM.
+// narrow read-only subset of the ECS client, matching the sentry's least-privilege IAM.
 type ecsAPI interface {
 	DescribeServices(context.Context, *ecs.DescribeServicesInput, ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error)
 	DescribeTasks(context.Context, *ecs.DescribeTasksInput, ...func(*ecs.Options)) (*ecs.DescribeTasksOutput, error)
@@ -64,7 +64,7 @@ type rdsAPI interface {
 	DescribeDBInstances(context.Context, *rds.DescribeDBInstancesInput, ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error)
 }
 
-// reads one region's ECS+RDS state; a nil client (region unconfigured or AWS config load failed) makes every read a no-op.
+// reads one region's ECS+RDS state; a nil client makes every read a no-op.
 type regionReader struct {
 	ecsClient ecsAPI
 	rdsClient rdsAPI
@@ -77,7 +77,8 @@ type Service struct {
 	regions []regionReader
 }
 
-// builds one reader per configured region; a region whose AWS config fails to load keeps nil clients rather than erroring, so that region just reports unavailable.
+// a region whose AWS config fails to load keeps nil clients rather than erroring,
+// so one broken region reports unavailable instead of failing the whole service.
 func New(ctx context.Context, configs []RegionConfig) *Service {
 	service := &Service{regions: make([]regionReader, 0, len(configs))}
 	for _, regionConfig := range configs {
@@ -93,7 +94,7 @@ func New(ctx context.Context, configs []RegionConfig) *Service {
 	return service
 }
 
-// replays snapshot instead of calling AWS; local development only, wired up by TOPOLOGY_MOCK_FILE, never set in any deployed environment.
+// replays a snapshot instead of calling AWS; local development only.
 func NewMock(snapshot Snapshot) *Service {
 	return &Service{mock: &snapshot}
 }
@@ -103,7 +104,7 @@ func (s *Service) Snapshot(ctx context.Context) Snapshot {
 	if s.mock != nil {
 		return *s.mock
 	}
-	// pre-sized so each goroutine writes its own index; no mutex needed and region order stays stable (Primary first, secondary second).
+	// pre-sized so each goroutine owns one index: no mutex, and region order stays stable.
 	result := Snapshot{Regions: make([]Region, len(s.regions))}
 	var wait sync.WaitGroup
 	for i := range s.regions {
@@ -122,7 +123,8 @@ func (s *Service) Snapshot(ctx context.Context) Snapshot {
 	return result
 }
 
-// reads ECS service desired/running counts plus the AZs and short IDs of currently running tasks; returns a mostly-empty Compute on any missing config or AWS error rather than failing the whole snapshot.
+// returns a mostly-empty Compute on any missing config or AWS error, so one
+// unreachable region degrades its own card instead of the whole snapshot.
 func (r *regionReader) compute(ctx context.Context) Compute {
 	result := Compute{
 		Name: r.config.ECSService, Region: r.config.Region,
@@ -137,7 +139,7 @@ func (r *regionReader) compute(ctx context.Context) Compute {
 	if err != nil || len(services.Services) == 0 {
 		return result
 	}
-	// ECS returns unreachable/missing services in Failures rather than as an error, so an empty Failures list is the real availability signal.
+	// ECS reports missing services in Failures, not as an error, so that list is the real signal.
 	result.Available = len(services.Failures) == 0
 	result.DesiredCount = services.Services[0].DesiredCount
 	result.RunningCount = services.Services[0].RunningCount
@@ -174,7 +176,7 @@ func (r *regionReader) compute(ctx context.Context) Compute {
 	return result
 }
 
-// reads RDS instance state and derives role from whether it has a replication source: standalone/primary is "writer", a promoted or active replica is "read replica".
+// derives role from the replication source: absent means writer, present means read replica.
 func (r *regionReader) database(ctx context.Context) Database {
 	result := Database{Identifier: r.config.DatabaseIdentifier, Region: r.config.Region, Role: "unavailable"}
 	if r.rdsClient == nil || r.config.DatabaseIdentifier == "" {
@@ -194,14 +196,18 @@ func (r *regionReader) database(ctx context.Context) Database {
 	result.SecondaryAvailabilityZone = aws.ToString(instance.SecondaryAvailabilityZone)
 	result.Status = aws.ToString(instance.DBInstanceStatus)
 	result.Available = result.Status == "available"
-	result.Role = "writer"
-	if result.ReadReplicaSource != "" {
-		result.Role = "read replica"
+	// role stays "unavailable" unless the instance is actually up, so a stopped or
+	// mid-modification database is never reported as a healthy writer.
+	if result.Available {
+		result.Role = "writer"
+		if result.ReadReplicaSource != "" {
+			result.Role = "read replica"
+		}
 	}
 	return result
 }
 
-// returns the segment after the last '/' in an ECS task ARN, so the UI shows a short task ID instead of the full ARN.
+// trims an ECS task ARN to its trailing id, so the UI shows a short task id.
 func shortID(arn string) string {
 	if index := strings.LastIndex(arn, "/"); index >= 0 {
 		return arn[index+1:]

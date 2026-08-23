@@ -30,7 +30,7 @@ func (m *Memory) RecordCheck(_ context.Context, check Check) error {
 	return nil
 }
 
-// walks checks newest-first and stops at the first one older than since, since checks is append-only and time-ordered.
+// stops at the first check older than since, safe because checks is append-only.
 func (m *Memory) LatestStatuses(_ context.Context, since time.Time) ([]TargetStatus, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -52,7 +52,7 @@ func (m *Memory) LatestStatuses(_ context.Context, since time.Time) ([]TargetSta
 	return []TargetStatus{statusFromChecks(latest, up, total)}, nil
 }
 
-// scans newest-first for the target's most recent `limit` checks; already in descending CheckedAt order, no further sort needed.
+// already in descending CheckedAt order, so no further sort is needed.
 func (m *Memory) History(_ context.Context, target string, limit int) ([]Check, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -67,7 +67,7 @@ func (m *Memory) History(_ context.Context, target string, limit int) ([]Check, 
 
 func (m *Memory) Health(context.Context) error { return nil }
 
-// builds a TargetStatus from the newest check plus an up/total sample count, rounding uptime to one decimal place.
+// builds a TargetStatus from the newest check plus an up/total sample count.
 func statusFromChecks(latest Check, up, total int) TargetStatus {
 	uptime := 0.0
 	if total > 0 {

@@ -1,6 +1,5 @@
-# ARC's routing controls are on/off switches with no ALB knowledge of their own.
-# each mirrors into its own Route53 health check below, which is what actually decides which
-# ALB gets traffic.
+# ARC routing controls are on/off switches with no ALB knowledge of their own; each mirrors
+# into a Route53 health check below, which is what actually decides which ALB gets traffic.
 
 resource "aws_route53recoverycontrolconfig_cluster" "main" {
   name = "${var.project_name}-arc"

@@ -52,19 +52,6 @@ jobs:
           go-version-file: apps/sentry/go.mod
           cache-dependency-path: apps/sentry/go.sum
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: apps/sentry/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build frontend assets
-        run: npm run build
-
       - name: Run Go vet
         run: go vet ./...
 
@@ -141,9 +128,8 @@ jobs:
           cache-from: type=gha,scope=sentry
           cache-to: type=gha,mode=max,scope=sentry
 
-      # Terraform seeds this parameter with a placeholder on the first deploy_service=false
-      # apply; overwriting it with a real digest here is what lets deploy_service=true pass.
-      # publish-only has no deploy/health step to gate on, so it publishes immediately.
+      # Terraform seeds a placeholder digest; overwriting it here is what lets deploy_service=true pass.
+      # publish-only has no deploy or health step to gate on, so it publishes immediately.
       - name: Publish sentry image digest (publish-only)
         if: inputs.mode == 'publish-only'
         env:

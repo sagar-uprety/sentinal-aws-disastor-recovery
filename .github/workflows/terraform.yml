@@ -207,7 +207,8 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 150
-    # Run one at a time: primary/secondary share ECS resources with ecs-url-shortener.yml, and monitoring shares its ECS service/image-digest param with ecs-sentry.yml.
+    # Run one at a time: primary/secondary share ECS resources with ecs-url-shortener.yml,
+    # and monitoring shares its ECS service and image-digest parameter with ecs-sentry.yml.
     concurrency:
       group: terraform-operations
       cancel-in-progress: false
@@ -235,7 +236,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-apply-${{ github.run_id }}
 
-      # Failback topology can start between the plan and apply jobs (and during the approval wait); recheck before applying.
+      # Topology can drift between plan and apply, including during the approval wait.
       - name: Refuse apply during failback topology
         if: inputs.target == 'primary' || inputs.target == 'secondary'
         run: scripts/ci/guard-topology.sh no-failback

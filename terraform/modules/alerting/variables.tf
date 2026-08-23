@@ -9,7 +9,7 @@ variable "environment" {
 }
 
 variable "ecs_cluster_name" {
-  description = "ECS cluster name used in the running-task-count alarm."
+  description = "ECS cluster name, used to derive the deployment-failure rule's default service ARN scope."
   type        = string
 }
 
@@ -24,7 +24,7 @@ variable "target_group_arn_suffix" {
 }
 
 variable "ecs_desired_count" {
-  description = "Desired ECS task count for the app service, used as the running-task-count alarm threshold."
+  description = "Desired ECS task count; 0 relaxes the ALB healthy-host alarm for pilot-light standby."
   type        = number
   default     = 2
 }

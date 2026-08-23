@@ -61,7 +61,8 @@ func loadConfig() (config, error) {
 	}, nil
 }
 
-// builds the primary/secondary region list from PREFIX_-scoped env vars, requiring all four per region or none.
+// builds the region list from PREFIX_-scoped env vars; all four per region or none,
+// so a half-configured region fails loudly instead of reporting itself unavailable.
 func topologyConfig() ([]topology.RegionConfig, error) {
 	prefixes := []string{"PRIMARY", "SECONDARY"}
 	regions := make([]topology.RegionConfig, 0, len(prefixes))
@@ -110,7 +111,8 @@ func validateTarget(raw string) error {
 	return nil
 }
 
-// replays TOPOLOGY_MOCK_FILE when set, since real AWS ECS/RDS topology cannot exist locally; never set outside docker-compose.
+// replays TOPOLOGY_MOCK_FILE when set, since live ECS/RDS topology cannot exist
+// locally; never set outside docker-compose.
 func loadTopologyService(ctx context.Context, cfg *config) (*topology.Service, error) {
 	if cfg.topologyMockFile == "" {
 		return topology.New(ctx, cfg.regions), nil
@@ -151,7 +153,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// defaults to in-memory storage for local dev; switches to DynamoDB only when a table is configured (real deploys).
+	// in-memory for local dev; DynamoDB only when a table is configured.
 	var dataStore store.Store = store.NewMemory(cfg.monitoredURL)
 	storeKind := "memory"
 	if cfg.dynamoTable != "" {
@@ -162,7 +164,7 @@ func run() error {
 		dataStore = store.NewDynamoDB(dynamodb.NewFromConfig(awsCfg), cfg.dynamoTable, cfg.monitoredURL)
 		storeKind = "dynamodb"
 	}
-	slog.Info("starting sentinel", "port", cfg.port, "target", cfg.monitoredURL, "store", storeKind, "interval_seconds", cfg.checkInterval.Seconds())
+	slog.Info("starting sentry", "port", cfg.port, "target", cfg.monitoredURL, "store", storeKind, "interval_seconds", cfg.checkInterval.Seconds())
 
 	// the checker runs in the background for the process lifetime; ctx cancellation on shutdown stops it.
 	checker := sentry.NewChecker(dataStore, cfg.monitoredURL, cfg.checkInterval, cfg.httpTimeout)
