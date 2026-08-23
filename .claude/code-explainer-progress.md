@@ -21,5 +21,17 @@ Multi-region AWS disaster recovery project, pilot-light strategy. Two independen
 - [ ] terraform/environments/monitoring
 - [ ] apps/ (Go services) - not yet started
 
+## DR drills & runbook track
+- [ ] recovery-flow.drawio.png - diagram walked 2026-08-23 (overview only, no per-file verification needed - visual map)
+- [ ] docs/runbook-ha.md
+- [ ] docs/runbook-failover.md
+- [ ] scripts/drills/drill-lib.sh
+- [ ] scripts/drills/switch-traffic.sh
+- [ ] scripts/drills/simulate-disaster.sh
+- [ ] scripts/drills/simulate-ha.sh
+- [ ] scripts/drills/failover.sh
+- [ ] scripts/drills/measure.sh
+- [ ] scripts/drills/failback.sh
+
 ## CI/CD track
 - [x] .github/workflows/recovery.yml - explained 2026-08-22 (targeted, revisited same day for logic/clean audit). Verified -replace semantics via HashiCorp docs (forces destroy+recreate unconditionally). False alarm on terraform.yml's concurrency comment: initially flagged+edited it as stale (thought sentry.yml/workload.yml didn't share the terraform-operations lock), but that was my own grep missing job-level `concurrency:` overrides (only checked top-level, unindented) - both workflows' deploy jobs DO override to terraform-operations at job level. Reverted the edit; original comment was correct. Real bug found+fixed on revisit: `-replace='module.rds.aws_db_instance.main[0]'` (both failback-prepare-plan and failback-reset-plan) used a stale `[0]` index left over from when the rds module had `count = 1`; module.rds.aws_db_instance.main has no count now (verified via grep on rds/main.tf and both module "rds" blocks) - `-replace` would have hard-failed with "Invalid target address" during a real failback drill. Fixed both to `module.rds.aws_db_instance.main`. Also renamed .github/workflows/sentry.yml -> ecs-sentry.yml, workload.yml -> ecs-url-shortener.yml, and terraform/modules/workload-ecs-service -> ecs-url-shortener, sentry-ecs-service -> ecs-sentry (all cross-refs updated: source paths, generated app-deploy-iam README via terraform-docs, primary/secondary/monitoring main.tf comments, README.md; historical docs left as-is).

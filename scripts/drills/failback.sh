@@ -147,7 +147,7 @@ freeze-writes)
     --names "$SECONDARY_TARGET_GROUP_NAME" \
     --query 'TargetGroups[0].TargetGroupArn' --output text)"
   require_current_event "secondary_link_slug"
-  final_link_slug="$(current_event_ts secondary_link_slug)"
+  final_link_slug="$(current_drill_event_ts secondary_link_slug)"
   if ! require_short_link_direct "$WORKLOAD_HOST" "$secondary_alb_dns" "$final_link_slug"; then
     echo "error: active secondary does not contain expected link $final_link_slug" >&2
     exit 1
@@ -205,12 +205,12 @@ promote-primary)
   if has_no_replication_source "$primary_replicates_from"; then
     require_current_event "primary_promotion_invoked"
     require_current_event "failback_cutover_lag_seconds"
-    if [ -n "$(current_event_ts primary_service_stable)" ]; then
+    if [ -n "$(current_drill_event_ts primary_service_stable)" ]; then
       echo "error: current drill already recorded primary_service_stable; refusing ambiguous retry" >&2
       exit 1
     fi
     promotion_state="promoted"
-  elif [ -n "$(current_event_ts primary_promotion_invoked)" ]; then
+  elif [ -n "$(current_drill_event_ts primary_promotion_invoked)" ]; then
     # resumes polling because AWS retains the source ARN while promotion is modifying.
     promotion_state="in_progress"
   elif [ "$status" != "available" ] || [[ "$primary_replicates_from" != *"$SECONDARY_DB_ID"* ]]; then
@@ -264,7 +264,7 @@ promote-primary)
     echo "error: primary promotion did not produce an available standalone database" >&2
     exit 1
   fi
-  if [ -z "$(current_event_ts primary_promoted)" ]; then
+  if [ -z "$(current_drill_event_ts primary_promoted)" ]; then
     log_event "primary_promoted"
   fi
 
@@ -347,7 +347,7 @@ ready)
   require_current_event "failback_replica_verified"
   require_current_event "failback_writes_frozen"
   require_current_event "failback_secondary_final_link_slug"
-  known_link_slug="$(current_event_ts failback_secondary_final_link_slug)"
+  known_link_slug="$(current_drill_event_ts failback_secondary_final_link_slug)"
 
   # rechecks database topology because traffic switching makes primary authoritative again.
   read -r db_status primary_replicates_from multi_az <<<"$(aws rds describe-db-instances \
@@ -433,7 +433,7 @@ delete-snapshot)
   fi
   require_current_event "topology_reset_verified"
   require_current_event "secondary_pre_failback_snapshot"
-  recorded_snapshot_id="$(current_event_ts secondary_pre_failback_snapshot)"
+  recorded_snapshot_id="$(current_drill_event_ts secondary_pre_failback_snapshot)"
 
   # prevents deleting an unrelated snapshot supplied by operator input.
   if [ "$snapshot_id" != "$recorded_snapshot_id" ]; then

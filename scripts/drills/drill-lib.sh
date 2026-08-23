@@ -2,7 +2,7 @@
 # shares append-only event evidence and direct short-link helpers across drill steps.
 
 readonly DRILL_LOG="${DRILL_LOG:-./drill-events.log}"
-readonly LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/${PROJECT_NAME}/primary/link-create-token}"
+readonly LINK_TOKEN_PARAMETER="${LINK_TOKEN_PARAMETER:-/${PROJECT_NAME}/primary/link-create-token}"  # PROJECT_NAME exported by caller (CI env / drill script)
 
 # appends a UTC event timestamp used to order drill phases.
 log_event() {
@@ -17,7 +17,7 @@ record_event_at() {
 }
 
 # reads only the latest drill segment so stale events cannot satisfy current guards.
-current_event_ts() {
+current_drill_event_ts() {
   awk -F'\t' -v event="$1" '
     $1 == "drill_started" { found = 1; value = "" }
     found && $1 == event { value = $2 }
@@ -28,7 +28,7 @@ current_event_ts() {
 # stops a later phase unless its prerequisite exists in the current drill.
 require_current_event() {
   local timestamp
-  timestamp="$(current_event_ts "$1")"
+  timestamp="$(current_drill_event_ts "$1")"
   if [ -z "$timestamp" ]; then
     echo "error: current drill has no $1 event in $DRILL_LOG" >&2
     exit 1

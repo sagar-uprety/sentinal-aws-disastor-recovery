@@ -38,7 +38,7 @@ determine_promotion_state() {
   # treats a standalone writer as resumable only when this drill invoked promotion.
   if has_no_replication_source "$secondary_replicates_from"; then
     require_current_event "failover_invoked"
-    if [ -n "$(current_event_ts replica_promoted)" ]; then
+    if [ -n "$(current_drill_event_ts replica_promoted)" ]; then
       echo "error: current drill already recorded replica_promoted; refusing ambiguous retry" >&2
       exit 1
     fi
@@ -52,7 +52,7 @@ determine_promotion_state() {
   fi
 
   # resumes polling because AWS retains the source ARN while promotion is modifying.
-  if [ -n "$(current_event_ts failover_invoked)" ]; then
+  if [ -n "$(current_drill_event_ts failover_invoked)" ]; then
     promotion_state="in_progress"
     return
   fi
@@ -314,7 +314,7 @@ secondary_alb_dns="$(aws elbv2 describe-load-balancers \
   --names "$SECONDARY_ALB_NAME" \
   --query 'LoadBalancers[0].DNSName' --output text)"
 require_current_event "primary_link_slugs_before_outage"
-primary_slugs_before_outage="$(current_event_ts primary_link_slugs_before_outage)"
+primary_slugs_before_outage="$(current_drill_event_ts primary_link_slugs_before_outage)"
 if ! missing_slugs="$(require_all_short_links_direct "$WORKLOAD_HOST" "$secondary_alb_dns" "$primary_slugs_before_outage")"; then
   echo "error: Secondary is missing pre-outage links: $missing_slugs; traffic must not be switched" >&2
   exit 1

@@ -42,7 +42,7 @@ secondary)
   new_secondary="On"
   target_region="$SECONDARY_REGION"
   target_alb="${SECONDARY_RESOURCE_NAME}-alb"
-  verification_slug="$(current_event_ts pre_outage_link_slug)"
+  verification_slug="$(current_drill_event_ts pre_outage_link_slug)"
   initialize=false
   ;;
 primary)
@@ -58,7 +58,7 @@ primary)
   new_secondary="Off"
   target_region="$PRIMARY_REGION"
   target_alb="${PRIMARY_RESOURCE_NAME}-alb"
-  verification_slug="$(current_event_ts failback_secondary_final_link_slug)"
+  verification_slug="$(current_drill_event_ts failback_secondary_final_link_slug)"
   initialize=false
   ;;
 *)
