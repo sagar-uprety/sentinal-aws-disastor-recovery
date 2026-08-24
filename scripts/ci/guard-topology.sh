@@ -49,7 +49,7 @@ guard_route53_delegation() {
   for nameserver in $(aws route53 get-hosted-zone --id "$zone_id" \
     --query 'DelegationSet.NameServers' --output text); do
     if ! dig +short NS "$BASE_DOMAIN" | grep -Fxq "${nameserver%.}."; then
-      fail "missing public delegation to $nameserver; apply bootstrap and update Cloudflare first"
+      fail "missing public delegation to $nameserver; apply bootstrap and publish its nameservers at the registrar or parent zone first"
     fi
   done
 }
