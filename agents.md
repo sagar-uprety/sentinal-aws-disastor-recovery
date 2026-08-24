@@ -9,12 +9,9 @@
 
 - AWS MCP is read-only. AWS mutations are allowed only through reviewed repository Terraform GitHub Actions workflows or guarded scripts with explicit user approval. One explicit approval may cover a documented multi-step drill such as M6; stop and ask again only when observed state is unsafe, unexpected, or materially differs from the runbook.
 
-
-- always work on feature branch and use conventional commits, commit message should be short and to the point human readable.
+- use conventional commits, commit message should be short and to the point human readable.
 
 - You must always ask the user confirmation to check for code changes before committing
-
-- Create PR using gh actions after each milestone is completed.
 
 - Use single line comment for code blocks, functions, terraform resources etc. which you think needs explanation. super obvious things do not need any comment
 

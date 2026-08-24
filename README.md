@@ -159,8 +159,9 @@ The commands below use the [GitHub CLI](https://cli.github.com). Without it, dis
 If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so they have to be republished, and the recreated IAM roles get new ARNs, so the four role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
 
 ```bash
-scripts/bootstrap.sh plan
-CONFIRM_BOOTSTRAP=APPLY_BOOTSTRAP scripts/bootstrap.sh apply
+terraform -chdir=terraform/environments/bootstrap init
+terraform -chdir=terraform/environments/bootstrap plan -out=bootstrap.tfplan
+terraform -chdir=terraform/environments/bootstrap apply bootstrap.tfplan
 ```
 
 Publish the nameservers the bootstrap output prints before continuing: set them at your registrar if `base_domain` is a domain you registered, or add them as NS records in the parent zone if it is a subdomain. Nothing resolves until they are live.
