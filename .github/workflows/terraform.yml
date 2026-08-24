@@ -182,10 +182,6 @@ jobs:
         working-directory: ${{ env.TF_ROOT }}
         run: terraform plan -input=false -lock-timeout=5m -out=tfplan
 
-      - name: Show plan
-        working-directory: ${{ env.TF_ROOT }}
-        run: terraform show -no-color tfplan
-
       # Saved so the approver reviews these exact bytes, and apply runs them as-is instead of re-planning.
       - name: Save plan for apply
         uses: actions/upload-artifact@v7
