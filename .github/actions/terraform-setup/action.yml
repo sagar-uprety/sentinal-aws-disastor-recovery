@@ -5,8 +5,9 @@ description: >-
 
 inputs:
   terraform-version:
-    description: Terraform version to install.
-    required: true
+    description: Terraform version to install. Defaults to the pinned .terraform-version.
+    required: false
+    default: ""
   role-arn:
     description: IAM role to assume. Leave empty to skip AWS credential configuration (e.g. offline validate jobs).
     required: false
@@ -23,10 +24,25 @@ inputs:
 runs:
   using: composite
   steps:
+    # .terraform-version is the single pin shared with tfenv and local runs.
+    - name: Resolve Terraform version
+      id: version
+      shell: bash
+      run: |
+        version="${{ inputs.terraform-version }}"
+        if [ -z "$version" ]; then
+          version="$(tr -d '[:space:]' < .terraform-version)"
+        fi
+        if [ -z "$version" ]; then
+          echo "error: no terraform version supplied and .terraform-version is empty" >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
       with:
-        terraform_version: ${{ inputs.terraform-version }}
+        terraform_version: ${{ steps.version.outputs.version }}
         terraform_wrapper: false
 
     - name: Configure AWS credentials

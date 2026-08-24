@@ -37,7 +37,7 @@ replica_source_of() {
 
 # keeps sentry reads consistent across guards that inspect reported topology.
 topology_json() {
-  curl --fail --show-error --silent "https://sentry.${BASE_DOMAIN}/topology"
+  curl --fail --show-error --silent "$SENTRY_URL/topology"
 }
 
 # ensures public DNS exposes every Route 53 nameserver required by ACM and failover records.
@@ -161,7 +161,7 @@ guard_primary_reverse_replica() {
 
 # prevents secondary reset until primary is serving from an available Multi-AZ writer.
 guard_primary_serving_traffic() {
-  if ! curl --fail --show-error --silent "https://shortener.${BASE_DOMAIN}/healthz" >/dev/null; then
+  if ! curl --fail --show-error --silent "$WORKLOAD_URL/healthz" >/dev/null; then
     fail "primary workload is not serving /healthz"
   fi
   if ! jq -e --arg region "$PRIMARY_REGION" \
@@ -221,7 +221,7 @@ wait_primary_recovered() {
   local status
   while [ "$(date -u +%s)" -lt "$deadline" ]; do
     status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-      "https://shortener.${BASE_DOMAIN}/healthz" || true)"
+      "$WORKLOAD_URL/healthz" || true)"
     if [ "$status" = "200" ] && jq -e --arg region "$PRIMARY_REGION" '
       any(.regions[];
         .region == $region and .compute.desired == 2 and .compute.running == 2

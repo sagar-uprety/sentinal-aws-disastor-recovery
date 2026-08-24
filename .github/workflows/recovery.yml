@@ -32,11 +32,6 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TERRAFORM_VERSION: ${{ vars.TERRAFORM_VERSION }}
-  PROJECT_NAME: ${{ vars.PROJECT_NAME }}
-  BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
-  PRIMARY_REGION: ${{ vars.PRIMARY_REGION }}
-  SECONDARY_REGION: ${{ vars.SECONDARY_REGION }}
 
 jobs:
   preflight:
@@ -66,8 +61,6 @@ jobs:
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
-        with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Validate recovery root modules
         run: |
@@ -93,10 +86,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      # scripts/config.sh is the single source for regions and resource names.
+      - name: Load project configuration
+        run: |
+          source scripts/config.sh
+          {
+            echo "PROJECT_NAME=$PROJECT_NAME"
+            echo "PRIMARY_REGION=$PRIMARY_REGION"
+            echo "SECONDARY_REGION=$SECONDARY_REGION"
+            echo "SENTRY_REGION=$SENTRY_REGION"
+          } >> "$GITHUB_ENV"
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.PRIMARY_REGION }}
           session-name: terraform-failback-prepare-plan-${{ github.run_id }}
@@ -159,10 +162,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      # scripts/config.sh is the single source for regions and resource names.
+      - name: Load project configuration
+        run: |
+          source scripts/config.sh
+          {
+            echo "PROJECT_NAME=$PROJECT_NAME"
+            echo "PRIMARY_REGION=$PRIMARY_REGION"
+            echo "SECONDARY_REGION=$SECONDARY_REGION"
+            echo "SENTRY_REGION=$SENTRY_REGION"
+          } >> "$GITHUB_ENV"
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.PRIMARY_REGION }}
           session-name: terraform-failback-prepare-apply-${{ github.run_id }}
@@ -208,10 +221,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      # scripts/config.sh is the single source for regions and resource names.
+      - name: Load project configuration
+        run: |
+          source scripts/config.sh
+          {
+            echo "PROJECT_NAME=$PROJECT_NAME"
+            echo "PRIMARY_REGION=$PRIMARY_REGION"
+            echo "SECONDARY_REGION=$SECONDARY_REGION"
+            echo "SENTRY_REGION=$SENTRY_REGION"
+          } >> "$GITHUB_ENV"
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.PRIMARY_REGION }}
           session-name: terraform-failback-reset-plan-${{ github.run_id }}
@@ -268,10 +291,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      # scripts/config.sh is the single source for regions and resource names.
+      - name: Load project configuration
+        run: |
+          source scripts/config.sh
+          {
+            echo "PROJECT_NAME=$PROJECT_NAME"
+            echo "PRIMARY_REGION=$PRIMARY_REGION"
+            echo "SECONDARY_REGION=$SECONDARY_REGION"
+            echo "SENTRY_REGION=$SENTRY_REGION"
+          } >> "$GITHUB_ENV"
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.PRIMARY_REGION }}
           session-name: terraform-failback-reset-apply-${{ github.run_id }}

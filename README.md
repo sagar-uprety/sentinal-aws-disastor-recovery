@@ -127,11 +127,11 @@ Every value below is account-specific. Set them before the first apply; the defa
 | `terraform/environments/primary/terraform.tfvars` | `base_domain`, `alert_email`, `github_org`, `github_repo` | Same values |
 | `terraform/environments/secondary/terraform.tfvars` | `base_domain`, `alert_email` | Same values |
 
-**Drill scripts.** `scripts/config.sh` reads `BASE_DOMAIN`, `PROJECT_NAME`, `PRIMARY_REGION`, and `SECONDARY_REGION` from the environment and falls back to the defaults committed there. Change those defaults, or export the variables before running a drill. `BASE_DOMAIN` must match the Terraform value or every drill precondition resolves the wrong hostname.
+**Drill scripts and CI.** `scripts/config.sh` holds `PROJECT_NAME`, `BASE_DOMAIN`, the three Regions, and the hostnames derived from them, each overridable by an environment variable of the same name. The drills source it directly and the workflows load it after checkout, so change the committed defaults rather than setting values in two places. `BASE_DOMAIN` must match the Terraform value or every precondition resolves the wrong hostname.
 
 **GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
 
-**GitHub repository variables.** The workflows read all of these. A missing one produces an empty value rather than an error, so the run fails later and less clearly.
+**GitHub repository variables.** Seven, listed below. Everything else the workflows need comes from `scripts/config.sh` and `.terraform-version`, loaded after checkout, so there is one source of truth per value.
 
 The role ARNs cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
 
@@ -139,17 +139,13 @@ The role ARNs cannot all be set up front. Bootstrap mints the two Terraform role
 |---|---|
 | `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
 | `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
-| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
 | `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
-| `PROJECT_NAME` | Matches `project_name` in the bootstrap tfvars |
-| `BASE_DOMAIN` | Matches `base_domain` in the tfvars |
+| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
 | `WORKLOAD_URL` | `https://shortener.<base_domain>` |
 | `SENTRY_URL` | `https://sentry.<base_domain>` |
-| `PRIMARY_REGION` | `eu-central-1` |
-| `SECONDARY_REGION` | `eu-west-1` |
-| `SENTRY_REGION` | `eu-north-1` |
-| `AWS_REGION_MAP` | JSON map of environment to Region used by the deploy workflows |
-| `TERRAFORM_VERSION` | Terraform version the workflows install |
+| `AWS_REGION_MAP` | JSON object mapping `monitoring`, `primary`, and `secondary` to their Regions |
+
+The last three duplicate values that also live in `scripts/config.sh`, and they have to. GitHub evaluates job-level `env:` and `environment:` before `actions/checkout` runs, so no repository file exists yet at that point. `AWS_REGION_MAP` feeds a job-level `env:` and the two URLs feed `environment.url:`. Keep them in step with the tfvars.
 
 ### Deploy
 
