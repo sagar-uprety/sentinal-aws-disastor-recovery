@@ -150,18 +150,7 @@ terraform -chdir=terraform/environments/bootstrap plan -out=bootstrap.tfplan
 terraform -chdir=terraform/environments/bootstrap apply bootstrap.tfplan
 ```
 
-Bootstrap prints six outputs. Only three need any action:
-
-| Output | What to do with it |
-|---|---|
-| `route53_zone_name_servers` | Delegate `base_domain` to these four, below |
-| `terraform_github_apply_role_arn` | Set as the `AWS_TERRAFORM_ROLE_ARN` repository variable |
-| `terraform_github_plan_role_arn` | Set as the `AWS_TERRAFORM_PLAN_ROLE_ARN` repository variable |
-| `state_bucket` | Nothing. Confirm it matches `bucket` in each `backend.tf` |
-| `github_oidc_provider_arn` | Nothing. The primary and monitoring roots look the provider up themselves |
-| `route53_zone_id` | Nothing. The other roots look the zone up by name |
-
-Delegate `base_domain` by creating an NS record in the parent zone pointing at all four nameservers: through your registrar's nameserver settings for a domain you registered, or directly in the parent zone for a subdomain. For a subdomain the record is named for the subdomain label itself, not the parent apex. Nothing resolves, and certificate validation in step 2 hangs, until the delegation is live.
+Delegate `base_domain` by creating an NS record in the parent zone pointing at the four nameservers in the `route53_zone_name_servers` output: through your registrar's nameserver settings for a domain you registered, or directly in the parent zone for a subdomain. For a subdomain the record is named for the subdomain label itself, not the parent apex. Nothing resolves, and certificate validation in step 2 hangs, until the delegation is live.
 
 ```bash
 dig +short NS pilotlight.sagaruprety.com.np
