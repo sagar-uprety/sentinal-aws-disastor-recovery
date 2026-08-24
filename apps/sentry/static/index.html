@@ -117,7 +117,7 @@ h1 span{color:var(--blue)}
 
     // Disaster recovery sits at desired=0 by design until a drill promotes it.
     // That is 'standby', not a fault. Only a running/desired mismatch, an
-    // unavailable database, or production sitting at desired=0 is 'degraded'.
+    // unavailable database, or primary sitting at desired=0 is 'degraded'.
     function regionState(entry, index) {
       const c = entry.compute || {};
       const d = entry.database || {};
@@ -133,7 +133,7 @@ h1 span{color:var(--blue)}
       const d = entry.database || {};
       const state = regionState(entry, index);
       const [healthClass, healthLabel] = STATE_BADGE[state];
-      const role = index === 0 ? 'Production' : 'Disaster Recovery';
+      const role = index === 0 ? 'Primary' : 'Secondary';
       const regionClass = index === 0 ? 'primary' : 'secondary';
 
       const zones = Array.isArray(c.availability_zones) && c.availability_zones.length > 0
@@ -185,7 +185,7 @@ h1 span{color:var(--blue)}
         el.innerHTML = '<span class="pin"></span>Neither region is currently serving';
         return;
       }
-      const role = activeIndex === 0 ? 'PRODUCTION' : 'DISASTER RECOVERY';
+      const role = activeIndex === 0 ? 'PRIMARY' : 'SECONDARY';
       el.className = activeIndex === 0 ? 'primary' : 'secondary';
       el.innerHTML = '<span class="pin"></span>Live traffic served by <strong>' + role + ' · ' + esc(entries[activeIndex].region) + '</strong>';
     }

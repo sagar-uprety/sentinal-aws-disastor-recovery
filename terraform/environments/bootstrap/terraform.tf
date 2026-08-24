@@ -9,7 +9,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "eu-central-1"
+  region = local.cfg.regions.primary
   default_tags {
     tags = {
       Project     = local.project_name

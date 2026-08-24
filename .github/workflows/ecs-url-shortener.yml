@@ -110,13 +110,14 @@ jobs:
       - name: Load project configuration
         id: config
         uses: ./.github/actions/load-config
+        with:
+          target: primary
 
       - name: Resolve workload deployment targets
         run: |
           {
-            echo "AWS_REGION=$PRIMARY_REGION"
             echo "SECONDARY_AWS_REGION=$SECONDARY_REGION"
-            echo "ECR_REPOSITORY=$PRIMARY_RESOURCE_NAME"
+            echo "ECR_REPOSITORY=$PROJECT_NAME-$WORKLOAD_APP_NAME"
             echo "ECS_CLUSTER=$PRIMARY_RESOURCE_NAME"
             echo "ECS_SERVICE=$PRIMARY_RESOURCE_NAME"
             echo "SECONDARY_ECS_CLUSTER=$SECONDARY_RESOURCE_NAME"

@@ -42,23 +42,23 @@ module "ecr" {
   source = "../../modules/ecr"
 
   project_name = local.project_name
-  environment  = local.environment
+  app_name     = local.app_name
 }
 
-# replicates every image push to eu-west-1 under the same repository name and
+# replicates every image push to the secondary region under the same repository name and
 # digest, so the secondary environment can deploy from a local pull
 resource "aws_ecr_replication_configuration" "main" {
   replication_configuration {
     rule {
       destination {
-        region      = "eu-west-1"
+        region      = local.cfg.regions.secondary
         registry_id = data.aws_caller_identity.current.account_id
       }
 
       # scoping the repository name to just the primary image avoids replicating any other images
       # that might be pushed to the same account, e.g. from other projects or environments
       repository_filter {
-        filter      = "${local.project_name}-primary"
+        filter      = "${local.project_name}-${local.app_name}"
         filter_type = "PREFIX_MATCH"
       }
     }
@@ -98,8 +98,8 @@ module "ecs" {
     : "skip"
   )
   db_endpoint               = var.deploy_service ? module.rds.endpoint : "skip"
-  db_name                   = "pilotlight"
-  db_user                   = "pilotlight"
+  db_name                   = local.project_name
+  db_user                   = local.project_name
   db_password_ssm_arn       = aws_ssm_parameter.database_password_primary.arn
   link_create_token_ssm_arn = aws_ssm_parameter.link_create_token_primary.arn
 
@@ -145,17 +145,23 @@ module "github_oidc" {
   ecs_cluster_arn            = module.ecs.cluster_arn
   # Constructed rather than referenced because the service only exists when deploy_service is true.
   ecs_service_arn = format(
-    "arn:aws:ecs:eu-central-1:%s:service/%s-%s/%s-%s",
-    local.account_id, local.project_name, local.environment, local.project_name, local.environment,
+    "arn:aws:ecs:%s:%s:service/%s-%s/%s-%s",
+    local.region, local.account_id, local.project_name, local.environment, local.project_name, local.environment,
   )
   ecs_task_execution_role_arn = module.ecs.task_execution_role_arn
   ecs_task_role_arn           = module.ecs.task_role_arn
 
-  secondary_ecs_cluster_arn    = "arn:aws:ecs:eu-west-1:${local.account_id}:cluster/${local.project_name}-secondary"
-  secondary_ecr_repository_arn = "arn:aws:ecr:eu-west-1:${local.account_id}:repository/${local.project_name}-primary"
+  secondary_ecs_cluster_arn = format(
+    "arn:aws:ecs:%s:%s:cluster/%s-secondary",
+    local.cfg.regions.secondary, local.account_id, local.project_name,
+  )
+  secondary_ecr_repository_arn = format(
+    "arn:aws:ecr:%s:%s:repository/%s-%s",
+    local.cfg.regions.secondary, local.account_id, local.project_name, local.app_name,
+  )
   secondary_ecs_service_arn = format(
-    "arn:aws:ecs:eu-west-1:%s:service/%s-secondary/%s-secondary",
-    local.account_id, local.project_name, local.project_name,
+    "arn:aws:ecs:%s:%s:service/%s-secondary/%s-secondary",
+    local.cfg.regions.secondary, local.account_id, local.project_name, local.project_name,
   )
   secondary_ecs_task_execution_role_arn = format(
     "arn:aws:iam::%s:role/%s-secondary-ecs-task-exec",
@@ -186,8 +192,8 @@ module "rds" {
   password_wo         = ephemeral.random_password.database.result
   password_wo_version = var.credential_version
 
-  db_name  = "pilotlight"
-  username = "pilotlight"
+  db_name  = local.project_name
+  username = local.project_name
 }
 
 # Terraform seeds this so the foundation phase can run before any image exists;

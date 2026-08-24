@@ -7,6 +7,7 @@ locals {
   # separate from primary and secondary so a regional incident in either drill region
   # can't also take down the sentry.
   region   = local.cfg.regions.monitoring
+  app_name = local.cfg.apps.monitoring
   azs      = local.cfg.azs.monitoring
   vpc_cidr = "10.2.0.0/24"
 

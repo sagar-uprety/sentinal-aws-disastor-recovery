@@ -31,7 +31,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment name. | `string` | n/a | yes |
+| <a name="input_app_name"></a> [app\_name](#input\_app\_name) | Application the repository holds images for, e.g. url-shortener or sentry. | `string` | n/a | yes |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
 
 ## Outputs

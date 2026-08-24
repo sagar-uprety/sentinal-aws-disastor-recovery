@@ -73,6 +73,23 @@ resource "aws_route53_zone" "pilotlight" {
   }
 }
 
+# Route53's default SOA minimum (86400s) is bounded by the SOA record's own TTL for negative
+# caching (RFC 2308: min(TTL, minimum)), but at 900s that's still up to 15 minutes a resolver
+# can keep answering "no such host" for a name queried just before it was created - exactly
+# what happens on every ARC provision/teardown cycle, which destroys and recreates this
+# zone's workload record. Shrinking both to 60s bounds that gap to roughly a minute instead.
+resource "aws_route53_record" "soa" {
+  allow_overwrite = true
+  zone_id         = aws_route53_zone.pilotlight.zone_id
+  name            = local.base_domain
+  type            = "SOA"
+  ttl             = 60
+
+  records = [
+    "${aws_route53_zone.pilotlight.name_servers[0]}. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 60",
+  ]
+}
+
 # manage/pass role scoping (env-prefix wildcards) lives inside the module now,
 # so there's no per-role-name list to keep in sync here. See terraform-ci-iam/locals.tf.
 module "terraform_ci_iam" {

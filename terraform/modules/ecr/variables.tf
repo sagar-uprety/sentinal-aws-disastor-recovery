@@ -3,7 +3,7 @@ variable "project_name" {
   type        = string
 }
 
-variable "environment" {
-  description = "Deployment environment name."
+variable "app_name" {
+  description = "Application the repository holds images for, e.g. url-shortener or sentry."
   type        = string
 }

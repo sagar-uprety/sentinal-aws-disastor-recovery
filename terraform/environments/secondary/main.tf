@@ -13,7 +13,7 @@ locals {
 data "aws_ecs_service" "primary" {
   provider = aws.primary
 
-  cluster_arn  = "arn:aws:ecs:eu-central-1:${local.account_id}:cluster/${local.project_name}-primary"
+  cluster_arn  = "arn:aws:ecs:${local.cfg.regions.primary}:${local.account_id}:cluster/${local.project_name}-primary"
   service_name = "${local.project_name}-primary"
 }
 
@@ -55,7 +55,8 @@ check "engine_version_matches_primary" {
   assert {
     condition = data.aws_rds_engine_version.postgres.version == data.aws_db_instance.primary.engine_version
     error_message = format(
-      "eu-west-1's latest Postgres minor (%s) does not match primary's version (%s); resolve before creating replica.",
+      "%s's latest Postgres minor (%s) does not match primary's version (%s); resolve before creating replica.",
+      local.region,
       data.aws_rds_engine_version.postgres.version,
       data.aws_db_instance.primary.engine_version,
     )
@@ -107,8 +108,8 @@ module "ecs" {
   # the primary environment) mirrors the image into this region.
   image_uri                 = "${local.ecr_repository_url}@${local.primary_image_digest}"
   db_endpoint               = module.rds.endpoint
-  db_name                   = "pilotlight"
-  db_user                   = "pilotlight"
+  db_name                   = local.project_name
+  db_user                   = local.project_name
   db_password_ssm_arn       = data.aws_ssm_parameter.database_password_secondary.arn
   link_create_token_ssm_arn = data.aws_ssm_parameter.link_create_token_secondary.arn
 
@@ -154,14 +155,14 @@ module "rds" {
   replicate_source_db_arn = data.aws_db_instance.primary.db_instance_arn
   kms_key_id              = data.aws_kms_key.rds.arn
 
-  db_name  = "pilotlight"
-  username = "pilotlight"
+  db_name  = local.project_name
+  username = local.project_name
 }
 
 # ECR replication (configured in the primary environment) mirrors the
 # repository into this region under the same account and name.
 data "aws_ecr_repository" "app" {
-  name = "${local.project_name}-primary"
+  name = "${local.project_name}-${local.app_name}"
 }
 
 # The digest is pulled from primary's live task definition JSON rather than a

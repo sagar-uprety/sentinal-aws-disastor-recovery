@@ -40,6 +40,14 @@ It is a small PostgreSQL-backed service that creates short links behind a bearer
 
 Drill scripts use its links to check for data loss. A link created on the primary region before an outage must be readable from the secondary after promotion, and a link created on the secondary region during the outage must be readable from the primary after failback.
 
+The bearer token is generated as a Terraform ephemeral value, so it never appears in state or output. Read it from SSM instead:
+
+```bash
+aws ssm get-parameter --region eu-central-1 --name "/pilotlight/primary/link-create-token" --with-decryption --query 'Parameter.Value' --output text
+```
+
+Same command with `--region eu-west-1` reads secondary's copy of the same token.
+
 ### Sentry [`apps/sentry`](apps/sentry/README.md)
 
 It is a monitoring service that polls the workload's public health endpoint on an interval, stores its check history in DynamoDB, and reads live ECS and RDS state (of the active url shortener region) through read-only AWS APIs to report the topology of both workload Regions.
@@ -130,6 +138,8 @@ Every value below is account-specific. Set them before the first apply; the defa
 | `primary/terraform.tfvars` | same, plus `credential_version`, `link_token_version`, `multi_az` | Rotation counters and the Multi-AZ toggle |
 | `secondary/terraform.tfvars` | `alert_email` | Alert recipient |
 | `arc` | none; takes only `config.json`'s `create_arc` | Independent of primary and secondary's own lifecycle, since ARC needs both ALBs and neither region owns it |
+
+Set `deploy_service` to `false` initially, before any of the deploy steps.
 
 
 

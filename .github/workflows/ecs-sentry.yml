@@ -94,12 +94,13 @@ jobs:
       - name: Load project configuration
         id: config
         uses: ./.github/actions/load-config
+        with:
+          target: monitoring
 
       - name: Resolve sentry deployment targets
         run: |
           {
-            echo "AWS_REGION=$SENTRY_REGION"
-            echo "ECR_REPOSITORY=$PROJECT_NAME-monitoring"
+            echo "ECR_REPOSITORY=$PROJECT_NAME-$MONITORING_APP_NAME"
             echo "ECS_CLUSTER=$PROJECT_NAME-monitoring"
             echo "ECS_SERVICE=$PROJECT_NAME-monitoring"
             echo "IMAGE_DIGEST_PARAMETER=/$PROJECT_NAME/monitoring/image-digest"

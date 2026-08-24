@@ -24,7 +24,7 @@ Workflow dispatches below use the [GitHub CLI](https://cli.github.com). Without 
 
 ## Provision ARC
 
-ARC lives in its own `arc` environment, independent of primary and secondary, since it needs both ALBs and neither region owns it. Provisioning it retracts primary's plain workload record first, then creates the ARC failover pair, since Route53 rejects a plain record alongside a same-name failover pair. The hostname does not resolve for the few seconds between the two applies.
+ARC lives in its own `arc` environment, independent of primary and secondary, since it needs both ALBs and neither region owns it. Provisioning it retracts primary's plain workload record first, then creates the ARC failover pair, since Route53 rejects a plain record alongside a same-name failover pair. The hostname does not resolve for up to a minute between the two applies, bounded by the zone's 60-second negative-cache TTL (`bootstrap`'s `aws_route53_record.soa`); without that override a resolver could hold a stale answer for up to 15 minutes.
 
 Set `create_arc: true` in `config.json`, merge it, then apply primary followed by arc, in that order:
 

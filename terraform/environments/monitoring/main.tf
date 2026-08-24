@@ -21,8 +21,8 @@ module "vpc" {
 module "ecr" {
   source = "../../modules/ecr"
 
-  environment  = local.environment
   project_name = local.project_name
+  app_name     = local.app_name
 }
 
 # Terraform seeds this so the foundation phase can run before any image exists;
@@ -120,12 +120,12 @@ module "service" {
   dynamodb_table_name = aws_dynamodb_table.checks.name
   monitored_url       = "https://${local.workload_hostname}/healthz"
 
-  primary_region              = "eu-central-1"
+  primary_region              = local.cfg.regions.primary
   primary_ecs_cluster         = "${local.project_name}-primary"
   primary_ecs_service         = "${local.project_name}-primary"
   primary_database_identifier = "${local.project_name}-primary"
 
-  secondary_region              = "eu-west-1"
+  secondary_region              = local.cfg.regions.secondary
   secondary_ecs_cluster         = "${local.project_name}-secondary"
   secondary_ecs_service         = "${local.project_name}-secondary"
   secondary_database_identifier = "${local.project_name}-secondary"

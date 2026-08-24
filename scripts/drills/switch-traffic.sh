@@ -9,8 +9,8 @@ source "$SCRIPT_DIR/../config.sh"
 # shellcheck source=drill-lib.sh
 source "$SCRIPT_DIR/drill-lib.sh"
 
-# the ARC configuration API is single-region and only exists in us-west-2.
-readonly ARC_CONTROL_REGION="${ARC_CONTROL_REGION:-us-west-2}"
+# the ARC configuration API is single-region; config.json's regions.arc pins where.
+readonly ARC_CONTROL_REGION="${ARC_CONTROL_REGION:-$(region_for arc)}"
 readonly ARC_CLUSTER_NAME="${ARC_CLUSTER_NAME:-${PROJECT_NAME}-arc}"
 readonly ARC_CONTROL_PANEL_NAME="${ARC_CONTROL_PANEL_NAME:-${PROJECT_NAME}-arc}"
 readonly STATUS_HOST="$WORKLOAD_HOST"

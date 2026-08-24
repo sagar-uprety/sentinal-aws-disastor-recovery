@@ -12,5 +12,9 @@
     "secondary": ["eu-west-1a", "eu-west-1b"],
     "monitoring": ["eu-north-1a", "eu-north-1b"]
   },
+  "apps": {
+    "workload": "url-shortener",
+    "monitoring": "sentry"
+  },
   "create_arc": false
 }
