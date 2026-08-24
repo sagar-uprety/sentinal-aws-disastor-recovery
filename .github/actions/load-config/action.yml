@@ -16,9 +16,6 @@ outputs:
   sentry_url:
     description: Public URL of the sentry.
     value: ${{ steps.export.outputs.sentry_url }}
-  aws_region:
-    description: Region for the requested target, empty when no target was given.
-    value: ${{ steps.export.outputs.aws_region }}
 
 runs:
   using: composite
@@ -32,7 +29,6 @@ runs:
         source scripts/config.sh
         {
           echo "PROJECT_NAME=$PROJECT_NAME"
-          echo "BASE_DOMAIN=$BASE_DOMAIN"
           echo "PRIMARY_REGION=$PRIMARY_REGION"
           echo "SECONDARY_REGION=$SECONDARY_REGION"
           echo "SENTRY_REGION=$SENTRY_REGION"
@@ -42,7 +38,7 @@ runs:
           echo "SENTRY_URL=$SENTRY_URL"
         } >> "$GITHUB_ENV"
 
-        region=""
+        # AWS_REGION is which of the three this job acts on, known only from the dispatch input.
         if [ -n "$TARGET" ]; then
           region="$(region_for "$TARGET")" || {
             echo "error: load-config: config.json has no region for target '$TARGET'" >&2
@@ -54,5 +50,4 @@ runs:
         {
           echo "workload_url=$WORKLOAD_URL"
           echo "sentry_url=$SENTRY_URL"
-          echo "aws_region=$region"
         } >> "$GITHUB_OUTPUT"
