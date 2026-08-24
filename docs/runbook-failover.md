@@ -24,10 +24,16 @@ Workflow dispatches below use the [GitHub CLI](https://cli.github.com). Without 
 
 ## Provision ARC
 
-Set `create_arc = true` in `terraform/environments/secondary/terraform.tfvars`, merge it, then apply:
+ARC lives in its own `arc` environment, independent of primary and secondary, since it needs both ALBs and neither region owns it. Provisioning it retracts primary's plain workload record first, then creates the ARC failover pair, since Route53 rejects a plain record alongside a same-name failover pair. The hostname does not resolve for the few seconds between the two applies.
+
+Set `create_arc: true` in `config.json`, merge it, then apply primary followed by arc, in that order:
 
 ```bash
-gh workflow run terraform.yml --ref main -f operation=apply -f target=secondary
+gh workflow run terraform.yml --ref main -f operation=apply -f target=primary
+```
+
+```bash
+gh workflow run terraform.yml --ref main -f operation=apply -f target=arc
 ```
 
 Initialize the routing controls to their resting state:

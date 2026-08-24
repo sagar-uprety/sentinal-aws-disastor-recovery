@@ -275,3 +275,17 @@ resource "aws_ssm_parameter" "link_create_token_secondary" {
   value_wo         = ephemeral.random_password.link_create_token.result
   value_wo_version = var.link_token_version
 }
+
+# Simple A alias to primary's own ALB when ARC is inactive; .
+resource "aws_route53_record" "workload" {
+  count   = local.cfg.create_arc ? 0 : 1
+  zone_id = data.aws_route53_zone.pilotlight.zone_id
+  name    = local.app_hostname
+  type    = "A"
+
+  alias {
+    name                   = module.alb.alb_dns_name
+    zone_id                = module.alb.alb_zone_id
+    evaluate_target_health = true
+  }
+}

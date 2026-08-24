@@ -119,7 +119,7 @@ Only bootstrap and the drills use your own credentials. Every deploy runs in Git
 
 Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
 
-**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones. Single source of truth for Terraform, the workflows, and the drill scripts.
+**`config.json`.** Project name, base domain, the four Regions (including `arc`'s fixed `us-west-2`) with their Availability Zones, and the `create_arc` toggle. Single source of truth for Terraform, the workflows, and the drill scripts.
 
 **Per-environment tfvars.**
 
@@ -128,7 +128,8 @@ Every value below is account-specific. Set them before the first apply; the defa
 | `bootstrap/terraform.tfvars` | `state_bucket_name` | A globally unique S3 bucket name |
 | `monitoring/terraform.tfvars` | `alert_email`, `github_org`, `github_repo`, `deploy_service` | Alert recipient, your repository coordinates, and the two-phase deploy flag |
 | `primary/terraform.tfvars` | same, plus `credential_version`, `link_token_version`, `multi_az` | Rotation counters and the Multi-AZ toggle |
-| `secondary/terraform.tfvars` | `alert_email`, `create_arc` | Alert recipient, and the ARC toggle held off outside drills |
+| `secondary/terraform.tfvars` | `alert_email` | Alert recipient |
+| `arc` | none; takes only `config.json`'s `create_arc` | Independent of primary and secondary's own lifecycle, since ARC needs both ALBs and neither region owns it |
 
 
 
@@ -195,7 +196,7 @@ GitHub repository variables. Set the following from the output above
 
 | Variable | Value |
 |---|---|
-| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`|
+| `AWS_URL_SHORTENER_ROLE_ARN` | `github_actions_role_arn`|
 
 
 **5. Publish the workload image, then deploy it.** Same two-phase pattern as the sentry.
@@ -216,7 +217,7 @@ gh workflow run terraform.yml --ref main -f operation=apply -f target=primary
 gh workflow run terraform.yml --ref main -f operation=apply -f target=secondary
 ```
 
-ARC routing controls bill per cluster-hour, so they are provisioned for the duration of a drill and removed afterwards. `create_arc` is committed as `false`.
+ARC routing controls bill per cluster-hour, so they are provisioned for the duration of a drill and removed afterwards. They live in their own `arc` target, applied only when a drill needs them; see [`runbook-failover.md`](docs/runbook-failover.md#provision-arc). `create_arc` is committed as `false` in `config.json`.
 
 ### Run the drills
 
@@ -306,6 +307,7 @@ terraform/
     monitoring/      sentry: own Region, own state, own lifecycle
     primary/         primary Region workload
     secondary/       pilot-light secondary Region
+    arc/             Route 53 ARC failover pair; independent of primary and secondary
 scripts/
   drills/            operator-gated drill automation and shared drill library
   ci/                CI guards and cleanup helpers

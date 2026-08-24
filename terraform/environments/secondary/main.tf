@@ -199,35 +199,3 @@ resource "aws_route53_health_check" "secondary_detection" {
     Name = "${local.project_name}-secondary-detection"
   }
 }
-
-module "route53_failover" {
-  source = "../../modules/route53-failover"
-  count  = var.create_arc ? 1 : 0
-
-  project_name    = local.project_name
-  route53_zone_id = data.aws_route53_zone.pilotlight.zone_id
-  record_name     = local.app_hostname
-
-  primary_alb_dns_name = data.aws_lb.primary.dns_name
-  primary_alb_zone_id  = data.aws_lb.primary.zone_id
-
-  secondary_alb_dns_name = module.alb.alb_dns_name
-  secondary_alb_zone_id  = module.alb.alb_zone_id
-}
-
-# Simple A alias to primary when ARC is absent; waits for the ARC failover records to be gone
-# first, since Route53 rejects a simple record alongside same-name failover records.
-resource "aws_route53_record" "workload" {
-  count   = var.create_arc ? 0 : 1
-  zone_id = data.aws_route53_zone.pilotlight.zone_id
-  name    = local.app_hostname
-  type    = "A"
-
-  alias {
-    name                   = data.aws_lb.primary.dns_name
-    zone_id                = data.aws_lb.primary.zone_id
-    evaluate_target_health = true
-  }
-
-  depends_on = [module.route53_failover]
-}
