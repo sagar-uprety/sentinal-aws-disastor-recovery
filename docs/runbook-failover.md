@@ -15,7 +15,7 @@ The secondary Region already holds the database replica, VPC, ALB, ECS service d
 - The immutable image digest exists in the `eu-west-1` ECR repository.
 - Regional SSM SecureString parameters for the database password and link-creation token are current in both Regions.
 - Sentry is serving from `eu-north-1` on its own state and infrastructure.
-- GitHub repository variables define `AWS_TERRAFORM_ROLE_ARN`, `AWS_WORKLOAD_ROLE_ARN`, and `AWS_SENTRY_ROLE_ARN`, and the protected environments that gate the jobs consuming them exist.
+- The GitHub repository variables listed in the README's [Configure](../README.md#configure) section are set, and the protected environments that gate the jobs consuming them exist.
 - Local AWS credentials permit the ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC calls the drill scripts make. This project does not provision a separate local recovery role.
 
 Use a dedicated `DRILL_LOG` path for the session. Each simulation writes a new `drill_started` boundary, and later steps read back only to that marker, so measurements from separate drills stay separate.
@@ -83,14 +83,15 @@ RTO runs from `outage_confirmed` to `traffic_verified`. The report also breaks o
 Promotion produces a single-AZ writer. Converting it back to Multi-AZ happens after service is restored and is excluded from RTO.
 
 ```bash
+source scripts/config.sh
 aws rds modify-db-instance \
-  --region eu-west-1 \
-  --db-instance-identifier pilotlight-secondary \
+  --region "$SECONDARY_REGION" \
+  --db-instance-identifier "$SECONDARY_RESOURCE_NAME" \
   --multi-az \
   --apply-immediately
 aws rds wait db-instance-available \
-  --region eu-west-1 \
-  --db-instance-identifier pilotlight-secondary
+  --region "$SECONDARY_REGION" \
+  --db-instance-identifier "$SECONDARY_RESOURCE_NAME"
 ```
 
 ## Measurement

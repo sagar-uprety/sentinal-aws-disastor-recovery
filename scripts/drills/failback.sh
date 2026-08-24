@@ -75,7 +75,7 @@ step_snapshot() {
     --db-snapshot-identifier "$snapshot_id" >/dev/null
   aws rds wait db-snapshot-available --region "$SECONDARY_REGION" --db-snapshot-identifier "$snapshot_id"
   record_event_at "secondary_pre_failback_snapshot" "$snapshot_id"
-  echo "Snapshot $snapshot_id is available. Dispatch failback-prepare with failback_snapshot_id=$snapshot_id (see docs/runbook-failover.md)."
+  echo "Snapshot $snapshot_id is available."
 }
 
 # step 2: verify the rebuilt primary replica is current before cutover.

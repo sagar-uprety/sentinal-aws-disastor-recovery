@@ -26,13 +26,13 @@ This project maps to that definition as follows:
 | Database | RDS PostgreSQL, Multi-AZ primary with a cross-region read replica |
 | Traffic control | Route 53 Application Recovery Controller routing controls |
 | Targets | RTO 30 minutes, RPO 60 seconds |
-| Measured | RTO 666 seconds, RPO 26.0 seconds against live infrastructure |
-| Infrastructure | Terraform|
+| Measured | RTO 666 seconds, RPO 26.0 seconds against live infrastructure, 2026-08-08 |
+| Infrastructure | Terraform |
 | Recovery | Bash drill scripts and approval-gated GitHub Actions |
 
 ## Applications
 
-Two Go services live in this repository are described below:
+Two Go services live in this repository:
 
 ### URL shortener [`apps/url-shortener`](apps/url-shortener/README.md)
 
@@ -109,9 +109,44 @@ Please be aware that deploying aws resources incurs real cost. Please always des
 - [GitHub CLI](https://cli.github.com), optional. The Actions tab dispatches the same workflows.
 - [Docker](https://docs.docker.com/get-started/get-docker/) with Compose, optional, for running the applications locally.
 - A domain you can delegate a subdomain from.
-- A GitHub repository with two protected environments named `terraform-production` and `production`, and repository variables for `AWS_TERRAFORM_ROLE_ARN`, `AWS_WORKLOAD_ROLE_ARN`, and `AWS_SENTRY_ROLE_ARN`.
+- A GitHub repository with two protected environments named `terraform-production` and `production`, and the repository variables listed under [Configure](#configure).
 
 The drill scripts call ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC directly with these credentials. Deployments use short-lived GitHub OIDC roles instead.
+
+### Configure
+
+Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
+
+**Terraform.** `base_domain` is the delegated subdomain that carries every record the project creates, and it must be identical in all four files.
+
+| File | Key | Set to |
+|---|---|---|
+| `terraform/environments/bootstrap/terraform.tfvars` | `base_domain`, `project_name`, `state_bucket_name` | Your subdomain, your project prefix, and a globally unique S3 bucket name |
+| `terraform/environments/monitoring/terraform.tfvars` | `base_domain`, `alert_email`, `github_org`, `github_repo` | Your subdomain, alert recipient, and repository coordinates |
+| `terraform/environments/primary/terraform.tfvars` | `base_domain`, `alert_email`, `github_org`, `github_repo` | Same values |
+| `terraform/environments/secondary/terraform.tfvars` | `base_domain`, `alert_email` | Same values |
+
+**Drill scripts.** `scripts/config.sh` reads `BASE_DOMAIN`, `PROJECT_NAME`, `PRIMARY_REGION`, and `SECONDARY_REGION` from the environment and falls back to the defaults committed there. Change those defaults, or export the variables before running a drill. `BASE_DOMAIN` must match the Terraform value or every drill precondition resolves the wrong hostname.
+
+**GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
+
+**GitHub repository variables.** The workflows read all of these. A missing one produces an empty value rather than an error, so the run fails later and less clearly.
+
+| Variable | Value |
+|---|---|
+| `AWS_TERRAFORM_ROLE_ARN` | Apply role, from the bootstrap output |
+| `AWS_TERRAFORM_PLAN_ROLE_ARN` | Read-only plan role, from the bootstrap output |
+| `AWS_WORKLOAD_ROLE_ARN` | URL-shortener deploy role, from the bootstrap output |
+| `AWS_SENTRY_ROLE_ARN` | Sentry deploy role, from the bootstrap output |
+| `PROJECT_NAME` | Matches `project_name` in the bootstrap tfvars |
+| `BASE_DOMAIN` | Matches `base_domain` in the tfvars |
+| `WORKLOAD_URL` | `https://shortener.<base_domain>` |
+| `SENTRY_URL` | `https://sentry.<base_domain>` |
+| `PRIMARY_REGION` | `eu-central-1` |
+| `SECONDARY_REGION` | `eu-west-1` |
+| `SENTRY_REGION` | `eu-north-1` |
+| `AWS_REGION_MAP` | JSON map of environment to Region used by the deploy workflows |
+| `TERRAFORM_VERSION` | Terraform version the workflows install |
 
 ### Deploy
 
@@ -120,6 +155,8 @@ Stages apply in order, because the secondary and monitoring stacks depend on art
 The commands below use the [GitHub CLI](https://cli.github.com). Without it, dispatch the same workflows from the repository's **Actions** tab: pick the workflow, choose **Run workflow**, and set the inputs shown in each `-f` flag.
 
 **1. Bootstrap the state backend.** Creates the S3 state backend, the GitHub OIDC roles, and the delegated Route 53 zone. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
+
+If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so the delegation has to be redone, and the recreated IAM roles get new ARNs, so the four role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
 
 ```bash
 scripts/bootstrap.sh plan
@@ -180,22 +217,43 @@ If you want to see the effects of pilot-light in action yourself, run the drills
 
 **2. Regional failover.** [`docs/runbook-failover.md`](docs/runbook-failover.md) provisions ARC, injects the outage, promotes the replica, moves traffic, and measures the result.
 
-**3. Failback.** [`docs/runbook-failback.md`](docs/runbook-failback.md) returns operation to the primary Region and restores the resting topology. Each step gates on evidence the failover recorded, so the two runbooks run as one continuous sequence with the same `DRILL_LOG`.Each row below represents a real injected failure with a defined recovery expectation.
+**3. Failback.** [`docs/runbook-failback.md`](docs/runbook-failback.md) returns operation to the primary Region and restores the resting topology. Each step gates on evidence the failover recorded, so the two runbooks run as one continuous sequence with the same `DRILL_LOG`.
 
-| Layer | Injected failure | Expected recovery |
-|---|---|---|
-| Application process | Stop one ECS task | ALB drops the target, ECS replaces it, no user-visible outage |
-| Application release | Deploy an image that exits immediately | Deployment circuit breaker rolls back, alert fires |
-| Application dependency | Make the database unavailable | Tasks lose the shared connection, ALB reports no healthy targets, recovers when the database returns |
-| External egress | Block outbound NAT traffic | Application serves cached state, external checks fail |
-| AZ compute | Stop all tasks in one Availability Zone | Surviving zone serves traffic, ECS restores desired count |
-| AZ database | Force an RDS Multi-AZ failover | Application reconnects through the unchanged endpoint, interruption measured |
-| Regional failure | Full pilot-light failover | Executes against measured RTO and RPO targets |
-| Data corruption | Restore a cross-region backup into an isolated instance | Known pre-corruption data verified present |
-| Configuration drift | Compare image digests, task definitions, and SSM state across Regions | Prerequisites confirmed before a drill starts |
-| DNS control plane | Exercise ARC and its documented fallback | Traffic moves only after the secondary is verified ready |
+### Coverage
+
+Each row is a real injected failure with a defined recovery expectation, and every one has either a drill script or a documented procedure.
+
+| Layer | Injected failure | Expected recovery | Exercised by |
+|---|---|---|---|
+| Application process | Stop one ECS task | ALB drops the target, ECS replaces it, no user-visible outage | `simulate-ha.sh task` |
+| AZ compute | Stop all tasks in one Availability Zone | Surviving zone serves traffic, ECS restores desired count | `simulate-ha.sh az` |
+| AZ database | Force an RDS Multi-AZ failover | Application reconnects through the unchanged endpoint, interruption measured | `simulate-ha.sh db` |
+| Regional failure | Full pilot-light failover | Executes against measured RTO and RPO targets | `runbook-failover.md`, `runbook-failback.md` |
+| Data corruption | Restore a cross-region backup into an isolated instance | Known pre-corruption data verified present | Manual, `runbook-failover.md` § Logical corruption |
+| Configuration drift | Compare image digests, task definitions, and SSM state across Regions | Prerequisites confirmed before a drill starts | `failover.sh` preflight, `scripts/ci/guard-topology.sh` |
+| DNS control plane | Exercise ARC and its documented fallback | Traffic moves only after the secondary is verified ready | `switch-traffic.sh`; the Route 53 fallback is documented but unexercised |
 
 Do not stop at a successful failover; run the failback. Otherwise the workload stays in the secondary Region with a diverged primary and no standby.
+
+### Tear down
+
+Destroy the stack when a drill cycle is finished. The pilot light bills continuously: two NAT Gateways, two ALBs, the primary Multi-AZ database, and its cross-region replica all run at rest.
+
+Finish any failback first, and revert `create_arc` to `false`. The destroy job refuses to run while replication points from secondary to primary, so an abandoned mid-failback stack has to be reconciled before it will proceed.
+
+```bash
+gh workflow run terraform.yml --ref main -f operation=destroy -f target=primary -f confirm_destroy=DESTROY
+```
+
+`operation=destroy` ignores `target` and always runs secondary, then primary, then monitoring, since the secondary database replicates from the primary and monitoring only observes the other two. It runs behind the `terraform-production` environment approval, only from `main`, and it also removes the AWS-managed workload artifacts Terraform does not own.
+
+Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the DNS delegation stays valid. To remove those too, destroy that root by hand and expect to redo the delegation on the next deploy:
+
+```bash
+terraform -chdir=terraform/environments/bootstrap destroy
+```
+
+The state bucket sets `force_destroy = false`, so empty its versions before that destroy will succeed.
 
 ## Development
 
@@ -222,7 +280,7 @@ pre-commit run --all-files
 
 - The sentry task role holds read-only `Describe`, `List`, and `Get` actions on ECS and RDS, plus scoped `PutItem` and `Query` on its own DynamoDB table.
 - The workload execution role is scoped to the exact SSM parameter ARNs and KMS key it needs to start.
-- CI authenticates through GitHub OIDC with short-lived, per-workflow roles.
+- CI authenticates through GitHub OIDC with short-lived roles, each scoped to one GitHub environment: infrastructure apply and destroy behind `terraform-production`, application deploys behind `production`, plan read-only from pull requests.
 - Database passwords and the workload write token are generated as Terraform ephemeral values and written directly to SSM SecureString parameters.
 - Recovery operations that mutate infrastructure require an explicit confirmation variable and a protected-environment approval between plan and apply.
 
