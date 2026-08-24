@@ -56,6 +56,21 @@ resource "aws_route53_zone" "pilotlight" {
   tags = {
     Name = "${local.project_name}-shared-zone"
   }
+
+  # config.json feeds every root, so validate it here where the zone is created.
+  lifecycle {
+    precondition {
+      condition = can(
+        regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", local.base_domain)
+      )
+      error_message = "config.json base_domain must be a lowercase DNS name with no scheme, port, or trailing dot."
+    }
+
+    precondition {
+      condition     = length(trimspace(local.project_name)) > 0
+      error_message = "config.json project_name must not be empty."
+    }
+  }
 }
 
 # manage/pass role scoping (env-prefix wildcards) lives inside the module now,
@@ -63,7 +78,10 @@ resource "aws_route53_zone" "pilotlight" {
 module "terraform_ci_iam" {
   source = "../../modules/terraform-ci-iam"
 
-  project_name = local.project_name
-  github_org   = var.github_org
-  github_repo  = var.github_repo
+  project_name     = local.project_name
+  github_org       = var.github_org
+  github_repo      = var.github_repo
+  github_owner_id  = var.github_owner_id
+  github_repo_id   = var.github_repo_id
+  state_bucket_arn = aws_s3_bucket.state.arn
 }

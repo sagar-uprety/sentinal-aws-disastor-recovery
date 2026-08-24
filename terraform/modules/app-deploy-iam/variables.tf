@@ -18,6 +18,16 @@ variable "github_repo" {
   type        = string
 }
 
+variable "github_owner_id" {
+  description = "Numeric GitHub user/org ID GitHub appends to the OIDC sub claim after a rename or transfer."
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID, for the same reason as github_owner_id."
+  type        = string
+}
+
 variable "github_oidc_provider_arn" {
   description = "ARN of the shared GitHub Actions OIDC provider created by bootstrap."
   type        = string

@@ -13,6 +13,21 @@ variable "github_repo" {
   type        = string
 }
 
+variable "github_owner_id" {
+  description = "Numeric GitHub user/org ID GitHub appends to the OIDC sub claim after a rename or transfer."
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID, for the same reason as github_owner_id."
+  type        = string
+}
+
+variable "state_bucket_arn" {
+  description = "ARN of the S3 state bucket, so the plan role can lock/unlock without ReadOnlyAccess."
+  type        = string
+}
+
 variable "workload_environments" {
   description = "Environment names whose IAM roles this CI role may manage."
   type        = list(string)

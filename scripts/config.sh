@@ -14,6 +14,11 @@ config_value() {
   }
 }
 
+# config.json keys regions by environment name, so a target maps straight through.
+region_for() {
+  jq -er --arg target "$1" '.regions[$target] // empty' "$CONFIG_FILE"
+}
+
 readonly PROJECT_NAME="${PROJECT_NAME:-$(config_value .project_name)}"
 readonly PRIMARY_REGION="${PRIMARY_REGION:-$(config_value .regions.primary)}"
 readonly SECONDARY_REGION="${SECONDARY_REGION:-$(config_value .regions.secondary)}"

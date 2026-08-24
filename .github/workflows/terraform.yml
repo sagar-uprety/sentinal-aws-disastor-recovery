@@ -37,8 +37,6 @@ permissions:
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  SENTRY_URL: ${{ vars.SENTRY_URL }}
-  WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
 
 jobs:
   detect-changes:
@@ -102,10 +100,14 @@ jobs:
     env:
       TF_TARGET: ${{ matrix.target }}
       TF_ROOT: terraform/environments/${{ matrix.target }}
-      AWS_REGION: ${{ fromJSON(vars.AWS_REGION_MAP)[matrix.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Load project configuration
+        uses: ./.github/actions/load-config
+        with:
+          target: ${{ matrix.target }}
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
@@ -141,23 +143,25 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment:
-      name: terraform-production
     permissions:
       contents: read
       id-token: write
     env:
       TF_TARGET: ${{ inputs.target }}
       TF_ROOT: terraform/environments/${{ inputs.target }}
-      AWS_REGION: ${{ fromJSON(vars.AWS_REGION_MAP)[inputs.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Load project configuration
+        uses: ./.github/actions/load-config
+        with:
+          target: ${{ inputs.target }}
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-arn: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-plan-${{ github.run_id }}
 
@@ -207,7 +211,7 @@ jobs:
     environment:
       name: terraform-production
       # secondary never serves public traffic (pilot light), so it gets no URL rather than a wrong one.
-      url: ${{ inputs.target == 'monitoring' && vars.SENTRY_URL || inputs.target == 'primary' && vars.WORKLOAD_URL || '' }}
+      url: ${{ inputs.target == 'monitoring' && steps.config.outputs.sentry_url || inputs.target == 'primary' && steps.config.outputs.workload_url || '' }}
     permissions:
       actions: read
       contents: read
@@ -215,13 +219,15 @@ jobs:
     env:
       TF_TARGET: ${{ inputs.target }}
       TF_ROOT: terraform/environments/${{ inputs.target }}
-      AWS_REGION: ${{ fromJSON(vars.AWS_REGION_MAP)[inputs.target] }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Load project configuration
+        id: config
         uses: ./.github/actions/load-config
+        with:
+          target: ${{ inputs.target }}
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup

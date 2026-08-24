@@ -10,6 +10,16 @@ variable "github_repo" {
   default     = "aws-pilotlight-multi-region-dr"
 }
 
+variable "github_owner_id" {
+  description = "Numeric GitHub user/org ID for the OIDC sub claim."
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID for the OIDC sub claim."
+  type        = string
+}
+
 variable "state_bucket_name" {
   description = "Globally unique name of the S3 bucket that stores Terraform state."
   type        = string

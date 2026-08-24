@@ -119,11 +119,9 @@ Only bootstrap and the drills use your own credentials. Every deploy runs in Git
 
 Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
 
-**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones live here, once. Terraform reads it with `jsondecode(file(...))` from every root's `locals.tf`, and `scripts/config.sh` reads it with `jq`, so infrastructure, drills, and CI never disagree about a name or a Region. Editing this file is most of what porting the project to another account and domain requires.
+**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones. Single source of truth for Terraform, the workflows, and the drill scripts.
 
-One exception: `backend.tf` cannot read it. Terraform forbids variables and locals in backend configuration entirely, so the state bucket and its Region stay literal there.
-
-**Per-environment tfvars.** What is left in each `terraform.tfvars` is genuinely per-environment.
+**Per-environment tfvars.**
 
 | File | Key | Set to |
 |---|---|---|
@@ -132,35 +130,16 @@ One exception: `backend.tf` cannot read it. Terraform forbids variables and loca
 | `primary/terraform.tfvars` | same, plus `credential_version`, `link_token_version`, `multi_az` | Rotation counters and the Multi-AZ toggle |
 | `secondary/terraform.tfvars` | `alert_email`, `create_arc` | Alert recipient, and the ARC toggle held off outside drills |
 
-**Drill scripts and CI.** `scripts/config.sh` derives every name and host from `config.json`, and each value stays overridable by an environment variable of the same name. The drills source it directly; the workflows load it through `.github/actions/load-config` after checkout.
 
-**GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
 
-**GitHub repository variables.** Seven, listed below. Everything else comes from `config.json` and `.terraform-version`, read after checkout.
+**GitHub environments.** Create two, named exactly `terraform-production` and `production`, restrict each to deployments from `main`, and require a reviewer. Required reviewers needs a public repo (or a paid plan on a private one). The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
 
-The role ARNs cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
-
-| Variable | Value |
-|---|---|
-| `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
-| `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
-| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
-| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
-| `WORKLOAD_URL` | `https://shortener.<base_domain>` |
-| `SENTRY_URL` | `https://sentry.<base_domain>` |
-| `AWS_REGION_MAP` | JSON object mapping `monitoring`, `primary`, and `secondary` to their Regions |
-
-The last three duplicate values from `config.json`, and they have to. GitHub evaluates job-level `env:` and `environment:` before `actions/checkout` runs, so no repository file exists yet at that point. `AWS_REGION_MAP` feeds a job-level `env:` and the two URLs feed `environment.url:`. They are the only values to keep in step by hand.
-
-### Deploy
-
-Stages apply in order, because the secondary and monitoring stacks depend on artifacts the earlier stages create. Every stage after the first runs through GitHub Actions using short-lived OIDC credentials, so no long-lived AWS keys are stored anywhere.
+### Deploy Steps
 
 The commands below use the [GitHub CLI](https://cli.github.com). Without it, dispatch the same workflows from the repository's **Actions** tab: pick the workflow, choose **Run workflow**, and set the inputs shown in each `-f` flag.
 
 **1. Bootstrap.** Creates the S3 state backend, the GitHub OIDC identity provider, the Terraform plan and apply roles, and the Route 53 hosted zone for `base_domain`. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
 
-If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so they have to be republished, and the recreated IAM roles get new ARNs, so the role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
 
 ```bash
 terraform -chdir=terraform/environments/bootstrap init
@@ -168,13 +147,31 @@ terraform -chdir=terraform/environments/bootstrap plan -out=bootstrap.tfplan
 terraform -chdir=terraform/environments/bootstrap apply bootstrap.tfplan
 ```
 
-Publish the nameservers the bootstrap output prints before continuing: set them at your registrar if `base_domain` is a domain you registered, or add them as NS records in the parent zone if it is a subdomain. Nothing resolves until they are live.
+Delegate `base_domain` by creating an NS record in the parent zone pointing at the four nameservers in the `route53_zone_name_servers` output
+
+```bash
+dig +short NS pilotlight.sagaruprety.com.np
+```
+
+GitHub repository variables: Set the following from the output above
+
+| Variable | Value |
+|---|---|
+| `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
+| `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
+
 
 **2. Create the monitoring foundation.** VPC, ALB, ECR repository, and the DynamoDB table for check history.
 
 ```bash
 gh workflow run terraform.yml --ref main -f operation=apply -f target=monitoring
 ```
+
+GitHub repository variables: Set the following from the output above
+
+| Variable | Value |
+|---|---|
+| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`
 
 **3. Publish the sentry image, then deploy it.** The first apply intentionally leaves the ECS service uncreated, since it cannot reference an image that does not exist yet.
 
@@ -193,6 +190,13 @@ gh workflow run terraform.yml --ref main -f operation=apply -f target=monitoring
 ```bash
 gh workflow run terraform.yml --ref main -f operation=apply -f target=primary
 ```
+
+GitHub repository variables. Set the following from the output above
+
+| Variable | Value |
+|---|---|
+| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`|
+
 
 **5. Publish the workload image, then deploy it.** Same two-phase pattern as the sentry.
 
@@ -242,25 +246,23 @@ Do not stop at a successful failover; run the failback. Otherwise the workload s
 
 ### Tear down
 
-Destroy the stack when a drill cycle is finished. The pilot light bills continuously: two NAT Gateways, two ALBs, the primary Multi-AZ database, and its cross-region replica all run at rest.
-
-Finish any failback first, and revert `create_arc` to `false`. The destroy job refuses to run while replication points from secondary to primary, so an abandoned mid-failback stack has to be reconciled before it will proceed.
+Destroy the stack when a drill cycle is finished to avoid costs.
 
 ```bash
 gh workflow run terraform.yml --ref main -f operation=destroy -f target=primary -f confirm_destroy=DESTROY
 ```
 
-`operation=destroy` ignores `target` and always runs secondary, then primary, then monitoring, since the secondary database replicates from the primary and monitoring only observes the other two. It runs behind the `terraform-production` environment approval, only from `main`, and it also removes the AWS-managed workload artifacts Terraform does not own.
+`operation=destroy` ignores `target` and always runs secondary, then primary, then monitoring, since the secondary database replicates from the primary and monitoring only observes the other two.
 
-Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the nameservers stay valid. To remove those too, destroy that root by hand and expect to republish nameservers on the next deploy:
+Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the nameservers stay valid.
+
+To remove those too, run the following:
 
 ```bash
 terraform -chdir=terraform/environments/bootstrap destroy
 ```
 
-The state bucket sets `force_destroy = false`, so empty its versions before that destroy will succeed.
-
-## Development
+## Development (Sentry Monitoring Service and URL Shortener)
 
 Requires Docker and Docker Compose.
 
@@ -268,7 +270,7 @@ Requires Docker and Docker Compose.
 docker compose up --build
 ```
 
-This starts the sentry on `localhost:8080`, the URL shortener on `localhost:8081`, and PostgreSQL. The sentry reads a static topology fixture locally, since live ECS and RDS topology only exists once deployed.
+This starts the sentry on `localhost:8080`, the URL shortener on `localhost:8081`, and PostgreSQL. The sentry reads a static topology (mock data), since live ECS and RDS topology only exists once deployed.
 
 Tests and static checks, no AWS credentials required:
 

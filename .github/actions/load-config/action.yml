@@ -1,21 +1,53 @@
 name: Load project configuration
 description: >-
-  Export project name, base domain, and regions from config.json into the job environment.
-  Run actions/checkout before this step, since config.json lives in the repository.
+  Export project name, base domain, regions, and service URLs from config.json into the job
+  environment, and expose them as outputs. Run actions/checkout before this step.
+
+inputs:
+  target:
+    description: Environment whose Region to export as AWS_REGION (monitoring, primary, or secondary).
+    required: false
+    default: ""
+
+outputs:
+  workload_url:
+    description: Public URL of the URL-shortener workload.
+    value: ${{ steps.export.outputs.workload_url }}
+  sentry_url:
+    description: Public URL of the sentry.
+    value: ${{ steps.export.outputs.sentry_url }}
 
 runs:
   using: composite
   steps:
     - name: Export shared configuration
+      id: export
       shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
       run: |
         source scripts/config.sh
         {
           echo "PROJECT_NAME=$PROJECT_NAME"
-          echo "BASE_DOMAIN=$BASE_DOMAIN"
           echo "PRIMARY_REGION=$PRIMARY_REGION"
           echo "SECONDARY_REGION=$SECONDARY_REGION"
           echo "SENTRY_REGION=$SENTRY_REGION"
           echo "PRIMARY_RESOURCE_NAME=$PRIMARY_RESOURCE_NAME"
           echo "SECONDARY_RESOURCE_NAME=$SECONDARY_RESOURCE_NAME"
+          echo "WORKLOAD_URL=$WORKLOAD_URL"
+          echo "SENTRY_URL=$SENTRY_URL"
         } >> "$GITHUB_ENV"
+
+        # AWS_REGION is which of the three this job acts on, known only from the dispatch input.
+        if [ -n "$TARGET" ]; then
+          region="$(region_for "$TARGET")" || {
+            echo "error: load-config: config.json has no region for target '$TARGET'" >&2
+            exit 1
+          }
+          echo "AWS_REGION=$region" >> "$GITHUB_ENV"
+        fi
+
+        {
+          echo "workload_url=$WORKLOAD_URL"
+          echo "sentry_url=$SENTRY_URL"
+        } >> "$GITHUB_OUTPUT"

@@ -20,7 +20,16 @@ resource "aws_iam_role" "terraform_github_plan" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:pull_request"
+          "token.actions.githubusercontent.com:sub" = [
+            format(
+              "repo:%s@%s/%s@%s:pull_request",
+              var.github_org, var.github_owner_id, var.github_repo, var.github_repo_id,
+            ),
+            format(
+              "repo:%s@%s/%s@%s:ref:refs/heads/main",
+              var.github_org, var.github_owner_id, var.github_repo, var.github_repo_id,
+            ),
+          ]
         }
       }
     }]
@@ -30,6 +39,23 @@ resource "aws_iam_role" "terraform_github_plan" {
 resource "aws_iam_role_policy_attachment" "terraform_plan_read_only" {
   role       = aws_iam_role.terraform_github_plan.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+# ReadOnlyAccess alone cannot take the S3-native state lock; terraform plan needs this even
+# though it never writes the state itself.
+resource "aws_iam_role_policy" "terraform_plan_lock" {
+  name = "${var.project_name}-terraform-plan-lock"
+  role = aws_iam_role.terraform_github_plan.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "StateLockFile"
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+      Resource = "${var.state_bucket_arn}/${var.project_name}/*/terraform.tfstate.tflock"
+    }]
+  })
 }
 
 # CI cannot create the credentials it needs to run. Bootstrap breaks that loop: applied once
@@ -47,8 +73,8 @@ resource "aws_iam_role" "terraform_github_apply" {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           "token.actions.githubusercontent.com:sub" = format(
-            "repo:%s/%s:environment:terraform-production",
-            var.github_org, var.github_repo,
+            "repo:%s@%s/%s@%s:environment:terraform-production",
+            var.github_org, var.github_owner_id, var.github_repo, var.github_repo_id,
           )
         }
       }

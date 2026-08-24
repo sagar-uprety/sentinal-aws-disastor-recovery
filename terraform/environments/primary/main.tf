@@ -136,6 +136,8 @@ module "github_oidc" {
   environment              = local.environment
   github_org               = var.github_org
   github_repo              = var.github_repo
+  github_owner_id          = var.github_owner_id
+  github_repo_id           = var.github_repo_id
   github_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
 
   ecr_repository_arn         = module.ecr.repository_arn

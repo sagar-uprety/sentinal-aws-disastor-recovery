@@ -39,7 +39,9 @@ No modules.
 | <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment name. | `string` | n/a | yes |
 | <a name="input_github_oidc_provider_arn"></a> [github\_oidc\_provider\_arn](#input\_github\_oidc\_provider\_arn) | ARN of the shared GitHub Actions OIDC provider created by bootstrap. | `string` | n/a | yes |
 | <a name="input_github_org"></a> [github\_org](#input\_github\_org) | GitHub organization or user that owns the repository. | `string` | n/a | yes |
+| <a name="input_github_owner_id"></a> [github\_owner\_id](#input\_github\_owner\_id) | Numeric GitHub user/org ID GitHub appends to the OIDC sub claim after a rename or transfer. | `string` | n/a | yes |
 | <a name="input_github_repo"></a> [github\_repo](#input\_github\_repo) | GitHub repository name (without owner). | `string` | n/a | yes |
+| <a name="input_github_repo_id"></a> [github\_repo\_id](#input\_github\_repo\_id) | Numeric GitHub repository ID, for the same reason as github\_owner\_id. | `string` | n/a | yes |
 | <a name="input_image_digest_parameter_arn"></a> [image\_digest\_parameter\_arn](#input\_image\_digest\_parameter\_arn) | ARN of the SSM parameter CI writes the image digest to; Terraform reads it back on the next apply. | `string` | n/a | yes |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
 | <a name="input_secondary_ecr_repository_arn"></a> [secondary\_ecr\_repository\_arn](#input\_secondary\_ecr\_repository\_arn) | ARN of the replicated secondary ECR repository checked by deployments. Null without a secondary. | `string` | `null` | no |
