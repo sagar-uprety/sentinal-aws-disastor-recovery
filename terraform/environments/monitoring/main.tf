@@ -5,7 +5,7 @@ data "aws_iam_openid_connect_provider" "github" {
 }
 
 data "aws_route53_zone" "pilotlight" {
-  name         = "pilotlight.sagaruprety.com.np."
+  name         = "${var.base_domain}."
   private_zone = false
 }
 

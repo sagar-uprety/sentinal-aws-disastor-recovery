@@ -19,7 +19,7 @@ output "terraform_github_plan_role_arn" {
 }
 
 output "route53_zone_id" {
-  description = "Persistent hosted zone ID for pilotlight.sagaruprety.com.np."
+  description = "Persistent hosted zone ID for the delegated base domain."
   value       = aws_route53_zone.pilotlight.zone_id
 }
 

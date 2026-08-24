@@ -1,7 +1,7 @@
 data "aws_caller_identity" "current" {}
 
 data "aws_route53_zone" "pilotlight" {
-  name         = "pilotlight.sagaruprety.com.np."
+  name         = "${var.base_domain}."
   private_zone = false
 }
 

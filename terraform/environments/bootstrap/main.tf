@@ -51,7 +51,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
 resource "aws_route53_zone" "pilotlight" {
   # DNSSEC signing and query logging both need extra infra (KMS key, log group) not justified here.
   #checkov:skip=CKV2_AWS_38,CKV2_AWS_39
-  name = "pilotlight.sagaruprety.com.np"
+  name = var.base_domain
 
   tags = {
     Name = "${var.project_name}-shared-pilotlight-zone"

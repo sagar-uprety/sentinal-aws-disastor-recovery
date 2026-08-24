@@ -1,5 +1,5 @@
 locals {
-  app_hostname = "shortener.pilotlight.sagaruprety.com.np"
+  app_hostname = "shortener.${var.base_domain}"
   project_name = "pilotlight"
   environment  = "secondary"
   azs          = ["eu-west-1a", "eu-west-1b"]

@@ -29,3 +29,13 @@ variable "state_bucket_name" {
     error_message = "State bucket name must be a valid S3 bucket name between 3 and 63 characters."
   }
 }
+
+variable "base_domain" {
+  description = "Delegated subdomain that hosts every project record, e.g. pilotlight.example.com."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.base_domain))
+    error_message = "base_domain must be a lowercase DNS name with no scheme, port, or trailing dot."
+  }
+}

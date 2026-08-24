@@ -1,6 +1,6 @@
 locals {
-  app_hostname      = "sentry.pilotlight.sagaruprety.com.np"
-  workload_hostname = "shortener.pilotlight.sagaruprety.com.np"
+  app_hostname      = "sentry.${var.base_domain}"
+  workload_hostname = "shortener.${var.base_domain}"
   azs               = ["eu-north-1a", "eu-north-1b"]
   environment       = "monitoring"
   project_name      = "pilotlight"

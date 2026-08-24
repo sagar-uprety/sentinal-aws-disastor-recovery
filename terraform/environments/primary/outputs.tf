@@ -24,7 +24,7 @@ output "sns_topic_arn" {
 }
 
 output "route53_zone_id" {
-  description = "Hosted zone ID for pilotlight.sagaruprety.com.np."
+  description = "Hosted zone ID for the delegated base domain."
   value       = data.aws_route53_zone.pilotlight.zone_id
 }
 

@@ -15,7 +15,7 @@ data "aws_kms_key" "rds_primary" {
 }
 
 data "aws_route53_zone" "pilotlight" {
-  name         = "pilotlight.sagaruprety.com.np."
+  name         = "${var.base_domain}."
   private_zone = false
 }
 

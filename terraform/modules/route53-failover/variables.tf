@@ -4,7 +4,7 @@ variable "project_name" {
 }
 
 variable "route53_zone_id" {
-  description = "Hosted zone ID of the delegated pilotlight.sagaruprety.com.np zone."
+  description = "Hosted zone ID of the delegated base-domain zone."
   type        = string
 }
 
