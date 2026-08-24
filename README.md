@@ -105,13 +105,14 @@ Please be aware that deploying aws resources incurs real cost. Please always des
 ### Prerequisites
 
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), configured with credentials for the target account.
+- Permissions on those credentials for two separate jobs. Bootstrap is applied by hand and creates IAM resources, so it needs to create an OIDC identity provider, roles, and policies, alongside S3 and Route 53. The drill scripts then call ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC directly. This project provisions no separate local recovery role, so whoever runs a drill uses their own credentials.
 - [Terraform](https://developer.hashicorp.com/terraform/install) 1.11 or newer.
 - [GitHub CLI](https://cli.github.com), optional. The Actions tab dispatches the same workflows.
 - [Docker](https://docs.docker.com/get-started/get-docker/) with Compose, optional, for running the applications locally.
 - A domain or subdomain you control and can point nameservers at, either registered directly or delegated from a parent zone.
 - A GitHub repository with two protected environments named `terraform-production` and `production`, and the repository variables listed under [Configure](#configure).
 
-The drill scripts call ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC directly with these credentials. Deployments use short-lived GitHub OIDC roles instead.
+Only bootstrap and the drills use your own credentials. Every deploy runs in GitHub Actions under short-lived OIDC roles instead.
 
 ### Configure
 
@@ -132,12 +133,14 @@ Every value below is account-specific. Set them before the first apply; the defa
 
 **GitHub repository variables.** The workflows read all of these. A missing one produces an empty value rather than an error, so the run fails later and less clearly.
 
+The role ARNs cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
+
 | Variable | Value |
 |---|---|
-| `AWS_TERRAFORM_ROLE_ARN` | Apply role, from the bootstrap output |
-| `AWS_TERRAFORM_PLAN_ROLE_ARN` | Read-only plan role, from the bootstrap output |
-| `AWS_WORKLOAD_ROLE_ARN` | URL-shortener deploy role, from the bootstrap output |
-| `AWS_SENTRY_ROLE_ARN` | Sentry deploy role, from the bootstrap output |
+| `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
+| `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
+| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
+| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
 | `PROJECT_NAME` | Matches `project_name` in the bootstrap tfvars |
 | `BASE_DOMAIN` | Matches `base_domain` in the tfvars |
 | `WORKLOAD_URL` | `https://shortener.<base_domain>` |
@@ -154,9 +157,9 @@ Stages apply in order, because the secondary and monitoring stacks depend on art
 
 The commands below use the [GitHub CLI](https://cli.github.com). Without it, dispatch the same workflows from the repository's **Actions** tab: pick the workflow, choose **Run workflow**, and set the inputs shown in each `-f` flag.
 
-**1. Bootstrap the state backend.** Creates the S3 state backend, the GitHub OIDC roles, and the Route 53 hosted zone for `base_domain`. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
+**1. Bootstrap.** Creates the S3 state backend, the GitHub OIDC identity provider, the Terraform plan and apply roles, and the Route 53 hosted zone for `base_domain`. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
 
-If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so they have to be republished, and the recreated IAM roles get new ARNs, so the four role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
+If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so they have to be republished, and the recreated IAM roles get new ARNs, so the role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
 
 ```bash
 terraform -chdir=terraform/environments/bootstrap init
