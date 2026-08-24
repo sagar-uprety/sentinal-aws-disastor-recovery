@@ -126,9 +126,11 @@ resource "aws_lb_target_group" "app" {
     path                = "/healthz"
     healthy_threshold   = 2
     unhealthy_threshold = 3
-    timeout             = 5  # seconds
-    interval            = 10 # seconds
-    matcher             = "200"
+    # a cold task's first outbound AWS API call (DynamoDB/RDS) pays connection setup and
+    # auth overhead a warm call doesn't; 5s/10s failed every fresh sentry task's first check.
+    timeout  = 10 # seconds
+    interval = 15 # seconds
+    matcher  = "200"
   }
 }
 

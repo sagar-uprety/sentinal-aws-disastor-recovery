@@ -1,6 +1,7 @@
 package sentry
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,10 +12,16 @@ import (
 	"aws-pilotlight-multi-region-dr/apps/sentry/internal/topology"
 )
 
+// healthzTimeout bounds the store check independently of the caller's own deadline, so a
+// stuck AWS call fails with a clear log line instead of riding the ALB's connection timeout.
+const healthzTimeout = 8 * time.Second
+
 // reports 503 when the store backend is unreachable; used by ECS/ALB health checks.
 func HandleHealthz(dataStore store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := dataStore.Health(r.Context()); err != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), healthzTimeout)
+		defer cancel()
+		if err := dataStore.Health(ctx); err != nil {
 			slog.Error("healthz: store unavailable", "error", err)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error"})
 			return
