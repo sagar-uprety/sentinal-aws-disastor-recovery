@@ -26,7 +26,6 @@ permissions:
 
 env:
   CONTAINER_NAME: sentry
-  SENTRY_URL: ${{ vars.SENTRY_URL }}
 
 jobs:
   quality:
@@ -79,7 +78,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: production
-      url: ${{ vars.SENTRY_URL }}
+      url: ${{ steps.config.outputs.sentry_url }}
     # Updates the monitoring ECS service and image-digest parameter, which Terraform apply or
     # destroy can also change or remove.
     concurrency:
@@ -93,6 +92,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Load project configuration
+        id: config
         uses: ./.github/actions/load-config
 
       - name: Resolve sentry deployment targets

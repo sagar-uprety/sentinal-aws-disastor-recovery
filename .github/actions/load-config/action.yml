@@ -1,13 +1,33 @@
 name: Load project configuration
 description: >-
-  Export project name, base domain, and regions from config.json into the job environment.
-  Run actions/checkout before this step, since config.json lives in the repository.
+  Export project name, base domain, regions, and service URLs from config.json into the job
+  environment, and expose them as outputs. Run actions/checkout before this step.
+
+inputs:
+  target:
+    description: Environment whose Region to export as AWS_REGION (monitoring, primary, or secondary).
+    required: false
+    default: ""
+
+outputs:
+  workload_url:
+    description: Public URL of the URL-shortener workload.
+    value: ${{ steps.export.outputs.workload_url }}
+  sentry_url:
+    description: Public URL of the sentry.
+    value: ${{ steps.export.outputs.sentry_url }}
+  aws_region:
+    description: Region for the requested target, empty when no target was given.
+    value: ${{ steps.export.outputs.aws_region }}
 
 runs:
   using: composite
   steps:
     - name: Export shared configuration
+      id: export
       shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
       run: |
         source scripts/config.sh
         {
@@ -18,4 +38,28 @@ runs:
           echo "SENTRY_REGION=$SENTRY_REGION"
           echo "PRIMARY_RESOURCE_NAME=$PRIMARY_RESOURCE_NAME"
           echo "SECONDARY_RESOURCE_NAME=$SECONDARY_RESOURCE_NAME"
+          echo "WORKLOAD_URL=$WORKLOAD_URL"
+          echo "SENTRY_URL=$SENTRY_URL"
         } >> "$GITHUB_ENV"
+
+        # monitoring is the sentry's own environment name, so it maps to the sentry Region.
+        region=""
+        case "$TARGET" in
+        monitoring) region="$SENTRY_REGION" ;;
+        primary) region="$PRIMARY_REGION" ;;
+        secondary) region="$SECONDARY_REGION" ;;
+        "") ;;
+        *)
+          echo "error: load-config: unknown target '$TARGET'" >&2
+          exit 1
+          ;;
+        esac
+        if [ -n "$region" ]; then
+          echo "AWS_REGION=$region" >> "$GITHUB_ENV"
+        fi
+
+        {
+          echo "workload_url=$WORKLOAD_URL"
+          echo "sentry_url=$SENTRY_URL"
+          echo "aws_region=$region"
+        } >> "$GITHUB_OUTPUT"

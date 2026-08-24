@@ -119,9 +119,7 @@ Only bootstrap and the drills use your own credentials. Every deploy runs in Git
 
 Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
 
-**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones live here, once. Terraform reads it with `jsondecode(file(...))` from every root's `locals.tf`, and `scripts/config.sh` reads it with `jq`, so infrastructure, drills, and CI never disagree about a name or a Region. Editing this file is most of what porting the project to another account and domain requires.
-
-One exception: `backend.tf` cannot read it. Terraform forbids variables and locals in backend configuration entirely, so the state bucket and its Region stay literal there.
+**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones acts as single source of truth for tf, gh action and our drill scripts.
 
 **Per-environment tfvars.** What is left in each `terraform.tfvars` is genuinely per-environment.
 
@@ -132,13 +130,13 @@ One exception: `backend.tf` cannot read it. Terraform forbids variables and loca
 | `primary/terraform.tfvars` | same, plus `credential_version`, `link_token_version`, `multi_az` | Rotation counters and the Multi-AZ toggle |
 | `secondary/terraform.tfvars` | `alert_email`, `create_arc` | Alert recipient, and the ARC toggle held off outside drills |
 
-**Drill scripts and CI.** `scripts/config.sh` derives every name and host from `config.json`, and each value stays overridable by an environment variable of the same name. The drills source it directly; the workflows load it through `.github/actions/load-config` after checkout.
+**Drill scripts and CI.** `scripts/config.sh` derives every name, Region, and URL from `config.json`, and each value stays overridable by an environment variable of the same name. The drills source it directly; the workflows load it through `.github/actions/load-config` after checkout, which also exposes the URLs as step outputs so `environment.url` can use them without a repository variable.
 
 **GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
 
-**GitHub repository variables.** Seven, listed below. Everything else comes from `config.json` and `.terraform-version`, read after checkout.
+**GitHub repository variables.** Four, all of them role ARNs, because a role ARN is minted by an apply and is specific to your account. Everything else the workflows need comes from `config.json` and `.terraform-version`, read after checkout.
 
-The role ARNs cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
+They cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
 
 | Variable | Value |
 |---|---|
@@ -146,11 +144,6 @@ The role ARNs cannot all be set up front. Bootstrap mints the two Terraform role
 | `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
 | `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
 | `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
-| `WORKLOAD_URL` | `https://shortener.<base_domain>` |
-| `SENTRY_URL` | `https://sentry.<base_domain>` |
-| `AWS_REGION_MAP` | JSON object mapping `monitoring`, `primary`, and `secondary` to their Regions |
-
-The last three duplicate values from `config.json`, and they have to. GitHub evaluates job-level `env:` and `environment:` before `actions/checkout` runs, so no repository file exists yet at that point. `AWS_REGION_MAP` feeds a job-level `env:` and the two URLs feed `environment.url:`. They are the only values to keep in step by hand.
 
 ### Deploy
 

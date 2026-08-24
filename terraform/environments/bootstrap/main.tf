@@ -56,6 +56,21 @@ resource "aws_route53_zone" "pilotlight" {
   tags = {
     Name = "${local.project_name}-shared-zone"
   }
+
+  # config.json feeds every root, so validate it here where the zone is created.
+  lifecycle {
+    precondition {
+      condition = can(
+        regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", local.base_domain)
+      )
+      error_message = "config.json base_domain must be a lowercase DNS name with no scheme, port, or trailing dot."
+    }
+
+    precondition {
+      condition     = length(trimspace(local.project_name)) > 0
+      error_message = "config.json project_name must not be empty."
+    }
+  }
 }
 
 # manage/pass role scoping (env-prefix wildcards) lives inside the module now,

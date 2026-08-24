@@ -26,7 +26,6 @@ permissions:
 
 env:
   CONTAINER_NAME: shortener
-  WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
 
 jobs:
   quality:
@@ -95,7 +94,7 @@ jobs:
     timeout-minutes: 45
     environment:
       name: production
-      url: ${{ vars.WORKLOAD_URL }}
+      url: ${{ steps.config.outputs.workload_url }}
     # Updates the primary image-digest parameter and both primary/secondary ECS services,
     # which Terraform and recovery operations can also change or remove.
     concurrency:
@@ -109,6 +108,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Load project configuration
+        id: config
         uses: ./.github/actions/load-config
 
       - name: Resolve workload deployment targets
