@@ -1,8 +1,8 @@
 provider "aws" {
-  region = "eu-west-1"
+  region = local.region
   default_tags {
     tags = {
-      Project     = "pilotlight"
+      Project     = local.project_name
       ManagedBy   = "terraform"
       Environment = "secondary"
     }
@@ -13,5 +13,5 @@ provider "aws" {
 # SSM reads use the default provider instead: primary's root already wrote local copies here.
 provider "aws" {
   alias  = "primary"
-  region = "eu-central-1"
+  region = local.cfg.regions.primary
 }

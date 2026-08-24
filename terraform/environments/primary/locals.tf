@@ -1,8 +1,13 @@
 locals {
-  project_name = "pilotlight"
+  # config.json is the one place project name, base domain, regions, and AZs are defined.
+  cfg = jsondecode(file("${path.module}/../../../config.json"))
+
+  project_name = local.cfg.project_name
   environment  = "primary"
-  azs          = ["eu-central-1a", "eu-central-1b"]
+  region       = local.cfg.regions.primary
+  azs          = local.cfg.azs.primary
   vpc_cidr     = "10.0.0.0/24"
   account_id   = data.aws_caller_identity.current.account_id
-  app_hostname = "shortener.${var.base_domain}"
+  app_hostname = "shortener.${local.cfg.base_domain}"
+  base_domain  = local.cfg.base_domain
 }

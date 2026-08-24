@@ -18,13 +18,3 @@ variable "github_repo" {
   description = "GitHub repository trusted to deploy the sentry."
   type        = string
 }
-
-variable "base_domain" {
-  description = "Delegated subdomain that hosts every project record, e.g. pilotlight.example.com."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.base_domain))
-    error_message = "base_domain must be a lowercase DNS name with no scheme, port, or trailing dot."
-  }
-}

@@ -1,0 +1,21 @@
+name: Load project configuration
+description: >-
+  Export project name, base domain, and regions from config.json into the job environment.
+  Run actions/checkout before this step, since config.json lives in the repository.
+
+runs:
+  using: composite
+  steps:
+    - name: Export shared configuration
+      shell: bash
+      run: |
+        source scripts/config.sh
+        {
+          echo "PROJECT_NAME=$PROJECT_NAME"
+          echo "BASE_DOMAIN=$BASE_DOMAIN"
+          echo "PRIMARY_REGION=$PRIMARY_REGION"
+          echo "SECONDARY_REGION=$SECONDARY_REGION"
+          echo "SENTRY_REGION=$SENTRY_REGION"
+          echo "PRIMARY_RESOURCE_NAME=$PRIMARY_RESOURCE_NAME"
+          echo "SECONDARY_RESOURCE_NAME=$SECONDARY_RESOURCE_NAME"
+        } >> "$GITHUB_ENV"

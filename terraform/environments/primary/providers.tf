@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "eu-west-1"
+  region = local.cfg.regions.secondary
   alias  = "secondary"
 
   default_tags {
@@ -12,7 +12,7 @@ provider "aws" {
 }
 
 provider "aws" {
-  region = "eu-central-1"
+  region = local.region
 
   default_tags {
     tags = {

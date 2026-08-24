@@ -2,12 +2,24 @@
 # constants plus the few helpers both drills and CI need; CI sources only this file,
 # so anything drill-only (event log, link probes) belongs in drills/drill-lib.sh instead.
 
-readonly PROJECT_NAME="${PROJECT_NAME:-pilotlight}"
-readonly PRIMARY_REGION="${PRIMARY_REGION:-eu-central-1}"
-readonly SECONDARY_REGION="${SECONDARY_REGION:-eu-west-1}"
+# config.json is the same file Terraform reads, so names and regions have one definition.
+CONFIG_FILE="${CONFIG_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config.json}"
+readonly CONFIG_FILE
+
+# every value below stays overridable by an environment variable of the same name.
+config_value() {
+  jq -er "$1" "$CONFIG_FILE" || {
+    echo "error: config.sh: $1 missing from $CONFIG_FILE" >&2
+    return 1
+  }
+}
+
+readonly PROJECT_NAME="${PROJECT_NAME:-$(config_value .project_name)}"
+readonly PRIMARY_REGION="${PRIMARY_REGION:-$(config_value .regions.primary)}"
+readonly SECONDARY_REGION="${SECONDARY_REGION:-$(config_value .regions.secondary)}"
 # sentry sits outside both drill regions so it survives a failover of either.
-readonly SENTRY_REGION="${SENTRY_REGION:-eu-north-1}"
-readonly BASE_DOMAIN="${BASE_DOMAIN:-pilotlight.sagaruprety.com.np}"
+readonly SENTRY_REGION="${SENTRY_REGION:-$(config_value .regions.monitoring)}"
+readonly BASE_DOMAIN="${BASE_DOMAIN:-$(config_value .base_domain)}"
 # shellcheck disable=SC2034 # consumed by whichever script sources this file
 readonly PRIMARY_RESOURCE_NAME="${PROJECT_NAME}-primary"
 # shellcheck disable=SC2034 # consumed by whichever script sources this file

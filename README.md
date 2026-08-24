@@ -107,6 +107,7 @@ Please be aware that deploying aws resources incurs real cost. Please always des
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), configured with credentials for the target account.
 - Permissions on those credentials for two separate jobs. Bootstrap is applied by hand and creates IAM resources, so it needs to create an OIDC identity provider, roles, and policies, alongside S3 and Route 53. The drill scripts then call ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC directly. This project provisions no separate local recovery role, so whoever runs a drill uses their own credentials.
 - [Terraform](https://developer.hashicorp.com/terraform/install) 1.11 or newer.
+- [jq](https://jqlang.github.io/jq/), used by `scripts/config.sh` and every drill script.
 - [GitHub CLI](https://cli.github.com), optional. The Actions tab dispatches the same workflows.
 - [Docker](https://docs.docker.com/get-started/get-docker/) with Compose, optional, for running the applications locally.
 - A domain or subdomain you control and can point nameservers at, either registered directly or delegated from a parent zone.
@@ -118,20 +119,24 @@ Only bootstrap and the drills use your own credentials. Every deploy runs in Git
 
 Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
 
-**Terraform.** `base_domain` is the domain or subdomain whose Route 53 zone carries every record the project creates. Bootstrap creates that zone, so `base_domain` works as an apex you registered or as a subdomain of a zone you already run. It must be identical in all four files.
+**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones live here, once. Terraform reads it with `jsondecode(file(...))` from every root's `locals.tf`, and `scripts/config.sh` reads it with `jq`, so infrastructure, drills, and CI never disagree about a name or a Region. Editing this file is most of what porting the project to another account and domain requires.
+
+One exception: `backend.tf` cannot read it. Terraform forbids variables and locals in backend configuration entirely, so the state bucket and its Region stay literal there.
+
+**Per-environment tfvars.** What is left in each `terraform.tfvars` is genuinely per-environment.
 
 | File | Key | Set to |
 |---|---|---|
-| `terraform/environments/bootstrap/terraform.tfvars` | `base_domain`, `project_name`, `state_bucket_name` | Your subdomain, your project prefix, and a globally unique S3 bucket name |
-| `terraform/environments/monitoring/terraform.tfvars` | `base_domain`, `alert_email`, `github_org`, `github_repo` | Your subdomain, alert recipient, and repository coordinates |
-| `terraform/environments/primary/terraform.tfvars` | `base_domain`, `alert_email`, `github_org`, `github_repo` | Same values |
-| `terraform/environments/secondary/terraform.tfvars` | `base_domain`, `alert_email` | Same values |
+| `bootstrap/terraform.tfvars` | `state_bucket_name` | A globally unique S3 bucket name |
+| `monitoring/terraform.tfvars` | `alert_email`, `github_org`, `github_repo`, `deploy_service` | Alert recipient, your repository coordinates, and the two-phase deploy flag |
+| `primary/terraform.tfvars` | same, plus `credential_version`, `link_token_version`, `multi_az` | Rotation counters and the Multi-AZ toggle |
+| `secondary/terraform.tfvars` | `alert_email`, `create_arc` | Alert recipient, and the ARC toggle held off outside drills |
 
-**Drill scripts and CI.** `scripts/config.sh` holds `PROJECT_NAME`, `BASE_DOMAIN`, the three Regions, and the hostnames derived from them, each overridable by an environment variable of the same name. The drills source it directly and the workflows load it after checkout, so change the committed defaults rather than setting values in two places. `BASE_DOMAIN` must match the Terraform value or every precondition resolves the wrong hostname.
+**Drill scripts and CI.** `scripts/config.sh` derives every name and host from `config.json`, and each value stays overridable by an environment variable of the same name. The drills source it directly; the workflows load it through `.github/actions/load-config` after checkout.
 
 **GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
 
-**GitHub repository variables.** Seven, listed below. Everything else the workflows need comes from `scripts/config.sh` and `.terraform-version`, loaded after checkout, so there is one source of truth per value.
+**GitHub repository variables.** Seven, listed below. Everything else comes from `config.json` and `.terraform-version`, read after checkout.
 
 The role ARNs cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
 
@@ -145,7 +150,7 @@ The role ARNs cannot all be set up front. Bootstrap mints the two Terraform role
 | `SENTRY_URL` | `https://sentry.<base_domain>` |
 | `AWS_REGION_MAP` | JSON object mapping `monitoring`, `primary`, and `secondary` to their Regions |
 
-The last three duplicate values that also live in `scripts/config.sh`, and they have to. GitHub evaluates job-level `env:` and `environment:` before `actions/checkout` runs, so no repository file exists yet at that point. `AWS_REGION_MAP` feeds a job-level `env:` and the two URLs feed `environment.url:`. Keep them in step with the tfvars.
+The last three duplicate values from `config.json`, and they have to. GitHub evaluates job-level `env:` and `environment:` before `actions/checkout` runs, so no repository file exists yet at that point. `AWS_REGION_MAP` feeds a job-level `env:` and the two URLs feed `environment.url:`. They are the only values to keep in step by hand.
 
 ### Deploy
 
@@ -287,6 +292,7 @@ pre-commit run --all-files
 ## Project structure
 
 ```
+config.json          project name, base domain, regions, AZs: read by Terraform and the scripts
 apps/
   sentry/            monitoring service: checks, history, topology, status UI
   url-shortener/     workload under test: link creation and redirects

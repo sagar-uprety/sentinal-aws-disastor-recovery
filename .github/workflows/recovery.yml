@@ -86,16 +86,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # scripts/config.sh is the single source for regions and resource names.
       - name: Load project configuration
-        run: |
-          source scripts/config.sh
-          {
-            echo "PROJECT_NAME=$PROJECT_NAME"
-            echo "PRIMARY_REGION=$PRIMARY_REGION"
-            echo "SECONDARY_REGION=$SECONDARY_REGION"
-            echo "SENTRY_REGION=$SENTRY_REGION"
-          } >> "$GITHUB_ENV"
+        uses: ./.github/actions/load-config
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
@@ -162,16 +154,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # scripts/config.sh is the single source for regions and resource names.
       - name: Load project configuration
-        run: |
-          source scripts/config.sh
-          {
-            echo "PROJECT_NAME=$PROJECT_NAME"
-            echo "PRIMARY_REGION=$PRIMARY_REGION"
-            echo "SECONDARY_REGION=$SECONDARY_REGION"
-            echo "SENTRY_REGION=$SENTRY_REGION"
-          } >> "$GITHUB_ENV"
+        uses: ./.github/actions/load-config
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
@@ -221,16 +205,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # scripts/config.sh is the single source for regions and resource names.
       - name: Load project configuration
-        run: |
-          source scripts/config.sh
-          {
-            echo "PROJECT_NAME=$PROJECT_NAME"
-            echo "PRIMARY_REGION=$PRIMARY_REGION"
-            echo "SECONDARY_REGION=$SECONDARY_REGION"
-            echo "SENTRY_REGION=$SENTRY_REGION"
-          } >> "$GITHUB_ENV"
+        uses: ./.github/actions/load-config
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
@@ -291,16 +267,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # scripts/config.sh is the single source for regions and resource names.
       - name: Load project configuration
-        run: |
-          source scripts/config.sh
-          {
-            echo "PROJECT_NAME=$PROJECT_NAME"
-            echo "PRIMARY_REGION=$PRIMARY_REGION"
-            echo "SECONDARY_REGION=$SECONDARY_REGION"
-            echo "SENTRY_REGION=$SENTRY_REGION"
-          } >> "$GITHUB_ENV"
+        uses: ./.github/actions/load-config
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup

@@ -2,7 +2,7 @@ resource "aws_s3_bucket" "state" {
   bucket        = var.state_bucket_name
   force_destroy = false
   tags = {
-    Name    = "${var.project_name}-terraform-state"
+    Name    = "${local.project_name}-terraform-state"
     Purpose = "state-storage"
   }
 }
@@ -51,10 +51,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
 resource "aws_route53_zone" "pilotlight" {
   # DNSSEC signing and query logging both need extra infra (KMS key, log group) not justified here.
   #checkov:skip=CKV2_AWS_38,CKV2_AWS_39
-  name = var.base_domain
+  name = local.base_domain
 
   tags = {
-    Name = "${var.project_name}-shared-pilotlight-zone"
+    Name = "${local.project_name}-shared-zone"
   }
 }
 
@@ -63,7 +63,7 @@ resource "aws_route53_zone" "pilotlight" {
 module "terraform_ci_iam" {
   source = "../../modules/terraform-ci-iam"
 
-  project_name = var.project_name
+  project_name = local.project_name
   github_org   = var.github_org
   github_repo  = var.github_repo
 }

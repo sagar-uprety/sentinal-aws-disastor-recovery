@@ -92,10 +92,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # scripts/config.sh is the single source for regions and resource names.
       - name: Load project configuration
+        uses: ./.github/actions/load-config
+
+      - name: Resolve sentry deployment targets
         run: |
-          source scripts/config.sh
           {
             echo "AWS_REGION=$SENTRY_REGION"
             echo "ECR_REPOSITORY=$PROJECT_NAME-monitoring"

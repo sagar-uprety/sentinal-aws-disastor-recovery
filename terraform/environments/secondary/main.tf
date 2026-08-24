@@ -1,7 +1,7 @@
 data "aws_caller_identity" "current" {}
 
 data "aws_route53_zone" "pilotlight" {
-  name         = "${var.base_domain}."
+  name         = "${local.base_domain}."
   private_zone = false
 }
 

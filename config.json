@@ -1,0 +1,14 @@
+{
+  "project_name": "pilotlight",
+  "base_domain": "pilotlight.sagaruprety.com.np",
+  "regions": {
+    "primary": "eu-central-1",
+    "secondary": "eu-west-1",
+    "monitoring": "eu-north-1"
+  },
+  "azs": {
+    "primary": ["eu-central-1a", "eu-central-1b"],
+    "secondary": ["eu-west-1a", "eu-west-1b"],
+    "monitoring": ["eu-north-1a", "eu-north-1b"]
+  }
+}
