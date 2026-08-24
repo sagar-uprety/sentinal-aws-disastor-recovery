@@ -1,13 +1,3 @@
-variable "project_name" {
-  description = "Project name used for resource names and tags."
-  type        = string
-
-  validation {
-    condition     = length(trimspace(var.project_name)) > 0
-    error_message = "Project name must not be empty."
-  }
-}
-
 variable "github_org" {
   description = "GitHub organization or user allowed to assume bootstrap OIDC roles."
   type        = string

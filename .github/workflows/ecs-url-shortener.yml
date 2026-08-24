@@ -25,15 +25,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.PRIMARY_REGION }}
   CONTAINER_NAME: shortener
-  SECONDARY_AWS_REGION: ${{ vars.SECONDARY_REGION }}
-  SECONDARY_ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-secondary
-  SECONDARY_ECS_SERVICE: ${{ vars.PROJECT_NAME }}-secondary
-  ECR_REPOSITORY: ${{ vars.PROJECT_NAME }}-primary
-  ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-primary
-  ECS_SERVICE: ${{ vars.PROJECT_NAME }}-primary
-  IMAGE_DIGEST_PARAMETER: /${{ vars.PROJECT_NAME }}/primary/image-digest
   WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
 
 jobs:
@@ -115,6 +107,22 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Load project configuration
+        uses: ./.github/actions/load-config
+
+      - name: Resolve workload deployment targets
+        run: |
+          {
+            echo "AWS_REGION=$PRIMARY_REGION"
+            echo "SECONDARY_AWS_REGION=$SECONDARY_REGION"
+            echo "ECR_REPOSITORY=$PRIMARY_RESOURCE_NAME"
+            echo "ECS_CLUSTER=$PRIMARY_RESOURCE_NAME"
+            echo "ECS_SERVICE=$PRIMARY_RESOURCE_NAME"
+            echo "SECONDARY_ECS_CLUSTER=$SECONDARY_RESOURCE_NAME"
+            echo "SECONDARY_ECS_SERVICE=$SECONDARY_RESOURCE_NAME"
+            echo "IMAGE_DIGEST_PARAMETER=/$PROJECT_NAME/primary/image-digest"
+          } >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

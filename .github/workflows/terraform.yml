@@ -37,14 +37,8 @@ permissions:
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TERRAFORM_VERSION: ${{ vars.TERRAFORM_VERSION }}
-  PROJECT_NAME: ${{ vars.PROJECT_NAME }}
-  BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
   SENTRY_URL: ${{ vars.SENTRY_URL }}
   WORKLOAD_URL: ${{ vars.WORKLOAD_URL }}
-  PRIMARY_REGION: ${{ vars.PRIMARY_REGION }}
-  SECONDARY_REGION: ${{ vars.SECONDARY_REGION }}
-  SENTRY_REGION: ${{ vars.SENTRY_REGION }}
 
 jobs:
   detect-changes:
@@ -116,7 +110,6 @@ jobs:
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-preview-${{ github.run_id }}
@@ -164,7 +157,6 @@ jobs:
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-plan-${{ github.run_id }}
@@ -228,10 +220,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Load project configuration
+        uses: ./.github/actions/load-config
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           session-name: terraform-apply-${{ github.run_id }}
@@ -314,10 +308,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Load project configuration
+        uses: ./.github/actions/load-config
+
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
         with:
-          terraform-version: ${{ env.TERRAFORM_VERSION }}
           role-arn: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.PRIMARY_REGION }}
           session-name: terraform-destroy-${{ github.run_id }}

@@ -31,6 +31,12 @@ CONFIRM_FAILBACK_SNAPSHOT=YES DRILL_LOG=./drill-events.log scripts/drills/failba
 
 This captures every post-outage write while the secondary still serves traffic, before anything replaces the primary.
 
+The step prints the snapshot identifier and records it as `secondary_pre_failback_snapshot` in the drill log. Step 2 needs that exact value:
+
+```bash
+grep secondary_pre_failback_snapshot ./drill-events.log | tail -1
+```
+
 ### 2. Rebuild the primary as a replica
 
 ```bash

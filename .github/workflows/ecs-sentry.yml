@@ -25,13 +25,7 @@ permissions:
   contents: read
 
 env:
-  # Matches monitoring/locals.tf: isolated from both drill regions (primary eu-central-1, secondary eu-west-1).
-  AWS_REGION: ${{ vars.SENTRY_REGION }}
   CONTAINER_NAME: sentry
-  ECR_REPOSITORY: ${{ vars.PROJECT_NAME }}-monitoring
-  ECS_CLUSTER: ${{ vars.PROJECT_NAME }}-monitoring
-  ECS_SERVICE: ${{ vars.PROJECT_NAME }}-monitoring
-  IMAGE_DIGEST_PARAMETER: /${{ vars.PROJECT_NAME }}/monitoring/image-digest
   SENTRY_URL: ${{ vars.SENTRY_URL }}
 
 jobs:
@@ -97,6 +91,19 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Load project configuration
+        uses: ./.github/actions/load-config
+
+      - name: Resolve sentry deployment targets
+        run: |
+          {
+            echo "AWS_REGION=$SENTRY_REGION"
+            echo "ECR_REPOSITORY=$PROJECT_NAME-monitoring"
+            echo "ECS_CLUSTER=$PROJECT_NAME-monitoring"
+            echo "ECS_SERVICE=$PROJECT_NAME-monitoring"
+            echo "IMAGE_DIGEST_PARAMETER=/$PROJECT_NAME/monitoring/image-digest"
+          } >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

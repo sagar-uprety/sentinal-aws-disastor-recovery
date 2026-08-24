@@ -12,7 +12,7 @@ provider "aws" {
   region = "eu-central-1"
   default_tags {
     tags = {
-      Project     = var.project_name
+      Project     = local.project_name
       ManagedBy   = "terraform"
       Environment = "shared"
     }

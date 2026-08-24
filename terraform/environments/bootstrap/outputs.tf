@@ -19,11 +19,11 @@ output "terraform_github_plan_role_arn" {
 }
 
 output "route53_zone_id" {
-  description = "Persistent hosted zone ID for pilotlight.sagaruprety.com.np."
+  description = "Persistent hosted zone ID for the project base domain."
   value       = aws_route53_zone.pilotlight.zone_id
 }
 
 output "route53_zone_name_servers" {
-  description = "Nameservers delegated once from the Cloudflare-managed parent zone."
+  description = "Nameservers to publish at the registrar or parent zone, once, when the zone is first created."
   value       = aws_route53_zone.pilotlight.name_servers
 }
