@@ -136,7 +136,7 @@ jobs:
           retention-days: 7
 
   plan:
-    name: Deployment plan ${{ inputs.target || github.event_name }}
+    name: Deployment plan
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.operation == 'apply' &&
@@ -191,7 +191,7 @@ jobs:
           retention-days: 1
 
   apply:
-    name: Apply ${{ inputs.target || github.event_name }}
+    name: Apply
     needs: plan
     if: >-
       github.event_name == 'workflow_dispatch' &&
