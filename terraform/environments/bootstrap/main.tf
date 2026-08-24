@@ -78,7 +78,8 @@ resource "aws_route53_zone" "pilotlight" {
 module "terraform_ci_iam" {
   source = "../../modules/terraform-ci-iam"
 
-  project_name = local.project_name
-  github_org   = var.github_org
-  github_repo  = var.github_repo
+  project_name     = local.project_name
+  github_org       = var.github_org
+  github_repo      = var.github_repo
+  state_bucket_arn = aws_s3_bucket.state.arn
 }

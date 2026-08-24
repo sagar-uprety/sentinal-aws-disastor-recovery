@@ -27,6 +27,7 @@ No modules.
 | [aws_iam_openid_connect_provider.github](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_openid_connect_provider) | resource |
 | [aws_iam_role.terraform_github_apply](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role.terraform_github_plan](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.terraform_plan_lock](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy.terraform_workload](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy_attachment.terraform_plan_read_only](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_iam_role_policy_attachment.terraform_power_user](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
@@ -41,6 +42,7 @@ No modules.
 | <a name="input_manageable_role_suffixes"></a> [manageable\_role\_suffixes](#input\_manageable\_role\_suffixes) | Role suffixes (after "${project\_name}-{env}-") this CI role may create/update/delete. | `list(string)` | <pre>[<br/>  "github-actions",<br/>  "ecs-task-exec",<br/>  "ecs-task",<br/>  "vpc-flow-logs",<br/>  "rds-monitoring"<br/>]</pre> | no |
 | <a name="input_passable_role_suffixes"></a> [passable\_role\_suffixes](#input\_passable\_role\_suffixes) | Role suffixes (after "${project\_name}-{env}-") this CI role may PassRole to ECS. | `list(string)` | <pre>[<br/>  "ecs-task-exec",<br/>  "ecs-task",<br/>  "vpc-flow-logs",<br/>  "rds-monitoring"<br/>]</pre> | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |
+| <a name="input_state_bucket_arn"></a> [state\_bucket\_arn](#input\_state\_bucket\_arn) | ARN of the S3 state bucket, so the plan role can lock/unlock without ReadOnlyAccess. | `string` | n/a | yes |
 | <a name="input_workload_environments"></a> [workload\_environments](#input\_workload\_environments) | Environment names whose IAM roles this CI role may manage. | `list(string)` | <pre>[<br/>  "primary",<br/>  "secondary",<br/>  "monitoring"<br/>]</pre> | no |
 
 ## Outputs

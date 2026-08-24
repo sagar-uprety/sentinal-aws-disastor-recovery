@@ -13,6 +13,11 @@ variable "github_repo" {
   type        = string
 }
 
+variable "state_bucket_arn" {
+  description = "ARN of the S3 state bucket, so the plan role can lock/unlock without ReadOnlyAccess."
+  type        = string
+}
+
 variable "workload_environments" {
   description = "Environment names whose IAM roles this CI role may manage."
   type        = list(string)
