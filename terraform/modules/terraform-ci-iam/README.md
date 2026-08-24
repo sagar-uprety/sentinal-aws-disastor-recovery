@@ -38,7 +38,9 @@ No modules.
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_github_org"></a> [github\_org](#input\_github\_org) | GitHub organization or user that owns the repository. | `string` | n/a | yes |
+| <a name="input_github_owner_id"></a> [github\_owner\_id](#input\_github\_owner\_id) | Numeric GitHub user/org ID GitHub appends to the OIDC sub claim after a rename or transfer. | `string` | n/a | yes |
 | <a name="input_github_repo"></a> [github\_repo](#input\_github\_repo) | GitHub repository name (without owner). | `string` | n/a | yes |
+| <a name="input_github_repo_id"></a> [github\_repo\_id](#input\_github\_repo\_id) | Numeric GitHub repository ID, for the same reason as github\_owner\_id. | `string` | n/a | yes |
 | <a name="input_manageable_role_suffixes"></a> [manageable\_role\_suffixes](#input\_manageable\_role\_suffixes) | Role suffixes (after "${project\_name}-{env}-") this CI role may create/update/delete. | `list(string)` | <pre>[<br/>  "github-actions",<br/>  "ecs-task-exec",<br/>  "ecs-task",<br/>  "vpc-flow-logs",<br/>  "rds-monitoring"<br/>]</pre> | no |
 | <a name="input_passable_role_suffixes"></a> [passable\_role\_suffixes](#input\_passable\_role\_suffixes) | Role suffixes (after "${project\_name}-{env}-") this CI role may PassRole to ECS. | `list(string)` | <pre>[<br/>  "ecs-task-exec",<br/>  "ecs-task",<br/>  "vpc-flow-logs",<br/>  "rds-monitoring"<br/>]</pre> | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name for resource naming. | `string` | n/a | yes |

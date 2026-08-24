@@ -81,5 +81,7 @@ module "terraform_ci_iam" {
   project_name     = local.project_name
   github_org       = var.github_org
   github_repo      = var.github_repo
+  github_owner_id  = var.github_owner_id
+  github_repo_id   = var.github_repo_id
   state_bucket_arn = aws_s3_bucket.state.arn
 }

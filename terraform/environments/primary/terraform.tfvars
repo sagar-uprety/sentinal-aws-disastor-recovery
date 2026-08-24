@@ -5,3 +5,5 @@ credential_version = 1
 link_token_version = 1
 deploy_service     = false
 multi_az           = true
+github_owner_id    = "51237312"
+github_repo_id     = "1297686451"

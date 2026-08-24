@@ -53,3 +53,13 @@ variable "github_repo" {
   description = "GitHub repository name, for the OIDC trust policy."
   type        = string
 }
+
+variable "github_owner_id" {
+  description = "Numeric GitHub user/org ID for the OIDC sub claim."
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID for the OIDC sub claim."
+  type        = string
+}
