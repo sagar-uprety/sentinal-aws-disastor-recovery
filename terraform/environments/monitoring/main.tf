@@ -131,6 +131,17 @@ module "service" {
   secondary_database_identifier = "${local.project_name}-secondary"
 }
 
+# Missing here left the ALB security group with no egress at all, so it could never open a
+# TCP connection to the sentry task on any port, including its own health checks.
+resource "aws_vpc_security_group_egress_rule" "alb_to_ecs" {
+  security_group_id            = module.alb.security_group_id
+  referenced_security_group_id = module.service.security_group_id
+  description                  = "App traffic to ECS tasks"
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+}
+
 resource "aws_route53_record" "sentry" {
   count = var.deploy_service ? 1 : 0
 
