@@ -130,22 +130,11 @@ Every value below is account-specific. Set them before the first apply; the defa
 | `primary/terraform.tfvars` | same, plus `credential_version`, `link_token_version`, `multi_az` | Rotation counters and the Multi-AZ toggle |
 | `secondary/terraform.tfvars` | `alert_email`, `create_arc` | Alert recipient, and the ARC toggle held off outside drills |
 
-**Drill scripts and CI.** `scripts/config.sh` derives every name, Region, and URL from `config.json`, and each value stays overridable by an environment variable of the same name. The drills source it directly; the workflows load it through `.github/actions/load-config` after checkout, which also exposes the URLs as step outputs so `environment.url` can use them without a repository variable.
+
 
 **GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
 
-**GitHub repository variables.** Four, all of them role ARNs, because a role ARN is minted by an apply and is specific to your account. Everything else the workflows need comes from `config.json` and `.terraform-version`, read after checkout.
-
-They cannot all be set up front. Bootstrap mints the two Terraform roles, the monitoring apply mints the sentry role, and the primary apply mints the workload role, so set each one as the stage that creates it completes.
-
-| Variable | Value |
-|---|---|
-| `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
-| `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
-| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
-| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
-
-### Deploy
+### Deploy Steps
 
 Stages apply in order, because the secondary and monitoring stacks depend on artifacts the earlier stages create. Every stage after the first runs through GitHub Actions using short-lived OIDC credentials, so no long-lived AWS keys are stored anywhere.
 
@@ -161,7 +150,17 @@ terraform -chdir=terraform/environments/bootstrap plan -out=bootstrap.tfplan
 terraform -chdir=terraform/environments/bootstrap apply bootstrap.tfplan
 ```
 
-Publish the nameservers the bootstrap output prints before continuing: set them at your registrar if `base_domain` is a domain you registered, or add them as NS records in the parent zone if it is a subdomain. Nothing resolves until they are live.
+Note: The bootstrap output `route53_zone_name_servers` prints four nameservers. Delegate `base_domain` to them by creating an NS record in the parent zone that points at all four.
+
+**GitHub repository variables.** Set the following four GitHub Variables from the bootstrap output
+
+| Variable | Value |
+|---|---|
+| `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
+| `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
+| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
+| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
+
 
 **2. Create the monitoring foundation.** VPC, ALB, ECR repository, and the DynamoDB table for check history.
 
@@ -235,25 +234,23 @@ Do not stop at a successful failover; run the failback. Otherwise the workload s
 
 ### Tear down
 
-Destroy the stack when a drill cycle is finished. The pilot light bills continuously: two NAT Gateways, two ALBs, the primary Multi-AZ database, and its cross-region replica all run at rest.
-
-Finish any failback first, and revert `create_arc` to `false`. The destroy job refuses to run while replication points from secondary to primary, so an abandoned mid-failback stack has to be reconciled before it will proceed.
+Destroy the stack when a drill cycle is finished to avoid costs.
 
 ```bash
 gh workflow run terraform.yml --ref main -f operation=destroy -f target=primary -f confirm_destroy=DESTROY
 ```
 
-`operation=destroy` ignores `target` and always runs secondary, then primary, then monitoring, since the secondary database replicates from the primary and monitoring only observes the other two. It runs behind the `terraform-production` environment approval, only from `main`, and it also removes the AWS-managed workload artifacts Terraform does not own.
+`operation=destroy` ignores `target` and always runs secondary, then primary, then monitoring, since the secondary database replicates from the primary and monitoring only observes the other two.
 
-Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the nameservers stay valid. To remove those too, destroy that root by hand and expect to republish nameservers on the next deploy:
+Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the nameservers stay valid.
+
+To remove those too, run the following:
 
 ```bash
 terraform -chdir=terraform/environments/bootstrap destroy
 ```
 
-The state bucket sets `force_destroy = false`, so empty its versions before that destroy will succeed.
-
-## Development
+## Development (Sentry Monitoring Service and URL Shortener)
 
 Requires Docker and Docker Compose.
 
@@ -261,7 +258,7 @@ Requires Docker and Docker Compose.
 docker compose up --build
 ```
 
-This starts the sentry on `localhost:8080`, the URL shortener on `localhost:8081`, and PostgreSQL. The sentry reads a static topology fixture locally, since live ECS and RDS topology only exists once deployed.
+This starts the sentry on `localhost:8080`, the URL shortener on `localhost:8081`, and PostgreSQL. The sentry reads a static topology (mock data), since live ECS and RDS topology only exists once deployed.
 
 Tests and static checks, no AWS credentials required:
 
