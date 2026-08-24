@@ -47,7 +47,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
   }
 }
 
-# Persistent delegated zone keeps nameservers stable across workload rebuilds.
+# Persistent zone keeps nameservers stable across workload rebuilds.
 resource "aws_route53_zone" "pilotlight" {
   # DNSSEC signing and query logging both need extra infra (KMS key, log group) not justified here.
   #checkov:skip=CKV2_AWS_38,CKV2_AWS_39

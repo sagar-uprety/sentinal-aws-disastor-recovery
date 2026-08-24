@@ -108,7 +108,7 @@ Please be aware that deploying aws resources incurs real cost. Please always des
 - [Terraform](https://developer.hashicorp.com/terraform/install) 1.11 or newer.
 - [GitHub CLI](https://cli.github.com), optional. The Actions tab dispatches the same workflows.
 - [Docker](https://docs.docker.com/get-started/get-docker/) with Compose, optional, for running the applications locally.
-- A domain you can delegate a subdomain from.
+- A domain or subdomain you control and can point nameservers at, either registered directly or delegated from a parent zone.
 - A GitHub repository with two protected environments named `terraform-production` and `production`, and the repository variables listed under [Configure](#configure).
 
 The drill scripts call ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC directly with these credentials. Deployments use short-lived GitHub OIDC roles instead.
@@ -117,7 +117,7 @@ The drill scripts call ECS, RDS, ELB, ECR, SSM, CloudWatch, Route 53, and ARC di
 
 Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
 
-**Terraform.** `base_domain` is the delegated subdomain that carries every record the project creates, and it must be identical in all four files.
+**Terraform.** `base_domain` is the domain or subdomain whose Route 53 zone carries every record the project creates. Bootstrap creates that zone, so `base_domain` works as an apex you registered or as a subdomain of a zone you already run. It must be identical in all four files.
 
 | File | Key | Set to |
 |---|---|---|
@@ -154,16 +154,16 @@ Stages apply in order, because the secondary and monitoring stacks depend on art
 
 The commands below use the [GitHub CLI](https://cli.github.com). Without it, dispatch the same workflows from the repository's **Actions** tab: pick the workflow, choose **Run workflow**, and set the inputs shown in each `-f` flag.
 
-**1. Bootstrap the state backend.** Creates the S3 state backend, the GitHub OIDC roles, and the delegated Route 53 zone. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
+**1. Bootstrap the state backend.** Creates the S3 state backend, the GitHub OIDC roles, and the Route 53 hosted zone for `base_domain`. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
 
-If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so the delegation has to be redone, and the recreated IAM roles get new ARNs, so the four role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
+If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so they have to be republished, and the recreated IAM roles get new ARNs, so the four role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
 
 ```bash
 scripts/bootstrap.sh plan
 CONFIRM_BOOTSTRAP=APPLY_BOOTSTRAP scripts/bootstrap.sh apply
 ```
 
-Delegate the subdomain to the nameservers the bootstrap output prints before continuing.
+Publish the nameservers the bootstrap output prints before continuing: set them at your registrar if `base_domain` is a domain you registered, or add them as NS records in the parent zone if it is a subdomain. Nothing resolves until they are live.
 
 **2. Create the monitoring foundation.** VPC, ALB, ECR repository, and the DynamoDB table for check history.
 
@@ -247,7 +247,7 @@ gh workflow run terraform.yml --ref main -f operation=destroy -f target=primary 
 
 `operation=destroy` ignores `target` and always runs secondary, then primary, then monitoring, since the secondary database replicates from the primary and monitoring only observes the other two. It runs behind the `terraform-production` environment approval, only from `main`, and it also removes the AWS-managed workload artifacts Terraform does not own.
 
-Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the DNS delegation stays valid. To remove those too, destroy that root by hand and expect to redo the delegation on the next deploy:
+Bootstrap is deliberately excluded, so the state backend, OIDC roles, and hosted zone survive a teardown and the nameservers stay valid. To remove those too, destroy that root by hand and expect to republish nameservers on the next deploy:
 
 ```bash
 terraform -chdir=terraform/environments/bootstrap destroy
@@ -294,7 +294,7 @@ terraform/
   modules/           vpc, alb, ecs-url-shortener, ecs-sentry, rds, ecr, alerting,
                      route53-failover, acm-cert, app-deploy-iam, terraform-ci-iam
   environments/
-    bootstrap/       state backend, GitHub OIDC roles, delegated Route 53 zone
+    bootstrap/       state backend, GitHub OIDC roles, Route 53 hosted zone
     monitoring/      sentry: own Region, own state, own lifecycle
     primary/         primary Region workload
     secondary/       pilot-light secondary Region
