@@ -195,7 +195,7 @@ GitHub repository variables. Set the following from the output above
 
 | Variable | Value |
 |---|---|
-| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`|
+| `AWS_URL_SHORTENER_ROLE_ARN` | `github_actions_role_arn`|
 
 
 **5. Publish the workload image, then deploy it.** Same two-phase pattern as the sentry.
