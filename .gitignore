@@ -36,3 +36,6 @@ vendor/
 
 # macOS
 .DS_Store
+plan.md
+CLAUDE.md
+agents.md
