@@ -80,7 +80,7 @@ jobs:
           fi
 
   preview:
-    name: Preview ${{ matrix.target }}
+    name: Speculative plan ${{ matrix.target }}
     needs: detect-changes
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository ||
@@ -136,7 +136,7 @@ jobs:
           retention-days: 7
 
   plan:
-    name: Plan ${{ inputs.target }}
+    name: Deployment plan
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.operation == 'apply' &&
@@ -191,7 +191,7 @@ jobs:
           retention-days: 1
 
   apply:
-    name: Apply ${{ inputs.target }}
+    name: Apply
     needs: plan
     if: >-
       github.event_name == 'workflow_dispatch' &&
