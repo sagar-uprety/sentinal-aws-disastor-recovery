@@ -17,8 +17,9 @@ on:
           - destroy
       target:
         description: >-
-          Root module to act on. Environments apply one per run, in order monitoring, primary, secondary.
-          Ignored by destroy, which always runs secondary, primary, monitoring.
+          Root module to act on. Environments apply one per run, in order monitoring, primary, secondary,
+          arc. arc needs both ALBs to exist, so it only applies after primary and secondary do.
+          Ignored by destroy, which always runs arc, secondary, primary, monitoring.
         required: true
         default: primary
         type: choice
@@ -26,6 +27,7 @@ on:
           - primary
           - secondary
           - monitoring
+          - arc
       confirm_destroy:
         description: Type DESTROY to authorize a destroy operation.
         required: false
@@ -281,7 +283,7 @@ jobs:
             "$WORKLOAD_URL/healthz"
 
   destroy:
-    name: Destroy all environments (secondary, primary, monitoring)
+    name: Destroy all environments (arc, secondary, primary, monitoring)
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.operation == 'destroy' &&
@@ -323,11 +325,13 @@ jobs:
       - name: Refuse destruction during reverse replication
         run: scripts/ci/guard-topology.sh no-reverse-replication
 
-      # secondary before primary because the secondary database replicates from primary, and primary before
-      # monitoring because monitoring only observes the other two.
-      - name: Destroy secondary then primary
+      # arc first: its data sources read both ALBs unconditionally, so they'd fail to
+      # refresh once either is gone. secondary before primary because the secondary database
+      # replicates from primary, and primary before monitoring because monitoring only observes
+      # the other two.
+      - name: Destroy arc, secondary, then primary
         run: |
-          for root in terraform/environments/secondary terraform/environments/primary; do
+          for root in terraform/environments/arc terraform/environments/secondary terraform/environments/primary; do
             terraform -chdir="$root" init -input=false
             terraform -chdir="$root" plan -destroy -input=false -lock-timeout=5m -out=destroy.tfplan
             terraform -chdir="$root" show -no-color destroy.tfplan

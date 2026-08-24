@@ -14,9 +14,3 @@ variable "multi_az" {
   type        = bool
   default     = false
 }
-
-variable "create_arc" {
-  description = "Provision the Route53 ARC cluster/records for a drill ($2.50/cluster-hour). Off by default."
-  type        = bool
-  default     = false
-}

@@ -3,16 +3,18 @@
 set -euo pipefail
 
 # Roots this workflow can plan; bootstrap is deliberately excluded (see below).
-roots=(monitoring primary secondary)
+roots=(monitoring primary secondary arc)
 monitoring=false
 primary=false
 secondary=false
+arc=false
 
 mark() {
   case "$1" in
     monitoring) monitoring=true ;;
     primary) primary=true ;;
     secondary) secondary=true ;;
+    arc) arc=true ;;
   esac
 }
 
@@ -45,4 +47,5 @@ json=""
 $monitoring && json='"monitoring"'
 $primary && json+="${json:+,}\"primary\""
 $secondary && json+="${json:+,}\"secondary\""
+$arc && json+="${json:+,}\"arc\""
 printf '[%s]\n' "$json"

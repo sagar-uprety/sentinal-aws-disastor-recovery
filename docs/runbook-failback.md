@@ -135,7 +135,7 @@ Since `finalize` deletes the snapshot, run it only once the restored topology is
 
 ## Remove ARC after the drill
 
-Revert `create_arc` to `false`, merge, and apply `target=secondary` again. `recovery.yml` never passes `-var=create_arc`, so it leaves whatever the committed tfvars says. Confirm the cluster is gone:
+Revert `create_arc` to `false` in `config.json`, merge, then apply `target=arc` (removes the failover pair) followed by `target=primary` (restores the plain workload record), in that order; reversing it triggers the same Route53 conflict the provisioning step avoids. The hostname does not resolve for the few seconds between the two applies. Confirm the cluster is gone:
 
 ```bash
 aws route53-recovery-control-config list-clusters --region us-west-2
