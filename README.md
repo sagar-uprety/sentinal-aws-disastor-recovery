@@ -119,7 +119,7 @@ Only bootstrap and the drills use your own credentials. Every deploy runs in Git
 
 Every value below is account-specific. Set them before the first apply; the defaults in this repository point at the author's account and domain.
 
-**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones acts as single source of truth for tf, gh action and our drill scripts.
+**`config.json`.** Project name, base domain, and the three Regions with their Availability Zones. Single source of truth for Terraform, the workflows, and the drill scripts.
 
 **Per-environment tfvars.** What is left in each `terraform.tfvars` is genuinely per-environment.
 
@@ -150,9 +150,24 @@ terraform -chdir=terraform/environments/bootstrap plan -out=bootstrap.tfplan
 terraform -chdir=terraform/environments/bootstrap apply bootstrap.tfplan
 ```
 
-Note: The bootstrap output `route53_zone_name_servers` prints four nameservers. Delegate `base_domain` to them by creating an NS record in the parent zone that points at all four.
+Bootstrap prints six outputs. Only three need any action:
 
-**GitHub repository variables.** Set the following four GitHub Variables from the bootstrap output
+| Output | What to do with it |
+|---|---|
+| `route53_zone_name_servers` | Delegate `base_domain` to these four, below |
+| `terraform_github_apply_role_arn` | Set as the `AWS_TERRAFORM_ROLE_ARN` repository variable |
+| `terraform_github_plan_role_arn` | Set as the `AWS_TERRAFORM_PLAN_ROLE_ARN` repository variable |
+| `state_bucket` | Nothing. Confirm it matches `bucket` in each `backend.tf` |
+| `github_oidc_provider_arn` | Nothing. The primary and monitoring roots look the provider up themselves |
+| `route53_zone_id` | Nothing. The other roots look the zone up by name |
+
+Delegate `base_domain` by creating an NS record in the parent zone pointing at all four nameservers: through your registrar's nameserver settings for a domain you registered, or directly in the parent zone for a subdomain. For a subdomain the record is named for the subdomain label itself, not the parent apex. Nothing resolves, and certificate validation in step 2 hangs, until the delegation is live.
+
+```bash
+dig +short NS pilotlight.sagaruprety.com.np
+```
+
+**GitHub repository variables.** Four in total. Bootstrap supplies the first two now; the other two do not exist until the applies that create them.
 
 | Variable | Value |
 |---|---|
