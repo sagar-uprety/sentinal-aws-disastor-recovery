@@ -42,19 +42,12 @@ runs:
           echo "SENTRY_URL=$SENTRY_URL"
         } >> "$GITHUB_ENV"
 
-        # monitoring is the sentry's own environment name, so it maps to the sentry Region.
         region=""
-        case "$TARGET" in
-        monitoring) region="$SENTRY_REGION" ;;
-        primary) region="$PRIMARY_REGION" ;;
-        secondary) region="$SECONDARY_REGION" ;;
-        "") ;;
-        *)
-          echo "error: load-config: unknown target '$TARGET'" >&2
-          exit 1
-          ;;
-        esac
-        if [ -n "$region" ]; then
+        if [ -n "$TARGET" ]; then
+          region="$(region_for "$TARGET")" || {
+            echo "error: load-config: config.json has no region for target '$TARGET'" >&2
+            exit 1
+          }
           echo "AWS_REGION=$region" >> "$GITHUB_ENV"
         fi
 
