@@ -126,10 +126,6 @@ jobs:
             -var='multi_az=false' \
             -var="replicate_source_db_arn=$SECONDARY_SOURCE_ARN"
 
-      - name: Show reverse-replication plan
-        working-directory: terraform/environments/primary
-        run: terraform show -no-color failback-prepare.tfplan
-
       - name: Save reverse-replication plan for approval
         uses: actions/upload-artifact@v7
         with:
@@ -226,7 +222,6 @@ jobs:
             -var='deploy_service=true' \
             -var='desired_count=2' \
             -var='multi_az=true'
-          terraform show -no-color failback-primary.tfplan
 
       - name: Plan secondary pilot-light restoration
         working-directory: terraform/environments/secondary
@@ -236,7 +231,6 @@ jobs:
             -replace='module.rds.aws_db_instance.main' \
             -var='desired_count=0' \
             -var='multi_az=false'
-          terraform show -no-color failback-secondary.tfplan
 
       - name: Save primary reconciliation plan for approval
         uses: actions/upload-artifact@v7
