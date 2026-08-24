@@ -121,7 +121,7 @@ Every value below is account-specific. Set them before the first apply; the defa
 
 **`config.json`.** Project name, base domain, and the three Regions with their Availability Zones. Single source of truth for Terraform, the workflows, and the drill scripts.
 
-**Per-environment tfvars.** What is left in each `terraform.tfvars` is genuinely per-environment.
+**Per-environment tfvars.**
 
 | File | Key | Set to |
 |---|---|---|
@@ -132,7 +132,7 @@ Every value below is account-specific. Set them before the first apply; the defa
 
 
 
-**GitHub environments.** Create two, named exactly `terraform-production` and `production`, and require a reviewer on each. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.
+**GitHub environments.** Create two, named exactly `terraform-production` and `production`, and restrict each to deployments from `main`. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares. Add a required reviewer only once a second collaborator exists to approve; GitHub will not let the person who triggered a run approve their own deployment, so a required reviewer on a solo-maintained repo just deadlocks every dispatch.
 
 ### Deploy Steps
 
@@ -142,7 +142,6 @@ The commands below use the [GitHub CLI](https://cli.github.com). Without it, dis
 
 **1. Bootstrap.** Creates the S3 state backend, the GitHub OIDC identity provider, the Terraform plan and apply roles, and the Route 53 hosted zone for `base_domain`. This is the one stage applied by hand, because CI cannot create the credentials it needs to run. It is applied once and left in place.
 
-If you are rebuilding a previously destroyed stack, treat this stage as a fresh one. The recreated hosted zone gets new nameservers, so they have to be republished, and the recreated IAM roles get new ARNs, so the role variables in [Configure](#configure) have to be updated before any workflow will authenticate.
 
 ```bash
 terraform -chdir=terraform/environments/bootstrap init
@@ -150,20 +149,18 @@ terraform -chdir=terraform/environments/bootstrap plan -out=bootstrap.tfplan
 terraform -chdir=terraform/environments/bootstrap apply bootstrap.tfplan
 ```
 
-Delegate `base_domain` by creating an NS record in the parent zone pointing at the four nameservers in the `route53_zone_name_servers` output: through your registrar's nameserver settings for a domain you registered, or directly in the parent zone for a subdomain. For a subdomain the record is named for the subdomain label itself, not the parent apex. Nothing resolves, and certificate validation in step 2 hangs, until the delegation is live.
+Delegate `base_domain` by creating an NS record in the parent zone pointing at the four nameservers in the `route53_zone_name_servers` output
 
 ```bash
 dig +short NS pilotlight.sagaruprety.com.np
 ```
 
-**GitHub repository variables.** Four in total. Bootstrap supplies the first two now; the other two do not exist until the applies that create them.
+GitHub repository variables: Set the following from the output above
 
 | Variable | Value |
 |---|---|
 | `AWS_TERRAFORM_ROLE_ARN` | `terraform_github_apply_role_arn`, from the bootstrap output |
 | `AWS_TERRAFORM_PLAN_ROLE_ARN` | `terraform_github_plan_role_arn`, from the bootstrap output |
-| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`, from the monitoring output; only exists after deploy step 2 |
-| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`, from the primary output; only exists after deploy step 4 |
 
 
 **2. Create the monitoring foundation.** VPC, ALB, ECR repository, and the DynamoDB table for check history.
@@ -171,6 +168,12 @@ dig +short NS pilotlight.sagaruprety.com.np
 ```bash
 gh workflow run terraform.yml --ref main -f operation=apply -f target=monitoring
 ```
+
+GitHub repository variables: Set the following from the output above
+
+| Variable | Value |
+|---|---|
+| `AWS_SENTRY_ROLE_ARN` | `github_actions_role_arn`
 
 **3. Publish the sentry image, then deploy it.** The first apply intentionally leaves the ECS service uncreated, since it cannot reference an image that does not exist yet.
 
@@ -189,6 +192,13 @@ gh workflow run terraform.yml --ref main -f operation=apply -f target=monitoring
 ```bash
 gh workflow run terraform.yml --ref main -f operation=apply -f target=primary
 ```
+
+GitHub repository variables. Set the following from the output above
+
+| Variable | Value |
+|---|---|
+| `AWS_WORKLOAD_ROLE_ARN` | `github_actions_role_arn`|
+
 
 **5. Publish the workload image, then deploy it.** Same two-phase pattern as the sentry.
 
