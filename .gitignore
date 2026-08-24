@@ -29,6 +29,15 @@ vendor/
 # IDE
 .idea/
 .vscode/
+
+# AI tooling, kept local only
+.claude/
+.agents/
+.opencode/
+.codegraph/
+CLAUDE.md
+agents.md
+skills-lock.json
 *.swp
 *.swo
 *.knp
@@ -37,5 +46,3 @@ vendor/
 # macOS
 .DS_Store
 plan.md
-CLAUDE.md
-agents.md

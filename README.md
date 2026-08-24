@@ -132,11 +132,9 @@ Every value below is account-specific. Set them before the first apply; the defa
 
 
 
-**GitHub environments.** Create two, named exactly `terraform-production` and `production`, and restrict each to deployments from `main`. The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares. Add a required reviewer only once a second collaborator exists to approve; GitHub will not let the person who triggered a run approve their own deployment, so a required reviewer on a solo-maintained repo just deadlocks every dispatch.
+**GitHub environments.** Create two, named exactly `terraform-production` and `production`, and restrict each to deployments from `main`.
 
 ### Deploy Steps
-
-Stages apply in order, because the secondary and monitoring stacks depend on artifacts the earlier stages create. Every stage after the first runs through GitHub Actions using short-lived OIDC credentials, so no long-lived AWS keys are stored anywhere.
 
 The commands below use the [GitHub CLI](https://cli.github.com). Without it, dispatch the same workflows from the repository's **Actions** tab: pick the workflow, choose **Run workflow**, and set the inputs shown in each `-f` flag.
 
