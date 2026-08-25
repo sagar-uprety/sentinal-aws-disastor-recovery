@@ -52,7 +52,9 @@ This sets primary `On` and secondary `Off`. The ARC safety rule requires exactly
 CONFIRM_DISASTER=YES DRILL_LOG=./drill-events.log scripts/drills/simulate-disaster.sh
 ```
 
-The script verifies the pilot-light prerequisites, creates a short link on the primary and records its slug along with the full set of existing slugs, then scales primary ECS to zero. It records `outage_confirmed` only once the ALB returns HTTP 503 with zero healthy targets, using both signals so a transient error is not mistaken for the outage. If it cannot prove the outage within two minutes it restores the original desired count and exits non-zero.
+The script verifies the pilot-light prerequisites, creates a short link on the primary and records its slug along with the full set of existing slugs, then scales primary ECS to zero. It records `outage_confirmed` only once the ALB returns HTTP 503 with zero healthy targets.
+
+If it cannot prove the outage within two minutes it restores the original desired count and exits non-zero.
 
 ### 2. Promote and activate the secondary
 
@@ -60,16 +62,14 @@ The script verifies the pilot-light prerequisites, creates a short link on the p
 CONFIRM_FAILOVER=YES DRILL_LOG=./drill-events.log scripts/drills/failover.sh
 ```
 
-Before promoting, the script validates the replica, confirms the image digest is immutable and present in the secondary ECR, checks both regional SSM parameters resolve, and requires fresh CloudWatch `ReplicaLag` evidence within the RPO target.
+The script validates the replica, confirms the image digest is immutable and present in the secondary ECR, checks both regional SSM parameters resolve, and requires fresh CloudWatch `ReplicaLag` evidence within the RPO target.
 
 It then promotes the replica, registers a task definition pointing at the promoted endpoint, scales to two tasks across two Availability Zones, waits for two healthy ALB targets, confirms every pre-outage link is present, and creates a new link to prove the promoted database accepts writes.
-
-Traffic does not move in this step.
 
 ### 3. Switch traffic
 
 ```bash
-CONFIRM_TRAFFIC_SWITCH=secondary DRILL_LOG=./drill-events.log scripts/drills/switch-traffic.sh secondary
+CONFIRM_TRAFFIC_SWITCH=SECONDARY DRILL_LOG=./drill-events.log scripts/drills/switch-traffic.sh secondary
 ```
 
 The script resolves the ARC cluster and routing controls, confirms the current state is primary `On` and secondary `Off`, then sends both state changes in a single atomic `update-routing-control-states` call through the first responsive regional data-plane endpoint. It reads the state back instead of trusting the call, then polls for up to three minutes until authoritative Route 53 DNS, the public health endpoint, and the expected link all confirm the secondary is serving.
@@ -108,16 +108,6 @@ The RPO target for replica promotion is 60 seconds.
 
 Link survival provides application-level evidence alongside the control-plane measurement. `simulate-disaster.sh` records every slug present on the primary before the outage, and `failover.sh` requires every one of them after promotion, not a sample. A link created on the secondary afterwards proves the promoted instance accepts writes, and failback requires that same link on the primary before returning traffic.
 
-Reference result from a live drill on 2026-08-08: end-to-end RTO 666 seconds against the 30 minute target, RPO 26.0 seconds of measured `ReplicaLag` against the 60 second target, with every pre-outage link verified present after promotion.
-
-## Logical corruption
-
-Replica promotion is the wrong response to logical corruption, because replication copies the corrupted data to the secondary faithfully. Use the cross-Region automated backup instead: restore to a point in time into an isolated instance, validate known data, and record the restore point and duration. A measured isolated restore took 12 minutes 11 seconds, which is a reference figure, not a guarantee.
-
-## Emergency Route 53 fallback
-
-If the ARC data-plane endpoints are unavailable, a deliberate Route 53 record update can move traffic after the same readiness checks. This path uses the Route 53 control plane, has no ARC safety-rule protection, and has not been exercised. Treat it as a last resort, not an equivalent to the verified ARC path.
-
 ## Next
 
-Once the secondary is serving and the measurements are recorded, continue with [`runbook-failback.md`](runbook-failback.md). Leaving the workload on the secondary indefinitely means running with a diverged primary and no standby.
+Once the secondary is serving and the measurements are recorded, continue with [`runbook-failback.md`](runbook-failback.md).

@@ -1,8 +1,6 @@
 # In-Region High Availability Drills
 
-These drills test resilience inside the primary Region: losing a task, losing a Region's worth of capacity in one Availability Zone, and failing the database over between zones. They stay entirely within `eu-central-1` and leave replica promotion and ARC routing controls untouched.
-
-Regional recovery is a separate procedure, covered in [`runbook-failover.md`](runbook-failover.md) and [`runbook-failback.md`](runbook-failback.md).
+These drills test resilience inside the primary Region: losing a task, losing a Region's worth of capacity in one Availability Zone, and failing the database over between zones. They stay entirely within `eu-central-1`
 
 ## Preconditions
 
@@ -14,8 +12,6 @@ Every drill refuses to start unless all of the following hold. `simulate-ha.sh` 
 - The primary database is `multi_az = true`.
 - Sentry is reachable and reports the primary database as available.
 
-Set `CONFIRM_HA=YES` only for an approved drill.
-
 ## Task replacement
 
 Stops one running task and confirms ECS replaces it without a user-visible outage.
@@ -24,7 +20,7 @@ Stops one running task and confirms ECS replaces it without a user-visible outag
 CONFIRM_HA=YES scripts/drills/simulate-ha.sh task
 ```
 
-The script records the stopped task ARN, then polls until the service returns to two running tasks across two Availability Zones with two healthy targets. It samples the public health endpoint throughout, and fails the drill if any sample returns a non-200, including a dip that recovers before the service does. It also confirms the stopped task ARN is absent from the running set, so a recovered count alone does not pass.
+The script records the stopped task ARN, then polls until the service returns to two running tasks across two Availability Zones with two healthy targets. It samples the public health endpoint throughout, and fails the drill if any sample returns a non-200. It also confirms the stopped task ARN is absent from the running set, so a recovered count alone does not pass.
 
 Expected result: the service returns to two healthy tasks with a new task ARN in place of the stopped one, and public health stays at 200 for the whole window.
 
@@ -36,9 +32,7 @@ Stops every task in one Availability Zone and confirms the surviving zone contin
 CONFIRM_HA=YES scripts/drills/simulate-ha.sh az eu-central-1a
 ```
 
-The script refuses to run unless at least one task exists outside the target zone, since stopping every task would be a full outage, not a test of zone survival. Recovery checks match the task drill: two running tasks, two zones, two healthy targets, continuous public health, and confirmation that the stopped ARNs did not return.
-
-This exercises the loss of application capacity in one zone. It does not simulate a complete AWS Availability Zone failure.
+The script refuses to run unless at least one task exists outside the target zone.
 
 Expected result: the surviving zone serves traffic throughout, and ECS restores two-zone placement with new task ARNs.
 
@@ -50,9 +44,7 @@ Forces a real failover of the primary database to its standby.
 CONFIRM_HA=YES CONFIRM_HA_DB_FAILOVER=YES scripts/drills/simulate-ha.sh db
 ```
 
-This has a materially larger blast radius than the two drills above, since it interrupts production writes, so it requires a second confirmation variable.
-
-Before failing over, the script confirms the instance is genuinely Multi-AZ with a real standby, and creates a short link with a known slug. It then calls `reboot-db-instance --force-failover` and polls for up to 10 minutes until the instance is available and reporting a different writer Availability Zone. AWS can report the new zone several minutes after the switch completes, so the window allows for that lag.
+Before failing over, the script confirms the instance is genuinely Multi-AZ with a real standby, and creates a short link with a known slug. It then calls `reboot-db-instance --force-failover` and polls for up to 10 minutes until the instance is available and reporting a different writer Availability Zone.
 
 Public health is sampled every five seconds and the number of failed samples is recorded. A brief interruption is expected here and does not fail the drill.
 

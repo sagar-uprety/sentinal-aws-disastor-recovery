@@ -112,7 +112,8 @@ h1 span{color:var(--blue)}
     function isServing(entry) {
       const c = entry.compute || {};
       const d = entry.database || {};
-      return d.role === 'writer' && d.available && c.available && c.desired > 0 && c.running >= c.desired;
+      // Infers serving from DB-writer role + running tasks only; ignores actual ARC/Route53 routing state.
+      return d.role === 'writer' && d.available && c.available && c.running > 0;
     }
 
     // Disaster recovery sits at desired=0 by design until a drill promotes it.

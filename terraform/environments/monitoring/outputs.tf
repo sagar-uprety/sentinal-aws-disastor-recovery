@@ -22,9 +22,3 @@ output "sentry_url" {
   description = "Canonical isolated monitoring URL."
   value       = "https://${local.app_hostname}"
 }
-
-# Lets CI gate ECS health checks on the applied value instead of a separate workflow input.
-output "deploy_service" {
-  description = "Whether this apply created the ECS service."
-  value       = var.deploy_service
-}

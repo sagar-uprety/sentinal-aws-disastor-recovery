@@ -141,6 +141,8 @@ Every value below is account-specific. Set them before the first apply; the defa
 
 Set `deploy_service` to `false` initially, before any of the deploy steps.
 
+Each region's `alert_email` gets its own SNS subscription: confirm each one in email.
+
 
 
 **GitHub environments.** Create two, named exactly `terraform-production` and `production`, restrict each to deployments from `main`, and require a reviewer. Required reviewers needs a public repo (or a paid plan on a private one). The names are pinned in the OIDC trust policies, so a job can only assume the role matching the environment it declares.

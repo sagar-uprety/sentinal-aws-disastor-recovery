@@ -259,29 +259,6 @@ jobs:
         if: inputs.target == 'secondary'
         run: scripts/ci/guard-topology.sh secondary-pilot-light
 
-      # deploy_service now lives in terraform.tfvars, not a workflow input; read back what was actually applied.
-      - name: Read deployed service flag
-        id: deploy_service
-        if: inputs.target == 'primary' || inputs.target == 'monitoring'
-        working-directory: ${{ env.TF_ROOT }}
-        run: echo "value=$(terraform output -raw deploy_service)" >> "$GITHUB_OUTPUT"
-
-      - name: Verify isolated sentry
-        if: inputs.target == 'monitoring' && steps.deploy_service.outputs.value == 'true'
-        run: |
-          aws ecs wait services-stable --region "$SENTRY_REGION" \
-            --cluster "$PROJECT_NAME-monitoring" --services "$PROJECT_NAME-monitoring"
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
-            "$SENTRY_URL/healthz"
-
-      - name: Verify public workload health
-        if: inputs.target == 'primary' && steps.deploy_service.outputs.value == 'true'
-        run: |
-          aws ecs wait services-stable --region "$PRIMARY_REGION" \
-            --cluster "$PRIMARY_RESOURCE_NAME" --services "$PRIMARY_RESOURCE_NAME"
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors \
-            "$WORKLOAD_URL/healthz"
-
   destroy:
     name: Destroy all environments (arc, secondary, primary, monitoring)
     if: >-

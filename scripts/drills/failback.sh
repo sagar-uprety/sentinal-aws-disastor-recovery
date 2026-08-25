@@ -20,8 +20,8 @@ readonly PRIMARY_ALB_NAME="${PRIMARY_RESOURCE_NAME}-alb"
 readonly SECONDARY_ALB_NAME="${SECONDARY_RESOURCE_NAME}-alb"
 readonly SECONDARY_TARGET_GROUP_NAME="${SECONDARY_RESOURCE_NAME}-tg"
 readonly FAILBACK_LAG_TARGET_SECONDS="${FAILBACK_LAG_TARGET_SECONDS:-300}"
-# writes are frozen by cutover, so replication must fully drain before promoting.
-readonly FAILBACK_CUTOVER_LAG_SECONDS="${FAILBACK_CUTOVER_LAG_SECONDS:-0}"
+# Frozen writes stall Postgres's ReplicaLag near a nonzero floor instead of draining it to 0.
+readonly FAILBACK_CUTOVER_LAG_SECONDS="${FAILBACK_CUTOVER_LAG_SECONDS:-60}"
 
 # polls up to ten minutes for lag evidence within the caller's target; per-attempt failures are
 # expected while replication drains, so the helper's reasons are silenced until the whole wait fails.

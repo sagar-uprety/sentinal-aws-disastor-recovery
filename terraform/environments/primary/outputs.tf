@@ -32,9 +32,3 @@ output "route53_zone_name_servers" {
   description = "Nameservers of the project base-domain zone."
   value       = data.aws_route53_zone.pilotlight.name_servers
 }
-
-# Lets CI gate ECS health checks on the applied value instead of a separate workflow input.
-output "deploy_service" {
-  description = "Whether this apply created the ECS service."
-  value       = var.deploy_service
-}
