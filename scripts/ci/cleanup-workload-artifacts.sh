@@ -61,8 +61,20 @@ if [[ -n "$snapshot_ids" && "$snapshot_ids" != "None" ]]; then
   done
 fi
 
-# verifies Terraform removed automated backups instead of masking a failed destroy.
+# removes retained cross-region backup copies Terraform's destroy does not delete, then verifies.
 for region in "$PRIMARY_REGION" "$SECONDARY_REGION"; do
+  backup_arns="$(aws rds describe-db-instance-automated-backups \
+    --region "$region" \
+    --query "DBInstanceAutomatedBackups[?contains(['$PRIMARY_DATABASE', '$SECONDARY_DATABASE'], DBInstanceIdentifier)].DBInstanceAutomatedBackupsArn" \
+    --output text)"
+  if [[ -n "$backup_arns" && "$backup_arns" != "None" ]]; then
+    read -r -a arns <<<"$backup_arns"
+    for arn in "${arns[@]}"; do
+      aws rds delete-db-instance-automated-backup \
+        --region "$region" \
+        --db-instance-automated-backups-arn "$arn" >/dev/null
+    done
+  fi
   backup_count="$(aws rds describe-db-instance-automated-backups \
     --region "$region" \
     --query "length(DBInstanceAutomatedBackups[?contains(['$PRIMARY_DATABASE', '$SECONDARY_DATABASE'], DBInstanceIdentifier)])" \

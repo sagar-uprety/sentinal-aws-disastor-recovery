@@ -60,7 +60,7 @@ It runs in `eu-north-1`, outside both drill Regions, with its own VPC and its ow
 
 ### System overview
 
-![Pilotlight system overview](docs/diagrams/aws-architecture.drawio.png)
+![Pilotlight system overview](docs/diagrams/aws-architecture.svg)
 
 Three independent failure domains, each with separate Terraform state.
 
@@ -74,7 +74,7 @@ Route 53 ARC holds the only traffic switch. DNS answers depend on ARC routing-co
 
 ### Infrastructure topology
 
-![Pilotlight detailed infrastructure topology](docs/diagrams/aws-architecture-detailed.drawio.png)
+![Pilotlight detailed infrastructure topology](docs/diagrams/aws-architecture-detailed.svg)
 
 Both workload regions use the same three-tier VPC across two availability zones: public subnets for the ALB and NAT Gateway, private subnets for ECS tasks, and isolated database subnets with no route to the internet.
 
