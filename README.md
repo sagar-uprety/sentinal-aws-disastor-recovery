@@ -54,7 +54,7 @@ It is a monitoring service that polls the workload's public health endpoint on a
 
 It runs in `eu-north-1`, outside both drill Regions, with its own VPC and its own Terraform state, so it keeps observing and recording through a complete regional failover of the workload.
 
-<!-- Screenshots of the sentry status UI go here. -->
+![Sentry Monitoring Application](docs/diagrams/sentry-monitoring-app.png)
 
 ## Architecture
 
